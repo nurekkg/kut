@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+*.pem
 docker-compose.override.yml
 
 # python
