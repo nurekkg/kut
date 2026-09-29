@@ -1,0 +1,57 @@
+[project]
+name = "kut-backend"
+version = "0.1.0"
+description = "Kut ERP backend: modular monolith on FastAPI"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.142",
+    "uvicorn[standard]>=0.54",
+    "sqlalchemy[asyncio]>=2.0.54,<2.1",
+    "alembic>=1.20",
+    "psycopg[binary]>=3.3",
+    "pydantic>=2.13",
+    "pydantic-settings>=2.15",
+    "celery[redis]>=5.6",
+    "redis>=5",
+    "boto3>=1.43",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9",
+    "pytest-asyncio>=1.4",
+    "httpx>=0.28",
+    "ruff>=0.16",
+    "mypy>=2.3",
+    "boto3-stubs[s3]>=1.43",
+    "celery-types>=0.26",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "S", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+"migrations/versions/*" = ["F401"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
