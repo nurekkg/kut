@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, phase-0]
+    branches: [main, phase-0, phase-1]
   pull_request:
 
 permissions:
@@ -45,7 +45,16 @@ jobs:
     env:
       UV_FROZEN: "1"
       APP_ENV: test
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/kut
+      # Одноразовые учётки job-а (контейнер postgres живёт только на время прогона). Суперпользователь
+      # postgres нужен лишь шагу bootstrap; приложение и тесты работают под ролями kut_*.
+      KUT_OWNER_PASSWORD: ci_owner_password
+      KUT_APP_PASSWORD: ci_app_password
+      KUT_PORTAL_PASSWORD: ci_portal_password
+      KUT_WORKER_PASSWORD: ci_worker_password
+      DATABASE_URL: postgresql+psycopg://kut_app:ci_app_password@localhost:5432/kut_test
+      DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:ci_portal_password@localhost:5432/kut_test
+      TEST_DATABASE_OWNER_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut_test
+      TEST_DATABASE_WORKER_URL: postgresql+psycopg://kut_worker:ci_worker_password@localhost:5432/kut_test
       REDIS_URL: redis://localhost:6379/0
       CELERY_BROKER_URL: redis://localhost:6379/1
       CELERY_RESULT_BACKEND: redis://localhost:6379/2
@@ -84,14 +93,27 @@ jobs:
           done
           docker exec minio mc alias set local http://localhost:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
           docker exec minio mc mb --ignore-existing "local/$S3_BUCKET"
+      - name: Bootstrap database roles
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: kut
+          KUT_BOOTSTRAP_TEST_DB: "1"
+        run: psql -X -q -v ON_ERROR_STOP=1 -f ../db/bootstrap.sql
       - name: Pytest
         run: uv run pytest -q
-      - name: Alembic upgrade, downgrade, upgrade
+      - name: Alembic upgrade, downgrade, upgrade, seeds
+        env:
+          DATABASE_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut
         run: |
           uv run alembic upgrade head
           uv run alembic downgrade base
           uv run alembic upgrade head
+          uv run python -m app.modules.rbac.seed
       - name: Alembic check (models match migrations)
+        env:
+          DATABASE_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut
         run: uv run alembic check
 
   frontend:

@@ -22,6 +22,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY alembic.ini ./
 COPY migrations ./migrations
+COPY seeds ./seeds
 COPY app ./app
 COPY tests ./tests
 

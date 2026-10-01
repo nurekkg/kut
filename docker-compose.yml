@@ -5,7 +5,6 @@ x-backend-build: &backend-build
 
 x-backend-env: &backend-env
   APP_ENV: ${APP_ENV:-development}
-  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kut}:${POSTGRES_PASSWORD:-kut_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: redis://redis:6379/1
   CELERY_RESULT_BACKEND: redis://redis:6379/2
@@ -19,6 +18,7 @@ x-backend-volumes: &backend-volumes
   - ./backend/app:/app/app
   - ./backend/tests:/app/tests
   - ./backend/migrations:/app/migrations
+  - ./backend/seeds:/app/seeds
 
 x-minio-image: &minio-image pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
 
@@ -82,14 +82,40 @@ services:
       - mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" && mc mb --ignore-existing "local/$$S3_BUCKET"
     restart: "no"
 
-  migrate:
-    build: *backend-build
-    image: kut-backend:dev
-    command: ["alembic", "upgrade", "head"]
-    environment: *backend-env
+  db-bootstrap:
+    image: postgres:16
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-kut}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-kut_dev_password}
+      PGDATABASE: ${POSTGRES_DB:-kut}
+      APP_ENV: ${APP_ENV:-development}
+      KUT_OWNER_PASSWORD: ${KUT_OWNER_PASSWORD:-kut_owner_dev_password}
+      KUT_APP_PASSWORD: ${KUT_APP_PASSWORD:-kut_app_dev_password}
+      KUT_PORTAL_PASSWORD: ${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}
+      KUT_WORKER_PASSWORD: ${KUT_WORKER_PASSWORD:-kut_worker_dev_password}
+      KUT_BOOTSTRAP_TEST_DB: ${KUT_BOOTSTRAP_TEST_DB:-1}
+    volumes:
+      - ./db/bootstrap.sql:/bootstrap/bootstrap.sql:ro
+    command: ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "/bootstrap/bootstrap.sql"]
+    restart: "no"
+
+  migrate:
+    build: *backend-build
+    image: kut-backend:dev
+    command: ["sh", "-c", "alembic upgrade head && python -m app.modules.rbac.seed"]
+    environment:
+      <<: *backend-env
+      DATABASE_URL: postgresql+psycopg://kut_owner:${KUT_OWNER_PASSWORD:-kut_owner_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
     restart: "no"
 
   api:
@@ -99,6 +125,8 @@ services:
       ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
     environment:
       <<: *backend-env
+      DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
       WATCHFILES_FORCE_POLLING: "true"
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
@@ -126,7 +154,9 @@ services:
     build: *backend-build
     image: kut-backend:dev
     command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
-    environment: *backend-env
+    environment:
+      <<: *backend-env
+      DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
     volumes: *backend-volumes
     depends_on:
       redis:
@@ -140,6 +170,32 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
+
+  # Тесты: `docker compose run --rm test pytest -q`. Нужны учётки всех ролей и тестовая БД (<POSTGRES_DB>_test),
+  # которую создаёт db-bootstrap; в сервисе api этих учёток нет, как и в боевом окружении.
+  test:
+    build: *backend-build
+    image: kut-backend:dev
+    profiles: ["test"]
+    command: ["pytest", "-q"]
+    environment:
+      <<: *backend-env
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+      DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+      TEST_DATABASE_OWNER_URL: postgresql+psycopg://kut_owner:${KUT_OWNER_PASSWORD:-kut_owner_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+      TEST_DATABASE_WORKER_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+    volumes: *backend-volumes
+    depends_on:
+      db-bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: "no"
 
   web:
     build:
