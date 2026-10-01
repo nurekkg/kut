@@ -1,16 +1,17 @@
 import uuid
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.deps import get_db, require
 from app.modules.auth.errors import Conflict, InvalidInput, NotFound, PermissionDenied
 from app.modules.auth.principal import Principal, principal_store
-from app.modules.idempotency.service import IdempotencyKeyHeader, fingerprint, run_idempotent
+from app.modules.idempotency.service import IdempotencyKeyHeader, idempotent_create
 from app.modules.rbac.enums import Action, Module
 from app.modules.settings import service
 from app.modules.settings.schemas import (
@@ -63,24 +64,18 @@ async def _create(
     session: AsyncSession,
     admin: Principal,
     key: uuid.UUID,
-    payload: Any,
-    handler: Any,
+    payload: BaseModel,
+    handler: Callable[[], Awaitable[BaseModel]],
 ) -> Response:
     """Создание под Idempotency-Key: запись ключа, изменения и ответ - одна транзакция."""
 
-    async def run() -> tuple[int, Any]:
+    async def run() -> BaseModel:
         with translated():
-            created = await handler()
-        return status.HTTP_201_CREATED, created.model_dump(mode="json")
+            return await handler()
 
-    result = await run_idempotent(
-        session,
-        user_id=admin.user_id,
-        key=key,
-        request_hash=fingerprint(request.method, request.url.path, payload.model_dump(mode="json")),
-        handler=run,
+    return await idempotent_create(
+        session, request=request, user_id=admin.user_id, key=key, payload=payload, handler=run
     )
-    return result.to_response()
 
 
 # --- юрлица -----------------------------------------------------------------------------------
@@ -98,8 +93,8 @@ async def create_legal_entity(
     reply = await _create(
         request, session, admin, key, body, lambda: service.create_legal_entity(session, body)
     )
-    # Новое юрлицо входит в контекст владельца при следующей выдаче прав, а не через минуту кэша.
-    await principal_store.forget(admin.user_id)
+    # Юрлицо появилось у всех ролей scope=group: устарели их контексты в кэше, не только владельца.
+    await principal_store.bump_scope()
     return reply
 
 

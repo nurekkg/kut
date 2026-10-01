@@ -72,6 +72,8 @@ async def test_tables_with_scope_columns_are_never_allowlisted(owner_engine: Asy
         "project",
         "user_project_access",
         "user_legal_entity_access",
+        "project_node",
+        "work",
     ],
 )
 async def test_force_rls_constrains_the_table_owner_too(

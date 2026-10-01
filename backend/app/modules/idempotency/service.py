@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import Header, HTTPException, Response, status
+from fastapi import Header, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import OperationalError
@@ -148,3 +149,32 @@ async def run_idempotent(
         await session.rollback()
         raise
     return IdempotentResult(status_code=status_code, body=body, replayed=False)
+
+
+async def idempotent_create(
+    session: AsyncSession,
+    *,
+    request: Request,
+    user_id: uuid.UUID,
+    key: uuid.UUID,
+    payload: BaseModel,
+    handler: Callable[[], Awaitable[BaseModel]],
+) -> Response:
+    """Создание (201) под Idempotency-Key: ключ, запись и ответ - одна транзакция.
+
+    handler создаёт сущность без COMMIT и возвращает её представление; повтор с тем же ключом и
+    телом отдаст сохранённый ответ, с другим телом - 422 (idempotency_key_reused).
+    """
+
+    async def run() -> tuple[int, Any]:
+        created = await handler()
+        return status.HTTP_201_CREATED, created.model_dump(mode="json")
+
+    result = await run_idempotent(
+        session,
+        user_id=user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, payload.model_dump(mode="json")),
+        handler=run,
+    )
+    return result.to_response()

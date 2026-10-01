@@ -19,9 +19,15 @@ AUDITED_TABLES = (
     "project",
     "user_project_access",
     "user_legal_entity_access",
+    "project_node",
+    "work",
 )
-# Колонки, которые обязаны быть неизменяемыми (id есть у всех, у project ещё и юрлицо).
-FROZEN = {table: {"id"} for table in AUDITED_TABLES} | {"project": {"id", "legal_entity_id"}}
+# Колонки, которые обязаны быть неизменяемыми (id есть у всех, у project ещё и юрлицо, у узла
+# объект и юрлицо).
+FROZEN = {table: {"id"} for table in AUDITED_TABLES} | {
+    "project": {"id", "legal_entity_id"},
+    "project_node": {"id", "project_id", "legal_entity_id"},
+}
 
 
 @pytest.fixture

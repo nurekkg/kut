@@ -79,38 +79,59 @@ def _context_key(user_id: uuid.UUID, role_ver: int) -> str:
     return f"ctx:{user_id}:{role_ver}"
 
 
+# Поколение области доступа: общий счётчик растёт, когда у многих пользователей сразу меняется
+# список объектов или юрлиц (создан объект или юрлицо: роли scope=group видят все). Контекст,
+# записанный при другом поколении, не используется - его перечитывают из БД.
+_GENERATION_KEY = "scope_gen"
+
+
+def _user_generation_key(user_id: uuid.UUID) -> str:
+    return f"cg:{user_id}"
+
+
 class PrincipalStore:
     """Кэш прав и области доступа в Redis по (user_id, role_ver) с коротким TTL (ADR-001 §3).
 
     Актуальный role_ver лежит в отдельном ключе rv:{user}: сервис обновляет его сразу при смене
-    роли, деактивации и входе; при промахе источник истины - БД (app.auth_context).
+    роли, деактивации и входе; при промахе источник истины - БД (app.auth_context). Поколение
+    области доступа (scope_gen) снимает устаревшие контексты разом: bump_scope().
     """
 
     async def snapshot(self, user_id: uuid.UUID) -> ContextRecord | None:
         redis = get_redis()
-        current = await redis.get(_role_ver_key(user_id))
-        if current is not None:
+        current, user_generation, generation = await redis.mget(
+            _role_ver_key(user_id), _user_generation_key(user_id), _GENERATION_KEY
+        )
+        if current is not None and (user_generation or "0") == (generation or "0"):
             cached = await redis.get(_context_key(user_id, int(current)))
             if cached is not None:
                 return ContextRecord.from_json(cached)
         return await self.reload(user_id)
 
+    async def bump_scope(self) -> None:
+        """После создания объекта или юрлица: контексты scope=group всех пользователей устарели."""
+        await get_redis().incr(_GENERATION_KEY)
+
     async def reload(self, user_id: uuid.UUID) -> ContextRecord | None:
+        # Поколение читаем до обращения к БД: если оно вырастет во время загрузки, запись
+        # получит старый номер и при следующем запросе будет перечитана.
+        generation = await get_redis().get(_GENERATION_KEY) or "0"
         with system_context():
             async with get_sessionmaker()() as session:
                 record = await repository.auth_context(session, user_id)
         if record is None or not record.is_active:
             await self.forget(user_id)
             return None
-        await self.prime(record)
+        await self.prime(record, generation)
         return record
 
-    async def prime(self, record: ContextRecord) -> None:
+    async def prime(self, record: ContextRecord, generation: str) -> None:
         ttl = get_settings().principal_cache_ttl_seconds
         redis = get_redis()
         async with redis.pipeline(transaction=False) as pipeline:
             pipeline.set(_context_key(record.user_id, record.role_ver), record.to_json(), ex=ttl)
             pipeline.set(_role_ver_key(record.user_id), record.role_ver, ex=ttl)
+            pipeline.set(_user_generation_key(record.user_id), generation, ex=ttl)
             await pipeline.execute()
 
     async def set_role_ver(self, user_id: uuid.UUID, role_ver: int) -> None:

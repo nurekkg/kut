@@ -170,3 +170,19 @@ extra:
   - {role: owner, permission: "settings:read"}
   - {role: owner, permission: "settings:write"}
   - {role: owner, permission: "settings:admin"}
+  # Справочник видов работ (таблица work, S2): в §7.3 его нет, а ни один модуль матрицы не подходит.
+  # Объекты дали бы запись прорабу, ГПР тоже. По решению PO пишут ПТО и техдир (+ владелец),
+  # читают все внутренние роли; внешним справочник закрыт.
+  - {role: owner, permission: "works:read"}
+  - {role: owner, permission: "works:write"}
+  - {role: finance_director, permission: "works:read"}
+  - {role: technical_director, permission: "works:read"}
+  - {role: technical_director, permission: "works:write"}
+  - {role: foreman, permission: "works:read"}
+  - {role: master, permission: "works:read"}
+  - {role: estimator, permission: "works:read"}
+  - {role: estimator, permission: "works:write"}
+  - {role: procurement, permission: "works:read"}
+  - {role: storekeeper, permission: "works:read"}
+  - {role: accountant, permission: "works:read"}
+  - {role: lawyer, permission: "works:read"}

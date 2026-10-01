@@ -157,6 +157,20 @@ PORTAL_COLUMNS = {
     "project": BASE_COLUMNS | {"legal_entity_id", "name", "status"},
     "counterparty": BASE_COLUMNS | {"name", "tax_id", "types"},
     "user_project_access": BASE_COLUMNS | {"user_id", "project_id", "role_id"},
+    # S2: без ответственных (foreman/master), юрлица и служебных created_by/updated_by.
+    "project_node": BASE_COLUMNS
+    | {
+        "project_id",
+        "parent_id",
+        "type",
+        "name",
+        "code",
+        "sort_order",
+        "path",
+        "planned_start",
+        "planned_end",
+        "polygon",
+    },
 }
 
 
