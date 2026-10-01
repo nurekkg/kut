@@ -15,4 +15,4 @@ COPY --chown=node:node . .
 
 EXPOSE 3000
 ENV WATCHPACK_POLLING=true
-CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
+CMD ["npm", "run", "dev", "--", "--webpack", "--hostname", "0.0.0.0"]
