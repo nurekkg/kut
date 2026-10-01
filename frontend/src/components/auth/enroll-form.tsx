@@ -19,6 +19,7 @@ import type { MfaConfirmResult, MfaSetup } from "@/lib/auth/types";
 
 type Props = {
   mfaToken: string;
+  password: string;
   onConfirmed: (result: MfaConfirmResult) => void;
   onRestart: () => void;
 };
@@ -27,7 +28,7 @@ function groupsOfFour(secret: string): string {
   return secret.replace(/(.{4})/g, "$1 ").trim();
 }
 
-export function EnrollForm({ mfaToken, onConfirmed, onRestart }: Props) {
+export function EnrollForm({ mfaToken, password, onConfirmed, onRestart }: Props) {
   const t = useTranslations("Auth.enroll");
   const [setup, setSetup] = useState<MfaSetup | null>(null);
   const [code, setCode] = useState("");
@@ -41,10 +42,10 @@ export function EnrollForm({ mfaToken, onConfirmed, onRestart }: Props) {
     if (requested.current) return;
     requested.current = true;
     authApi
-      .setupMfa(mfaToken)
+      .setupMfa(mfaToken, password)
       .then(setSetup)
       .catch((error: unknown) => setFailure(toFailure(error)));
-  }, [mfaToken]);
+  }, [mfaToken, password]);
 
   async function copySecret() {
     if (!setup) return;

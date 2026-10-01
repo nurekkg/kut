@@ -17,7 +17,9 @@ import { Input } from "@/components/ui/input";
 import { authApi } from "@/lib/auth/api";
 import type { LoginResult } from "@/lib/auth/types";
 
-export function CredentialsForm({ onResult }: { onResult: (result: LoginResult) => void }) {
+type Props = { onResult: (result: LoginResult, password: string) => void };
+
+export function CredentialsForm({ onResult }: Props) {
   const t = useTranslations("Auth.login");
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -30,7 +32,7 @@ export function CredentialsForm({ onResult }: { onResult: (result: LoginResult) 
     setPending(true);
     setFailure(null);
     try {
-      onResult(await authApi.login(identifier.trim(), password));
+      onResult(await authApi.login(identifier.trim(), password), password);
     } catch (error) {
       setFailure(toFailure(error));
       setPending(false);

@@ -1,38 +1,19 @@
 "use client";
 
-import { LogOut } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
-import { Button } from "@/components/ui/button";
-
-const ROLES = [
-  "owner",
-  "finance_director",
-  "technical_director",
-  "foreman",
-  "master",
-  "estimator",
-  "procurement",
-  "storekeeper",
-  "accountant",
-  "lawyer",
-  "customer",
-  "subcontractor",
-  "supplier",
-] as const;
-
-type RoleCode = (typeof ROLES)[number];
-
-function isRole(value: string): value is RoleCode {
-  return (ROLES as readonly string[]).includes(value);
-}
+import { Button, buttonVariants } from "@/components/ui/button";
+import { isRole } from "@/lib/roles";
 
 export function UserMenu() {
   const t = useTranslations("Auth");
   const roles = useTranslations("Roles");
+  const settings = useTranslations("Settings");
   const { user, signOut } = useAuth();
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -58,10 +39,21 @@ export function UserMenu() {
           {isRole(user.role) ? roles(user.role) : user.role}
         </p>
       </div>
-      <Button variant="outline" size="lg" className="h-10 shrink-0" onClick={() => void logout()} disabled={pending}>
-        <LogOut data-icon="inline-start" aria-hidden />
-        {t("logout")}
-      </Button>
+      <div className="flex shrink-0 items-center gap-2">
+        {user.permissions.includes("settings:admin") ? (
+          <Link
+            href="/settings/legal-entities"
+            className={buttonVariants({ variant: "outline", size: "lg", className: "h-10" })}
+          >
+            <Settings data-icon="inline-start" aria-hidden />
+            {settings("title")}
+          </Link>
+        ) : null}
+        <Button variant="outline" size="lg" className="h-10" onClick={() => void logout()} disabled={pending}>
+          <LogOut data-icon="inline-start" aria-hidden />
+          {t("logout")}
+        </Button>
+      </div>
     </div>
   );
 }

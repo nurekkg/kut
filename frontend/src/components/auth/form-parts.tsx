@@ -47,6 +47,7 @@ export function SubmitButton({ pending, children }: { pending: boolean; children
 
 const KNOWN_ERRORS = [
   "invalid_credentials",
+  "invalid_password",
   "too_many_attempts",
   "invalid_code",
   "invalid_token",

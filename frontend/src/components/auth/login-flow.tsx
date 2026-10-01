@@ -16,7 +16,7 @@ import type { LoginResult, MfaConfirmResult, TokenResponse } from "@/lib/auth/ty
 type Step =
   | { kind: "credentials" }
   | { kind: "code"; mfaToken: string }
-  | { kind: "enroll"; mfaToken: string }
+  | { kind: "enroll"; mfaToken: string; password: string }
   | { kind: "saved-codes"; codes: string[]; session: TokenResponse };
 
 export function LoginFlow() {
@@ -32,10 +32,11 @@ export function LoginFlow() {
     if (status === "authenticated") router.replace(next);
   }, [status, next, router]);
 
-  function handleLogin(result: LoginResult) {
+  // Пароль нужен только шагу настройки 2FA (ключ выдаётся после его подтверждения) и лежит в памяти, пока шаг открыт.
+  function handleLogin(result: LoginResult, password: string) {
     if (result.status === "ok") signIn(result);
     else if (result.status === "mfa_required") setStep({ kind: "code", mfaToken: result.mfa_token });
-    else setStep({ kind: "enroll", mfaToken: result.mfa_token });
+    else setStep({ kind: "enroll", mfaToken: result.mfa_token, password });
   }
 
   function handleConfirmed(result: MfaConfirmResult) {
@@ -62,7 +63,12 @@ export function LoginFlow() {
             <CodeForm mfaToken={step.mfaToken} onSuccess={signIn} onRestart={restart} />
           ) : null}
           {step.kind === "enroll" ? (
-            <EnrollForm mfaToken={step.mfaToken} onConfirmed={handleConfirmed} onRestart={restart} />
+            <EnrollForm
+              mfaToken={step.mfaToken}
+              password={step.password}
+              onConfirmed={handleConfirmed}
+              onRestart={restart}
+            />
           ) : null}
           {step.kind === "saved-codes" ? (
             <RecoveryCodes codes={step.codes} onContinue={() => signIn(step.session)} />

@@ -60,11 +60,13 @@ export const authApi = {
   verifyMfa: (mfaToken: string, proof: { code: string } | { recovery_code: string }) =>
     post<TokenResponse>("mfa/verify", { body: { mfa_token: mfaToken, ...proof } }),
 
-  setupMfa: (mfaToken: string) =>
-    post<MfaSetup>("mfa/setup", { body: { mfa_token: mfaToken } }),
+  setupMfa: (mfaToken: string, password: string) =>
+    post<MfaSetup>("mfa/setup", { body: { mfa_token: mfaToken, password } }),
 
   confirmMfa: (mfaToken: string, code: string) =>
     post<MfaConfirmResult>("mfa/confirm", { body: { mfa_token: mfaToken, code } }),
+
+  activate: (token: string, password: string) => post<void>("activate", { body: { token, password } }),
 
   refresh: () => post<TokenResponse>("refresh"),
 
