@@ -11,7 +11,10 @@ const nextConfig: NextConfig = {
     ? { watchOptions: { pollIntervalMs: 500 } }
     : {}),
   async rewrites() {
-    return [{ source: "/api/:path*", destination: `${apiInternalUrl}/:path*` }];
+    return [
+      { source: "/api/health/:path*", destination: `${apiInternalUrl}/health/:path*` },
+      { source: "/api/v1/:path*", destination: `${apiInternalUrl}/api/v1/:path*` },
+    ];
   },
 };
 
