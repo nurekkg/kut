@@ -52,6 +52,26 @@ async def test_actor_is_stamped_on_insert_and_update(session: AsyncSession) -> N
         current_user_id.reset(token)
 
 
+async def test_system_change_without_a_user_leaves_the_actor_null(session: AsyncSession) -> None:
+    author = uuid.uuid4()
+    token = current_user_id.set(author)
+    try:
+        widget = Widget(name="a")
+        session.add(widget)
+        await session.flush()
+    finally:
+        current_user_id.reset(token)
+
+    widget.name = "b"
+    await session.flush()
+    system_row = Widget(name="system")
+    session.add(system_row)
+    await session.flush()
+
+    assert (widget.created_by, widget.updated_by) == (author, None)
+    assert (system_row.created_by, system_row.updated_by) == (None, None)
+
+
 async def test_soft_deleted_rows_are_hidden_unless_requested(session: AsyncSession) -> None:
     keep, drop = Widget(name="keep"), Widget(name="drop")
     session.add_all([keep, drop])
