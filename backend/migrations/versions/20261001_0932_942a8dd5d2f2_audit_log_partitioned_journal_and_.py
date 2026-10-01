@@ -19,17 +19,20 @@ depends_on: str | Sequence[str] | None = None
 
 PARTITIONS_AHEAD = 24
 
-# (таблица, колонка project_id записи, колонка legal_entity_id записи, секретные колонки)
-AUDITED_TABLES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
-    ("legal_entity", "", "id", ()),
-    ("counterparty", "", "", ()),
-    ("role", "", "", ()),
-    ("permission", "", "", ()),
-    ("role_permission", "", "", ()),
-    ("user", "", "", ("password_hash",)),
-    ("project", "id", "legal_entity_id", ()),
-    ("user_project_access", "project_id", "", ()),
-    ("user_legal_entity_access", "", "legal_entity_id", ()),
+# (таблица, колонка project_id записи, колонка legal_entity_id записи, секретные колонки,
+#  неизменяемые колонки сверх id)
+AUDITED_TABLES: tuple[tuple[str, str, str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("legal_entity", "", "id", (), ()),
+    ("counterparty", "", "", (), ()),
+    ("role", "", "", (), ()),
+    ("permission", "", "", (), ()),
+    ("role_permission", "", "", (), ()),
+    ("user", "", "", ("password_hash",), ()),
+    # Юрлицо объекта не меняется: на него опираются составные FK потомков (ADR-001 §5.2), а право
+    # создавать объект в юрлице проверяет политика INSERT, которую UPDATE иначе обошёл бы.
+    ("project", "id", "legal_entity_id", (), ("legal_entity_id",)),
+    ("user_project_access", "project_id", "", (), ()),
+    ("user_legal_entity_access", "", "legal_entity_id", (), ()),
 )
 
 INTERNAL = "(SELECT app.is_internal())"
@@ -95,6 +98,27 @@ SET search_path = pg_catalog AS $$
 BEGIN
     RAISE EXCEPTION 'audit_log is append-only: % is not allowed', TG_OP
         USING ERRCODE = 'insufficient_privilege';
+END $$
+"""
+
+# audit_update() сопоставляет старую и новую версии строки по id: при смене id пара терялась бы и
+# изменение уходило мимо журнала. Триггер BEFORE UPDATE OF <колонки> срабатывает только когда
+# колонка названа в SET, поэтому обычные UPDATE не платят за него ничего.
+FORBID_COLUMN_CHANGE = """
+CREATE FUNCTION app.forbid_column_change() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog AS $$
+DECLARE
+    v_old jsonb := to_jsonb(OLD);
+    v_new jsonb := to_jsonb(NEW);
+    v_column text;
+BEGIN
+    FOREACH v_column IN ARRAY TG_ARGV LOOP
+        IF v_old -> v_column IS DISTINCT FROM v_new -> v_column THEN
+            RAISE EXCEPTION '%.% is immutable', TG_TABLE_NAME, v_column
+                USING ERRCODE = 'integrity_constraint_violation';
+        END IF;
+    END LOOP;
+    RETURN NEW;
 END $$
 """
 
@@ -209,9 +233,12 @@ def upgrade() -> None:
         "CREATE POLICY audit_log_insert_owner ON audit_log"
         " FOR INSERT TO kut_owner WITH CHECK (true)"
     )
+    # Доступ к юрлицу открывает только записи без объекта: журнал объекта виден тем, у кого есть
+    # сам объект, как и данные (иначе доступ к юрлицу раскрывал бы историю всех его объектов).
     op.execute(
         "CREATE POLICY audit_log_select_app ON audit_log FOR SELECT TO kut_app USING "
-        f"({INTERNAL} AND (project_id = ANY {PROJECTS} OR legal_entity_id = ANY {LEGAL_ENTITIES}))"
+        f"({INTERNAL} AND (project_id = ANY {PROJECTS}"
+        f" OR (project_id IS NULL AND legal_entity_id = ANY {LEGAL_ENTITIES})))"
     )
     op.execute("GRANT SELECT ON audit_log TO kut_app, kut_worker")
     # Append-only: права отзываются у всех, включая владельца; триггеры ниже закрывают то,
@@ -232,21 +259,27 @@ def upgrade() -> None:
     op.execute("GRANT EXECUTE ON FUNCTION app.ensure_audit_partitions(integer) TO kut_worker")
     op.execute(f"SELECT app.ensure_audit_partitions({PARTITIONS_AHEAD})")
 
-    for statement in (AUDIT_INSERT, AUDIT_UPDATE, AUDIT_DELETE):
+    for statement in (AUDIT_INSERT, AUDIT_UPDATE, AUDIT_DELETE, FORBID_COLUMN_CHANGE):
         op.execute(statement)
-    for table, project_column, legal_entity_column, hidden in AUDITED_TABLES:
+    for table, project_column, legal_entity_column, hidden, frozen in AUDITED_TABLES:
         create_audit_triggers(
             table,
             project_column=project_column,
             legal_entity_column=legal_entity_column,
             hidden_columns=hidden,
+            frozen_columns=frozen,
         )
 
 
 def downgrade() -> None:
     for table, *_ in reversed(AUDITED_TABLES):
         drop_audit_triggers(table)
-    for function in ("audit_delete()", "audit_update()", "audit_insert()"):
+    for function in (
+        "forbid_column_change()",
+        "audit_delete()",
+        "audit_update()",
+        "audit_insert()",
+    ):
         op.execute(f"DROP FUNCTION app.{function}")
     op.execute("DROP TABLE audit_log")
     op.execute("DROP FUNCTION app.ensure_audit_partitions(integer)")

@@ -53,17 +53,25 @@ def create_audit_triggers(
     project_column: str = "",
     legal_entity_column: str = "",
     hidden_columns: Sequence[str] = (),
+    frozen_columns: Sequence[str] = (),
 ) -> None:
     """Три statement-level триггера с transition tables: одна вставка в журнал на оператор.
 
     project_column / legal_entity_column — колонки строки, из которых берутся project_id и
     legal_entity_id записи журнала (у project это id и legal_entity_id). hidden_columns не попадают
-    в журнал (секреты).
+    в журнал (секреты). id неизменяем всегда (иначе журнал потерял бы пару старой и новой версии
+    строки), frozen_columns добавляют к нему другие неизменяемые колонки.
     """
     target = _ident(table)
-    for column in (project_column, legal_entity_column, *hidden_columns):
+    for column in (project_column, legal_entity_column, *hidden_columns, *frozen_columns):
         if column:
             _ident(column)
+    frozen = ("id", *frozen_columns)
+    op.execute(
+        f"CREATE TRIGGER immutable_columns BEFORE UPDATE OF {', '.join(frozen)} ON {target} "
+        f"FOR EACH ROW EXECUTE FUNCTION app.forbid_column_change("
+        f"{', '.join(repr(column) for column in frozen)})"
+    )
     args = ", ".join(
         f"'{value}'" for value in (project_column, legal_entity_column, ",".join(hidden_columns))
     )
@@ -86,5 +94,5 @@ def create_audit_triggers(
 
 def drop_audit_triggers(table: str) -> None:
     target = _ident(table)
-    for name in ("audit_insert", "audit_update", "audit_delete"):
+    for name in ("immutable_columns", "audit_insert", "audit_update", "audit_delete"):
         op.execute(f"DROP TRIGGER IF EXISTS {name} ON {target}")

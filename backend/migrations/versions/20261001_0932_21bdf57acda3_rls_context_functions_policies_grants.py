@@ -198,21 +198,25 @@ RLS_TABLES = (
     "user_legal_entity_access",
 )
 CATALOG_TABLES = ("role", "permission", "role_permission")
-USER_PORTAL_COLUMNS = (
-    "id",
-    "created_at",
-    "updated_at",
-    "created_by",
-    "updated_by",
-    "deleted_at",
-    "phone",
-    "email",
-    "full_name",
-    "role_id",
-    "counterparty_id",
-    "is_active",
-    "role_ver",
-)
+# Внешнему пулу выдаются явные списки колонок, а не вся таблица: колонки, которые добавят позже
+# (бюджет, реквизиты и т. п.), для kut_portal закрыты, пока их не откроют намеренно.
+# created_by / updated_by и password_hash не выдаются никогда.
+_BASE_COLUMNS = ("id", "created_at", "updated_at", "deleted_at")
+PORTAL_COLUMNS = {
+    "user": (
+        *_BASE_COLUMNS,
+        "phone",
+        "email",
+        "full_name",
+        "role_id",
+        "counterparty_id",
+        "is_active",
+        "role_ver",
+    ),
+    "project": (*_BASE_COLUMNS, "legal_entity_id", "name", "status"),
+    "counterparty": (*_BASE_COLUMNS, "name", "tax_id", "types"),
+    "user_project_access": (*_BASE_COLUMNS, "user_id", "project_id", "role_id"),
+}
 
 
 def upgrade() -> None:
@@ -240,13 +244,10 @@ def upgrade() -> None:
         op.execute(f'CREATE POLICY {name} ON "{table}" FOR {command} TO {login}{clauses}')
 
     grant("legal_entity", app=READ_WRITE, worker=READ_WRITE)
-    grant("counterparty", app=READ_WRITE, portal="SELECT", worker=READ_WRITE)
     for table in CATALOG_TABLES:
         grant(table, app="SELECT", portal="SELECT", worker="SELECT")
-    # password_hash внешнему пулу не отдаётся ни при каких условиях.
-    grant("user", app=READ_WRITE, worker=READ_WRITE, portal_columns=USER_PORTAL_COLUMNS)
-    grant("project", app=READ_WRITE, portal="SELECT", worker=READ_WRITE)
-    grant("user_project_access", app=READ_WRITE, portal="SELECT", worker=READ_WRITE)
+    for table, columns in PORTAL_COLUMNS.items():
+        grant(table, app=READ_WRITE, worker=READ_WRITE, portal_columns=columns)
     grant("user_legal_entity_access", app=READ_WRITE, worker=READ_WRITE)
 
 

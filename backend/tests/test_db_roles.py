@@ -149,6 +149,56 @@ async def test_the_password_hash_is_never_readable_by_the_portal_login(
     assert results == {"kut_app": True, "kut_portal": False, "kut_worker": True}
 
 
+BASE_COLUMNS = {"id", "created_at", "updated_at", "deleted_at"}
+PORTAL_COLUMNS = {
+    "user": BASE_COLUMNS
+    | {"phone", "email", "full_name", "role_id", "counterparty_id", "is_active", "role_ver"},
+    "project": BASE_COLUMNS | {"legal_entity_id", "name", "status"},
+    "counterparty": BASE_COLUMNS | {"name", "tax_id", "types"},
+    "user_project_access": BASE_COLUMNS | {"user_id", "project_id", "role_id"},
+}
+
+
+async def test_the_portal_login_reads_only_explicitly_listed_columns(
+    owner_engine: AsyncEngine,
+) -> None:
+    """Колонки, добавленные позже, закрыты для портала, пока их не откроют намеренно."""
+    async with owner_engine.connect() as connection:
+        for table in await _tables(owner_engine):
+            columns = [
+                row.attname
+                for row in await connection.execute(
+                    text(
+                        "SELECT a.attname FROM pg_attribute a"
+                        " WHERE a.attrelid = CAST(:table AS regclass) AND a.attnum > 0"
+                        " AND NOT a.attisdropped"
+                    ),
+                    {"table": f'public."{table}"'},
+                )
+            ]
+            readable = set()
+            for column in columns:
+                allowed = await connection.scalar(
+                    text(
+                        "SELECT has_column_privilege('kut_portal', CAST(:table AS regclass),"
+                        " :column, 'SELECT')"
+                    ),
+                    {"table": f'public."{table}"', "column": column},
+                )
+                if allowed:
+                    readable.add(column)
+            if table in PORTAL_COLUMNS:
+                assert readable == PORTAL_COLUMNS[table], table
+                assert not await _has(owner_engine, "kut_portal", table, "SELECT"), (
+                    f"{table}: table-wide SELECT would expose columns added later"
+                )
+                assert not readable & {"created_by", "updated_by", "password_hash"}
+            elif table in ("role", "permission", "role_permission"):
+                assert readable == set(columns), table  # справочники: без чувствительных колонок
+            else:
+                assert readable == set(), f"{table} must be invisible to the portal login"
+
+
 async def test_schema_functions_are_executable_only_by_the_logins_that_need_them(
     owner_engine: AsyncEngine,
 ) -> None:

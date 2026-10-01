@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from app.core.context import system_context, use_context
 from app.core.db import get_engine, get_portal_engine, get_sessionmaker
 from app.modules.org.models import Counterparty
-from tests.support import World, external
+from tests.support import World, external, internal
 
 BULK_ROWS = 10_000
 
@@ -307,6 +307,22 @@ async def test_the_journal_is_scoped_like_the_data_it_describes(world: World) ->
     assert ("legal_entity", None, world.le1) not in foreman  # юрлицо без явного доступа
     assert ("project", world.p2, world.le2) in owner
     assert ("legal_entity", None, world.le2) in owner
+
+
+async def test_access_to_a_legal_entity_does_not_reveal_the_journal_of_its_projects(
+    world: World,
+) -> None:
+    """Юрлицо открывает записи без объекта; журнал объекта виден только тем, у кого есть объект."""
+    sql = "SELECT DISTINCT table_name, project_id, legal_entity_id FROM audit_log"
+    accountant = internal(world.foreman_user, projects=[world.p2], legal_entities=[world.le1])
+    with use_context(accountant):
+        async with get_sessionmaker()() as session:
+            seen = {tuple(row) for row in await session.execute(text(sql))}
+
+    assert ("project", world.p2, world.le2) in seen  # свой объект
+    assert ("legal_entity", None, world.le1) in seen  # запись без объекта по своему юрлицу
+    assert ("project", world.p1, world.le1) not in seen  # объект того же юрлица, но не его
+    assert {project for _t, project, _le in seen if project} == {world.p2}
 
 
 async def test_external_users_have_no_access_to_the_journal(world: World) -> None:

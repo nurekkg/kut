@@ -64,8 +64,9 @@ ALTER ROLE kut_worker WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATI
 SELECT current_database() AS maindb \gset
 
 -- Тестовая БД (dev и CI): тесты пересоздают в ней схему от имени kut_owner, суперпользователь им не нужен.
+-- С APP_ENV=production она не создаётся, что бы ни стояло в KUT_BOOTSTRAP_TEST_DB.
 SELECT format('CREATE DATABASE %I OWNER kut_owner', :'maindb' || '_test')
-WHERE :'with_test_db' = '1'
+WHERE :'with_test_db' = '1' AND :'app_env' <> 'production'
   AND NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'maindb' || '_test') \gexec
 
 SELECT format('ALTER DATABASE %I OWNER TO kut_owner', datname)
