@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
 
     database_url: SecretStr
+    database_portal_url: SecretStr | None = None
     redis_url: SecretStr
     celery_broker_url: SecretStr
     celery_result_backend: SecretStr

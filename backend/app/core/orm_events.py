@@ -1,14 +1,15 @@
 from typing import Any
 
-from sqlalchemy import event
-from sqlalchemy.orm import ORMExecuteState, Session, with_loader_criteria
+from sqlalchemy import Connection, event
+from sqlalchemy.orm import ORMExecuteState, Session, SessionTransaction, with_loader_criteria
 
 from app.core.base import AuditUserMixin, SoftDeleteMixin
 from app.core.context import current_user_id
+from app.core.rls import set_connection_context
 
 
 def stamp_actor(session: Session, flush_context: Any, instances: Any) -> None:
-    actor = current_user_id.get()
+    actor = current_user_id()
     for obj in session.new:
         if isinstance(obj, AuditUserMixin):
             obj.created_by = obj.created_by or actor
@@ -16,6 +17,12 @@ def stamp_actor(session: Session, flush_context: Any, instances: Any) -> None:
     for obj in session.dirty:
         if isinstance(obj, AuditUserMixin) and session.is_modified(obj):
             obj.updated_by = actor
+
+
+def apply_rls_context(
+    session: Session, transaction: SessionTransaction, connection: Connection
+) -> None:
+    set_connection_context(connection)
 
 
 def hide_soft_deleted(state: ORMExecuteState) -> None:
@@ -34,6 +41,7 @@ def hide_soft_deleted(state: ORMExecuteState) -> None:
 
 def register_orm_events() -> None:
     for identifier, listener in (
+        ("after_begin", apply_rls_context),
         ("before_flush", stamp_actor),
         ("do_orm_execute", hide_soft_deleted),
     ):
