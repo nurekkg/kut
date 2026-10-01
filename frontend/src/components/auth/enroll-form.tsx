@@ -87,7 +87,7 @@ export function EnrollForm({ mfaToken, onConfirmed, onRestart }: Props) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-5">
+    <form method="post" onSubmit={submit} className="space-y-5">
       <section aria-labelledby="enroll-key" className="space-y-3">
         <h3 id="enroll-key" className="text-sm font-medium">
           {t("step1")}

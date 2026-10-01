@@ -38,7 +38,7 @@ export function CredentialsForm({ onResult }: { onResult: (result: LoginResult) 
   }
 
   return (
-    <form onSubmit={submit} className="space-y-5">
+    <form method="post" onSubmit={submit} className="space-y-5">
       <Field id="identifier" label={t("identifier")}>
         <Input
           id="identifier"

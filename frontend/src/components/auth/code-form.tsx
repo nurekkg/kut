@@ -51,7 +51,7 @@ export function CodeForm({ mfaToken, onSuccess, onRestart }: Props) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-5">
+    <form method="post" onSubmit={submit} className="space-y-5">
       {recovery ? (
         <Field id="recovery-code" label={t("recoveryLabel")} hint={t("recoveryHint")}>
           <Input
@@ -62,7 +62,7 @@ export function CodeForm({ mfaToken, onSuccess, onRestart }: Props) {
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            placeholder="xxxxx-xxxxx"
+            placeholder="xxxx-xxxx-xxxx-xxxx"
             maxLength={32}
             required
             autoFocus
