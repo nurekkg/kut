@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, MetaData, func, text
+from sqlalchemy import DateTime, ForeignKey, MetaData, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 NAMING_CONVENTION = {
@@ -40,3 +40,10 @@ class SoftDeleteMixin:
 
 class BusinessBase(UUIDPrimaryKeyMixin, TimestampMixin, AuditUserMixin, SoftDeleteMixin, Base):
     __abstract__ = True
+
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", use_alter=True), default=None
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id", use_alter=True), default=None
+    )
