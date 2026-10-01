@@ -244,6 +244,23 @@ async def test_a_role_change_invalidates_every_token_of_the_user_at_once(
     assert event["meta"]["new_role_id"] == str(auth_world.roles["storekeeper"])
 
 
+async def test_the_role_ver_claim_alone_rejects_old_tokens_even_without_the_denylist(
+    api: AsyncClient, auth_world: AuthWorld, new_user: Callable[..., tuple[UUID, str]]
+) -> None:
+    """Второй слой: если denylist потерян (сброс Redis), токен со старым role_ver не проходит."""
+    user_id, email = new_user("foreman")
+    access, _ = await start(api, email)
+    await as_admin(
+        auth_world.users["owner"],
+        lambda s: admin.assign_role(s, user_id=user_id, role_id=auth_world.roles["storekeeper"]),
+    )
+    redis = get_redis()
+    for key in [key async for key in redis.scan_iter("deny:sid:*")]:
+        await redis.delete(key)
+
+    assert await me(api, access) == 401
+
+
 async def test_only_a_settings_admin_can_change_roles_and_not_their_own(
     api: AsyncClient,
     auth_world: AuthWorld,

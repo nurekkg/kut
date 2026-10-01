@@ -375,9 +375,11 @@ def test_recovery_codes_are_unique_well_formed_and_normalised() -> None:
     codes = totp.new_recovery_codes()
 
     assert len(codes) == 10 and len(set(codes)) == 10
-    assert all(len(code) == 11 and code[5] == "-" for code in codes)
+    assert all(len(code) == 19 and code.count("-") == 3 for code in codes)
     assert totp.normalize_recovery_code(f"  {codes[0].upper()} ") == codes[0]
-    assert totp.normalize_recovery_code("ABCDE - 12345") == "abcde-12345"
+    assert totp.normalize_recovery_code("ABCD 1234-ef56 7890") == "abcd-1234-ef56-7890"
+    assert totp.normalize_recovery_code("abcd1234ef567890") == "abcd-1234-ef56-7890"
+    assert totp.normalize_recovery_code("Not A Code") == "notacode"
     assert totp.provisioning_uri("JBSWY3DPEHPK3PXP", "a@b.c").startswith("otpauth://totp/Kut:")
 
 

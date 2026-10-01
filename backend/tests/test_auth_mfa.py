@@ -25,7 +25,7 @@ from tests.auth_support import (
 
 pytestmark = pytest.mark.usefixtures("clean_redis")
 
-RECOVERY_CODE = re.compile(r"^[0-9a-f]{5}-[0-9a-f]{5}$")
+RECOVERY_CODE = re.compile(r"^[0-9a-f]{4}(-[0-9a-f]{4}){3}$")
 
 
 async def verify(client: AsyncClient, mfa_token: str, **proof: str) -> Response:
@@ -114,7 +114,7 @@ async def test_malformed_codes_are_rejected_before_any_secret_is_touched(api: As
 
     for code in ("12345", "abcdef", "1234567", "12 34 5", "١٢٣٤٥٦"):  # до лимита в 5 попыток
         assert (await verify(api, token, code=code)).status_code == 401, code
-    both = await verify(api, token, code="123456", recovery_code="aaaaa-bbbbb")
+    both = await verify(api, token, code="123456", recovery_code="aaaa-bbbb-cccc-dddd")
     neither = await api.post(f"{AUTH}/mfa/verify", json={"mfa_token": token})
     assert both.status_code == 422 and neither.status_code == 422
 
@@ -264,7 +264,7 @@ async def test_a_recovery_code_logs_in_once_and_is_case_insensitive(
     first = await attempt(codes[0], "10.0.5.1")
     spent = await attempt(codes[0], "10.0.5.2")
     shouted = await attempt(f" {codes[1].upper()} ", "10.0.5.3")
-    unknown = await attempt("00000-00000", "10.0.5.4")
+    unknown = await attempt("0000-0000-0000-0000", "10.0.5.4")
 
     assert first.status_code == 200 and first.json()["user"]["amr"] == ["pwd", "rcv"]
     assert spent.status_code == 401 and spent.json() == {"detail": "invalid_code"}

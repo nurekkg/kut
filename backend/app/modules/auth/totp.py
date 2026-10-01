@@ -1,4 +1,5 @@
 import hmac
+import re
 import secrets
 import time
 
@@ -10,6 +11,7 @@ from app.core.redis import get_redis
 STEP_SECONDS = 30
 WINDOW_STEPS = 1  # допускаем сдвиг часов на один шаг в обе стороны (ADR-001 §2)
 RECOVERY_CODE_COUNT = 10
+_RECOVERY_BYTES = 8
 _REPLAY_TTL_SECONDS = (2 * WINDOW_STEPS + 2) * STEP_SECONDS
 
 
@@ -45,13 +47,20 @@ async def claim_step(user_id: object, step: int) -> bool:
 
 
 def new_recovery_codes(count: int = RECOVERY_CODE_COUNT) -> list[str]:
-    """Коды восстановления вида xxxxx-xxxxx (50 бит случайности каждый), показываются один раз."""
+    """Коды вида xxxx-xxxx-xxxx-xxxx, показываются один раз.
+
+    64 бита случайности: в БД лежит SHA-256 без соли, и при утечке базы код не должен подбираться.
+    """
     codes = []
     for _ in range(count):
-        raw = secrets.token_hex(5)
-        codes.append(f"{raw[:5]}-{raw[5:]}")
+        raw = secrets.token_hex(_RECOVERY_BYTES)
+        codes.append("-".join(raw[i : i + 4] for i in range(0, len(raw), 4)))
     return codes
 
 
 def normalize_recovery_code(value: str) -> str:
+    """Регистр, пробелы и дефисы не важны: «ABCD 1234…» и «abcd1234…» дают канонический вид."""
+    compact = re.sub(r"[\s-]", "", value.lower())
+    if re.fullmatch(r"[0-9a-f]{16}", compact):
+        return "-".join(compact[i : i + 4] for i in range(0, 16, 4))
     return value.strip().lower().replace(" ", "")
