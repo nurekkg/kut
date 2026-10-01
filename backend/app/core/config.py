@@ -23,6 +23,10 @@ class Settings(BaseSettings):
 
     health_check_timeout_seconds: float = 2.0
 
+    @property
+    def docs_enabled(self) -> bool:
+        return self.app_env != "production"
+
 
 @lru_cache
 def get_settings() -> Settings:
