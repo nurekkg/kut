@@ -1,11 +1,25 @@
 export const DEFAULT_PATH = "/projects";
 
-// Параметр next приходит из адресной строки: пускаем только пути внутри приложения,
-// иначе форма входа стала бы открытым редиректом на чужой сайт.
+const PLACEHOLDER_ORIGIN = "http://same-origin.invalid";
+
+// Параметр next приходит из адресной строки: пускаем только пути внутри приложения, иначе форма
+// входа стала бы открытым редиректом на чужой сайт. Парсеры URL выбрасывают табуляции и переводы
+// строк, поэтому «/<tab>/evil.example» превращается в «//evil.example»: управляющие символы и
+// обратная косая черта отклоняются сразу, а итог проверяется разбором URL, а не префиксами строки.
 export function safeNext(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+  if (!value || !value.startsWith("/")) return DEFAULT_PATH;
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 32 || code === 127 || char === "\\") return DEFAULT_PATH;
+  }
+  let url: URL;
+  try {
+    url = new URL(value, PLACEHOLDER_ORIGIN);
+  } catch {
     return DEFAULT_PATH;
   }
-  if (value === "/login" || value.startsWith("/login?")) return DEFAULT_PATH;
-  return value;
+  if (url.origin !== PLACEHOLDER_ORIGIN) return DEFAULT_PATH;
+  const path = url.pathname + url.search + url.hash;
+  if (path === "/login" || path.startsWith("/login?")) return DEFAULT_PATH;
+  return path;
 }
