@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -14,6 +15,7 @@ from tests.auth_support import AuthWorld
 from tests.db_support import (
     INSUFFICIENT_PRIVILEGE,
     NO_DATA_FOUND,
+    auth_rows,
     call,
     context,
     events,
@@ -75,9 +77,7 @@ async def test_assign_role_bumps_role_ver_revokes_sessions_and_journals_the_acto
     (state,) = await owner_rows(
         worker_engine, 'SELECT role_id, role_ver FROM "user" WHERE id = :u', u=target
     )
-    (rotation,) = await call(
-        None, "SELECT * FROM app.refresh_rotate(:o, :n)", o=token_one, n=fresh_hash()
-    )
+    rotation, _ = await rotate(token_one)
 
     assert changed.o_role_ver == 2 and set(changed.o_families) == {first, second}
     assert again.o_role_ver == 3 and again.o_families == []  # сеансов уже нет
@@ -133,9 +133,13 @@ async def test_set_user_active_follows_the_same_rules_and_ends_the_sessions(
 # --- refresh-токены ---
 
 
-async def rotate(old: bytes) -> tuple[Any, bytes]:
+async def rotate(old: bytes, grace: str = "0 seconds") -> tuple[Any, bytes]:
     new = fresh_hash()
-    (row,) = await call(None, "SELECT * FROM app.refresh_rotate(:o, :n)", o=old, n=new)
+    (row,) = await call(
+        None,
+        "SELECT * FROM app.refresh_rotate(:o, :n, CAST(:g AS interval))",
+        o=old, n=new, g=grace,
+    )  # fmt: skip
     return row, new
 
 
@@ -169,6 +173,51 @@ async def test_reuse_revokes_the_family_and_leaves_a_security_event(
     assert untouched.o_status == "ok" and untouched.o_family_id == other_family
     (event,) = await events(worker_engine, "refresh_reuse", family)
     assert event.actor_id == user and event.table_name == "refresh_token"
+
+
+async def test_a_used_token_inside_the_grace_window_does_not_revoke_the_family(
+    new_user: NewUser, worker_engine: AsyncEngine
+) -> None:
+    user, _ = new_user("foreman")
+    family, token = await issue_session(user)
+    ok, successor = await rotate(token, grace="1 hour")
+
+    replay, _ = await rotate(token, grace="1 hour")
+    next_step, _ = await rotate(successor, grace="1 hour")  # законная цепочка продолжается
+
+    assert ok.o_status == "ok" and replay.o_status == "grace" and replay.o_family_id == family
+    assert next_step.o_status == "ok"
+    assert await events(worker_engine, "refresh_reuse", family) == []
+    assert len(await events(worker_engine, "refresh_grace", family)) == 1
+
+
+async def test_a_used_token_outside_the_grace_window_revokes_the_family(
+    new_user: NewUser, worker_engine: AsyncEngine
+) -> None:
+    user, _ = new_user("foreman")
+    family, token = await issue_session(user)
+    _, successor = await rotate(token, grace="0 seconds")
+
+    late, _ = await rotate(token, grace="0 seconds")
+    successor_after, _ = await rotate(successor, grace="1 hour")
+
+    assert late.o_status == "reused" and late.o_family_id == family
+    assert successor_after.o_status == "invalid"
+    assert len(await events(worker_engine, "refresh_reuse", family)) == 1
+
+
+async def test_the_grace_window_does_not_save_an_inactive_user(
+    new_user: NewUser, worker_sync_engine: Engine
+) -> None:
+    user, _ = new_user("foreman")
+    _family, token = await issue_session(user)
+    await rotate(token, grace="1 hour")
+    with worker_sync_engine.begin() as connection:
+        connection.execute(text('UPDATE "user" SET is_active = false WHERE id = :i'), {"i": user})
+
+    replay, _ = await rotate(token, grace="1 hour")
+
+    assert replay.o_status == "inactive"
 
 
 async def test_unknown_and_expired_tokens_are_invalid_and_not_a_reuse(
@@ -220,7 +269,10 @@ async def test_logout_revokes_the_family_and_journals_once(
 
 
 async def test_change_password_works_only_from_the_owners_own_context(
-    auth_world: AuthWorld, new_user: NewUser, worker_engine: AsyncEngine
+    auth_world: AuthWorld,
+    new_user: NewUser,
+    worker_engine: AsyncEngine,
+    owner_engine: AsyncEngine,
 ) -> None:
     user, _ = new_user("foreman")
     keep, _keep_token = await issue_session(user)
@@ -233,8 +285,8 @@ async def test_change_password_works_only_from_the_owners_own_context(
             stranger, sql, INSUFFICIENT_PRIVILEGE, u=user, hash=ARGON_SAMPLE, keep=keep
         )
     (row,) = await call(context(user), sql, u=user, hash=ARGON_SAMPLE, keep=keep)
-    (state,) = await owner_rows(
-        worker_engine, 'SELECT password_hash, password_changed_at FROM "user" WHERE id = :u', u=user
+    (state,) = await auth_rows(
+        owner_engine, 'SELECT password_hash, password_changed_at FROM "user" WHERE id = :u', u=user
     )
 
     assert set(row[0]) == {gone_a, gone_b}
@@ -247,31 +299,89 @@ async def test_totp_secret_lifecycle_and_single_use_recovery_codes(
     new_user: NewUser, worker_engine: AsyncEngine
 ) -> None:
     user, _ = new_user("accountant")
+    me = context(user)
     blob = b"\x01" * 40
     codes = [fresh_hash() for _ in range(3)]
-    use = "SELECT app.recovery_code_use(:u, :c)"
-    confirm = "SELECT app.totp_confirm(:u, CAST(:c AS bytea[]))"
+    use = "SELECT app.recovery_code_use(:c)"
+    confirm = "SELECT app.totp_confirm(CAST(:c AS bytea[]))"
 
-    pending = await call(None, "SELECT app.totp_set_pending(:u, :b, 'k1')", u=user, b=blob)
-    (stored,) = await call(None, "SELECT * FROM app.totp_get(:u)", u=user)
-    early = await call(None, use, u=user, c=codes[0])
-    confirmed = await call(None, confirm, u=user, c=codes)
-    twice = await call(None, confirm, u=user, c=codes)
-    after_confirm = await call(None, "SELECT app.totp_set_pending(:u, :b, 'k2')", u=user, b=blob)
-    first = await call(None, use, u=user, c=codes[0])
-    spent = await call(None, use, u=user, c=codes[0])
-    unknown = await call(None, use, u=user, c=fresh_hash())
-    elsewhere = await call(None, use, u=uuid4(), c=codes[1])
-    nobody = await call(None, "SELECT * FROM app.totp_get(:u)", u=uuid4())
+    pending = await call(me, "SELECT app.totp_set_pending(:b, 'k1')", b=blob)
+    (stored,) = await call(me, "SELECT * FROM app.totp_get()")
+    early = await call(me, use, c=codes[0])
+    confirmed = await call(me, confirm, c=codes)
+    twice = await call(me, confirm, c=codes)
+    after_confirm = await call(me, "SELECT app.totp_set_pending(:b, 'k2')", b=blob)
+    first = await call(me, use, c=codes[0])
+    spent = await call(me, use, c=codes[0])
+    unknown = await call(me, use, c=fresh_hash())
+    elsewhere = await call(context(uuid4()), use, c=codes[1])  # чужой контекст: кодов нет
 
     assert pending[0][0] is True and bytes(stored.o_secret_enc) == blob and stored.o_key_id == "k1"
     assert stored.o_confirmed is False and early[0][0] is False
     assert (confirmed[0][0], twice[0][0], after_confirm[0][0]) == (True, False, False)
     assert (first[0][0], spent[0][0], unknown[0][0], elsewhere[0][0]) == (True, False, False, False)
-    assert nobody == []
     (used,) = await events(worker_engine, "recovery_code_used", user)
     assert used.meta["left"] == 2
     assert len(await events(worker_engine, "mfa_enabled", user)) == 1
+
+
+TOTP_CALLS = {
+    "totp_get": ("SELECT * FROM app.totp_get()", {}),
+    "totp_set_pending": ("SELECT app.totp_set_pending(:b, 'k')", {"b": b"\x02" * 8}),
+    "totp_confirm": ("SELECT app.totp_confirm(CAST(:c AS bytea[]))", {"c": [b"\x03" * 32]}),
+    "recovery_code_use": ("SELECT app.recovery_code_use(:c)", {"c": b"\x04" * 32}),
+    "auth_password_hash": ("SELECT app.auth_password_hash()", {}),
+}
+
+
+@pytest.mark.parametrize("name", list(TOTP_CALLS))
+async def test_credential_functions_refuse_a_call_without_a_user_in_the_context(
+    name: str,
+) -> None:
+    sql, params = TOTP_CALLS[name]
+
+    await expect_error(None, sql, INSUFFICIENT_PRIVILEGE, **params)
+    await expect_error(context(None), sql, INSUFFICIENT_PRIVILEGE, **params)
+
+
+async def test_credential_functions_only_ever_touch_the_user_of_the_context(
+    new_user: NewUser, owner_engine: AsyncEngine
+) -> None:
+    alice, _ = new_user("accountant")
+    bob, _ = new_user("accountant")
+    secret = b"\x07" * 30
+    await call(context(alice), "SELECT app.totp_set_pending(:b, 'ka')", b=secret)
+
+    bobs_view = await call(context(bob), "SELECT * FROM app.totp_get()")
+    bob_writes = await call(context(bob), "SELECT app.totp_set_pending(:b, 'kb')", b=b"\x08" * 30)
+    alices_view = await call(context(alice), "SELECT * FROM app.totp_get()")
+    stored = await auth_rows(
+        owner_engine,
+        'SELECT id, totp_key_id FROM "user" WHERE id = ANY(:ids)',
+        ids=[alice, bob],
+    )
+
+    assert bobs_view[0].o_secret_enc is None and bobs_view[0].o_key_id is None
+    assert bob_writes[0][0] is True and bytes(alices_view[0].o_secret_enc) == secret
+    assert {row.id: row.totp_key_id for row in stored} == {alice: "ka", bob: "kb"}
+
+
+async def test_the_old_credential_signatures_with_a_user_parameter_are_gone(
+    owner_engine: AsyncEngine,
+) -> None:
+    rows = await owner_rows(
+        owner_engine,
+        "SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS sig"
+        " FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'app'"
+        " AND p.proname = ANY(:names)",
+        names=[*TOTP_CALLS, "refresh_rotate"],
+    )
+
+    signatures = {row.sig for row in rows}
+    assert not any(
+        "uuid" in signature.split("(")[1] for signature in signatures if "(" in signature
+    ), signatures
+    assert "refresh_rotate(p_old bytea, p_new bytea, p_grace interval)" in signatures
 
 
 # --- журнал ---
@@ -309,7 +419,7 @@ async def test_the_journal_never_contains_credentials_of_a_user_row(
 ) -> None:
     user, _ = new_user("accountant")
     marker_hash = "$argon2id$v=19$m=65536,t=3,p=4$bWFya2Vy$bWFya2VyaGFzaA"
-    await call(None, "SELECT app.totp_set_pending(:u, :b, 'k1')", u=user, b=b"\xaa" * 32)
+    await call(context(user), "SELECT app.totp_set_pending(:b, 'k1')", b=b"\xaa" * 32)
     await call(context(user), "SELECT app.change_password(:u, :h, NULL)", u=user, h=marker_hash)
 
     rows = await owner_rows(

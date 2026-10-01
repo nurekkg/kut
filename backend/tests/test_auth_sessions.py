@@ -1,6 +1,7 @@
+import asyncio
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,6 +11,7 @@ from fastapi import FastAPI
 from httpx import AsyncClient, Response
 from sqlalchemy import Engine, text
 
+from app.core.config import get_settings
 from app.core.context import use_context
 from app.core.db import get_sessionmaker
 from app.core.redis import get_redis
@@ -29,6 +31,19 @@ from tests.auth_support import (
 pytestmark = pytest.mark.usefixtures("clean_redis")
 
 REFRESH_COOKIE = "kut_refresh"
+
+
+@pytest.fixture
+def set_grace(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[int], None]]:
+    """Льготное окно refresh в секундах: 0 - любой повтор использованного токена отзывает семью."""
+
+    def apply(seconds: int) -> None:
+        monkeypatch.setenv("REFRESH_GRACE_SECONDS", str(seconds))
+        get_settings.cache_clear()
+
+    yield apply
+    monkeypatch.delenv("REFRESH_GRACE_SECONDS", raising=False)
+    get_settings.cache_clear()
 
 
 def sid_of(token: str) -> UUID:
@@ -97,8 +112,9 @@ async def test_refresh_rotates_the_token_and_keeps_the_session_and_its_lifetime(
 
 
 async def test_reusing_a_rotated_refresh_token_revokes_the_whole_family(
-    api: AsyncClient, worker_sync_engine: Engine
+    api: AsyncClient, worker_sync_engine: Engine, set_grace: Callable[[int], None]
 ) -> None:
+    set_grace(0)
     access, stolen = await start(api, "foreman")
     legit = await refresh_with(api, stolen)  # законная ротация: токен stolen теперь «использован»
     rotated = legit.json()
@@ -116,7 +132,10 @@ async def test_reusing_a_rotated_refresh_token_revokes_the_whole_family(
     assert event["actor_id"] == user_of(access)
 
 
-async def test_after_reuse_the_other_session_of_the_user_still_works(api: AsyncClient) -> None:
+async def test_after_reuse_the_other_session_of_the_user_still_works(
+    api: AsyncClient, set_grace: Callable[[int], None]
+) -> None:
+    set_grace(0)
     _, stolen = await start(api, "foreman")
     other_access, other_refresh = await start(api, "foreman")
     await refresh_with(api, stolen)
@@ -124,6 +143,73 @@ async def test_after_reuse_the_other_session_of_the_user_still_works(api: AsyncC
 
     assert await me(api, other_access) == 200
     assert (await refresh_with(api, other_refresh)).status_code == 200
+
+
+async def test_a_repeat_inside_the_grace_window_returns_the_pair_already_issued(
+    api: AsyncClient, worker_sync_engine: Engine, set_grace: Callable[[int], None]
+) -> None:
+    set_grace(30)
+    access, first = await start(api, "foreman")
+    original = await refresh_with(api, first)  # ответ потерян по дороге: клиент повторит запрос
+
+    repeat = await refresh_with(api, first)
+
+    assert original.status_code == repeat.status_code == 200
+    assert repeat.json() == original.json()  # та же пара, ротации нет
+    assert repeat.cookies[REFRESH_COOKIE] == original.cookies[REFRESH_COOKIE]
+    assert await me(api, repeat.json()["access_token"]) == 200
+    assert (await refresh_with(api, repeat.cookies[REFRESH_COOKIE])).status_code == 200
+    assert events(worker_sync_engine, "refresh_reuse", sid_of(access)) == []
+    assert len(events(worker_sync_engine, "refresh_grace", sid_of(access))) == 1
+
+
+async def test_a_repeat_after_the_grace_window_revokes_the_family(
+    api: AsyncClient, worker_sync_engine: Engine, set_grace: Callable[[int], None]
+) -> None:
+    set_grace(1)
+    access, first = await start(api, "foreman")
+    original = await refresh_with(api, first)
+    await asyncio.sleep(1.5)
+
+    late = await refresh_with(api, first)
+
+    assert late.status_code == 401
+    assert await me(api, original.json()["access_token"]) == 401
+    assert (await refresh_with(api, original.cookies[REFRESH_COOKIE])).status_code == 401
+    assert len(events(worker_sync_engine, "refresh_reuse", sid_of(access))) == 1
+
+
+async def test_two_simultaneous_refreshes_with_one_cookie_do_not_look_like_theft(
+    api: AsyncClient, set_grace: Callable[[int], None]
+) -> None:
+    set_grace(30)
+    _access, token = await start(api, "foreman")
+
+    responses = await asyncio.gather(*(refresh_with(api, token) for _ in range(4)))
+
+    assert [response.status_code for response in responses] == [200] * 4
+    assert len({response.cookies[REFRESH_COOKIE] for response in responses}) == 1
+    assert await me(api, responses[0].json()["access_token"]) == 200
+
+
+async def test_a_grace_replay_does_not_resurrect_a_logged_out_session(
+    api: AsyncClient, set_grace: Callable[[int], None]
+) -> None:
+    set_grace(30)
+    access, token = await start(api, "foreman")
+    renewed = await refresh_with(api, token)
+    await api.post(
+        f"{AUTH}/logout",
+        headers={
+            **bearer(renewed.json()["access_token"]),
+            "Cookie": f"{REFRESH_COOKIE}={renewed.cookies[REFRESH_COOKIE]}",
+        },
+    )
+
+    replay = await refresh_with(api, token)
+
+    assert replay.status_code == 401  # семья отозвана выходом: окно её не оживляет
+    assert await me(api, access) == 401
 
 
 async def test_refresh_without_a_cookie_or_with_garbage_answers_401_and_clears_the_cookie(
@@ -330,6 +416,7 @@ async def test_changing_the_password_keeps_this_session_and_revokes_the_others(
     app: FastAPI,
     new_user: Callable[..., tuple[UUID, str]],
     worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
 ) -> None:
     user_id, email = new_user("estimator")
     keep_access, keep_refresh = await start(api, email)
@@ -351,10 +438,12 @@ async def test_changing_the_password_keeps_this_session_and_revokes_the_others(
     assert (await login(api, email, NEW_PASSWORD)).status_code == 200
     (event,) = events(worker_sync_engine, "password_changed", user_id)
     assert event["meta"]["revoked_sessions"] == 1
-    with worker_sync_engine.connect() as connection:
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         stored = connection.execute(
             text('SELECT password_hash FROM "user" WHERE id = :id'), {"id": user_id}
         ).scalar_one()
+    with worker_sync_engine.connect() as connection:
         journal = connection.execute(
             text("SELECT old, new FROM audit_log WHERE table_name = 'user' AND row_id = :id"),
             {"id": user_id},

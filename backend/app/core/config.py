@@ -35,12 +35,17 @@ class Settings(BaseSettings):
     mfa_token_ttl_seconds: int = 300
     refresh_ttl_days: int = 14
     refresh_ttl_days_field: int = 30  # прораб и мастер: личные телефоны, ADR-001 §7, вопрос 5
+    # Повтор уже использованного refresh в этом окне отдаёт прежнюю пару, за окном семья отзывается.
+    refresh_grace_seconds: int = 30
+    invite_ttl_hours: int = 72  # срок одноразовой ссылки активации
     # «key_id:<base64url 32 байт>[,key_id:...]» для AES-GCM; шифрует totp_active_key_id.
     totp_encryption_keys: SecretStr | None = None
     totp_active_key_id: str | None = None
     totp_issuer: str = "Kut"
     cookie_secure: bool | None = None  # None: Secure везде, кроме development
-    trust_forwarded_for: bool = False  # доверять последнему X-Forwarded-For (за прокси web)
+    # Доверять последнему X-Forwarded-For. Не задано: да только в development (API за прокси web),
+    # в test и production нет; в production включается явно и только за доверенным прокси.
+    trust_forwarded_for: bool | None = None
     login_rate_limit_attempts: int = 5
     login_rate_limit_window_seconds: int = 900
     principal_cache_ttl_seconds: int = 60
@@ -55,6 +60,12 @@ class Settings(BaseSettings):
     @property
     def docs_enabled(self) -> bool:
         return self.app_env != "production"
+
+    @property
+    def forwarded_for_trusted(self) -> bool:
+        if self.trust_forwarded_for is not None:
+            return self.trust_forwarded_for
+        return self.app_env == "development"
 
     @property
     def cookies_secure(self) -> bool:

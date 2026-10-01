@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.request_id import get_request_id
 from app.modules.auth import service
 from app.modules.auth.deps import (
     client_ip,
@@ -15,6 +16,7 @@ from app.modules.auth.deps import (
     get_principal,
     get_system_session,
     unauthorized,
+    user_session,
 )
 from app.modules.auth.errors import (
     InvalidCode,
@@ -28,6 +30,7 @@ from app.modules.auth.errors import (
 )
 from app.modules.auth.principal import Principal, principal_store
 from app.modules.auth.schemas import (
+    ActivateRequest,
     LoginRequest,
     MeResponse,
     MfaConfirmRequest,
@@ -117,25 +120,34 @@ async def login(
 
 @router.post("/mfa/verify", response_model=TokenResponse)
 async def verify_mfa(
-    body: MfaVerifyRequest, request: Request, response: Response, session: Session
+    body: MfaVerifyRequest,
+    request: Request,
+    response: Response,
+    request_id: Annotated[uuid.UUID, Depends(get_request_id)],
 ) -> TokenResponse:
     _no_store(response)
     try:
-        issued = await service.verify_mfa(
-            session,
-            mfa_token=body.mfa_token,
-            code=body.code,
-            recovery_code=body.recovery_code,
-            ip=client_ip(request),
-        )
-    except InvalidToken as error:
+        user_id = decode_mfa(body.mfa_token, scope="verify").user_id
+    except InvalidTokenError as error:
         raise unauthorized() from error
-    except InvalidCode as error:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_code") from error
-    except InvalidCredentials as error:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_credentials") from error
-    except RateLimited as error:
-        raise _too_many(error) from error
+    # Сессия под контекстом пользователя из токена: функции TOTP берут его из app.user_id().
+    async with user_session(user_id, request_id) as session:
+        try:
+            issued = await service.verify_mfa(
+                session,
+                user_id=user_id,
+                code=body.code,
+                recovery_code=body.recovery_code,
+                ip=client_ip(request),
+            )
+        except InvalidToken as error:
+            raise unauthorized() from error
+        except InvalidCode as error:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_code") from error
+        except InvalidCredentials as error:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_credentials") from error
+        except RateLimited as error:
+            raise _too_many(error) from error
     return _token_response(issued, response)
 
 
@@ -213,15 +225,22 @@ async def _mfa_actor(
 async def mfa_setup(
     body: MfaSetupRequest,
     response: Response,
-    session: Session,
+    request_id: Annotated[uuid.UUID, Depends(get_request_id)],
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)] = None,
 ) -> MfaSetupResponse:
     _no_store(response)
     user_id, account, _ = await _mfa_actor(body.mfa_token, credentials)
-    try:
-        secret, uri = await service.start_mfa_setup(session, user_id=user_id, account=account)
-    except MfaAlreadyEnabled as error:
-        raise HTTPException(status.HTTP_409_CONFLICT, "mfa_already_enabled") from error
+    async with user_session(user_id, request_id) as session:
+        try:
+            secret, uri = await service.start_mfa_setup(
+                session, user_id=user_id, account=account, password=body.password
+            )
+        except MfaAlreadyEnabled as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, "mfa_already_enabled") from error
+        except InvalidCurrentPassword as error:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_password") from error
+        except RateLimited as error:
+            raise _too_many(error) from error
     return MfaSetupResponse(secret=secret, otpauth_uri=uri)
 
 
@@ -230,26 +249,27 @@ async def mfa_confirm(
     body: MfaConfirmRequest,
     request: Request,
     response: Response,
-    session: Session,
+    request_id: Annotated[uuid.UUID, Depends(get_request_id)],
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)] = None,
 ) -> MfaConfirmResponse:
     _no_store(response)
     user_id, _account, enrolling = await _mfa_actor(body.mfa_token, credentials)
     ip = client_ip(request)
-    try:
-        codes = await service.confirm_mfa(session, user_id=user_id, code=body.code, ip=ip)
-    except InvalidCode as error:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_code") from error
-    except MfaNotStarted as error:
-        raise HTTPException(status.HTTP_409_CONFLICT, "mfa_not_started") from error
-    except MfaAlreadyEnabled as error:
-        raise HTTPException(status.HTTP_409_CONFLICT, "mfa_already_enabled") from error
-    except RateLimited as error:
-        raise _too_many(error) from error
-    session_body: TokenResponse | None = None
-    if enrolling:
-        issued = await service.start_session_after_enrollment(session, user_id=user_id, ip=ip)
-        session_body = _token_response(issued, response)
+    async with user_session(user_id, request_id) as session:
+        try:
+            codes = await service.confirm_mfa(session, user_id=user_id, code=body.code, ip=ip)
+        except InvalidCode as error:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_code") from error
+        except MfaNotStarted as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, "mfa_not_started") from error
+        except MfaAlreadyEnabled as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, "mfa_already_enabled") from error
+        except RateLimited as error:
+            raise _too_many(error) from error
+        session_body: TokenResponse | None = None
+        if enrolling:
+            issued = await service.start_session_after_enrollment(session, user_id=user_id, ip=ip)
+            session_body = _token_response(issued, response)
     return MfaConfirmResponse(recovery_codes=codes, session=session_body)
 
 
@@ -267,6 +287,22 @@ async def change_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_current_password") from error
     except PasswordUnchanged as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "password_unchanged") from error
+    except RateLimited as error:
+        raise _too_many(error) from error
+    reply = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _no_store(reply)
+    return reply
+
+
+@router.post("/activate", status_code=status.HTTP_204_NO_CONTENT)
+async def activate(body: ActivateRequest, request: Request, session: Session) -> Response:
+    """Пароль по одноразовой ссылке администратора; причина отказа клиенту не раскрывается."""
+    try:
+        await service.activate_invite(
+            session, token=body.token, password=body.password, ip=client_ip(request)
+        )
+    except InvalidToken as error:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_invite") from error
     except RateLimited as error:
         raise _too_many(error) from error
     reply = Response(status_code=status.HTTP_204_NO_CONTENT)

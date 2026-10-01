@@ -135,7 +135,7 @@ async def test_nobody_but_the_owner_can_touch_audit_partitions_directly(
 async def test_the_password_hash_is_not_readable_by_the_app_and_portal_logins(
     owner_engine: AsyncEngine,
 ) -> None:
-    """С S1b пароль читают только функции app.* (kut_auth); kut_worker остаётся как в S1a."""
+    """Пароль читают только функции app.* (kut_auth): ни kut_app, ни kut_portal, ни kut_worker."""
     async with owner_engine.connect() as connection:
         results = {
             login: await connection.scalar(
@@ -147,7 +147,7 @@ async def test_the_password_hash_is_not_readable_by_the_app_and_portal_logins(
             )
             for login in ("kut_app", "kut_portal", "kut_worker")
         }
-    assert results == {"kut_app": False, "kut_portal": False, "kut_worker": True}
+    assert results == {"kut_app": False, "kut_portal": False, "kut_worker": False}
 
 
 BASE_COLUMNS = {"id", "created_at", "updated_at", "deleted_at"}

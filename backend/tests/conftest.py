@@ -316,3 +316,22 @@ def new_user(
             connection.execute(
                 text('UPDATE "user" SET deleted_at = now() WHERE id = ANY(:ids)'), {"ids": created}
             )
+
+
+@pytest.fixture
+def settings_cleanup(worker_sync_engine: Engine) -> Iterator[None]:
+    """Записи тестов настроек (@cfg.test, CFG-...) гасятся мягко: в чужие списки не попадут."""
+    yield
+    statements = (
+        "UPDATE user_project_access SET deleted_at = now() WHERE deleted_at IS NULL"
+        " AND user_id IN (SELECT id FROM \"user\" WHERE email LIKE '%@cfg.test')",
+        "UPDATE user_legal_entity_access SET deleted_at = now() WHERE deleted_at IS NULL"
+        " AND user_id IN (SELECT id FROM \"user\" WHERE email LIKE '%@cfg.test')",
+        'UPDATE "user" SET deleted_at = now() WHERE deleted_at IS NULL'
+        " AND email LIKE '%@cfg.test'",
+        "UPDATE legal_entity SET deleted_at = now() WHERE deleted_at IS NULL AND name LIKE 'CFG-%'",
+        "UPDATE counterparty SET deleted_at = now() WHERE deleted_at IS NULL AND name LIKE 'CFG-%'",
+    )
+    with worker_sync_engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))

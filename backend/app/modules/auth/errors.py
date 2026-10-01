@@ -40,5 +40,21 @@ class PermissionDenied(AuthError):
     """У действующего пользователя нет права settings:admin (проверяет функция БД)."""
 
 
+class Conflict(AuthError):
+    """Значение уже занято (email, телефон): код поля для ответа клиенту."""
+
+    def __init__(self, field: str) -> None:
+        super().__init__(field)
+        self.field = field
+
+
+class InvalidInput(AuthError):
+    """БД отвергла данные пользователя (формат телефона, роль и контрагент не сочетаются)."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 class NotFound(AuthError):
     """Пользователь или роль не найдены."""

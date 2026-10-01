@@ -1,12 +1,13 @@
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.context import system_context, use_context
+from app.core.context import RequestContext, system_context, use_context
 from app.core.db import get_portal_sessionmaker, get_sessionmaker
 from app.core.request_id import get_request_id
 from app.modules.auth import denylist
@@ -25,7 +26,7 @@ def unauthorized(detail: str = "invalid_token") -> HTTPException:
 
 def client_ip(request: Request) -> str:
     """Адрес клиента; X-Forwarded-For (последний хоп) учитывается только за доверенным прокси."""
-    if get_settings().trust_forwarded_for:
+    if get_settings().forwarded_for_trusted:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             return forwarded.split(",")[-1].strip()
@@ -81,6 +82,20 @@ async def get_account_session(
     """Операции над своей учётной записью: функции app.* выданы только kut_app, в том числе для
     внешних ролей, поэтому пул всегда kut_app, а контекст принадлежит пользователю."""
     with use_context(principal.to_context(request_id)):
+        async with get_sessionmaker()() as session:
+            yield session
+
+
+@asynccontextmanager
+async def user_session(user_id: uuid.UUID, request_id: uuid.UUID) -> AsyncIterator[AsyncSession]:
+    """Узкий путь второго фактора и настройки 2FA: сессия kut_app под контекстом пользователя.
+
+    Пользователя называет проверенный токен (mfa_token или access), а не параметр функции БД:
+    функции TOTP берут его из app.user_id(). Контекст пустой по правам (внешний, без объектов),
+    через него нельзя прочитать ничего, кроме собственной строки.
+    """
+    context = RequestContext(user_id=user_id, is_internal=False, request_id=request_id)
+    with use_context(context):
         async with get_sessionmaker()() as session:
             yield session
 

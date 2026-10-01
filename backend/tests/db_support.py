@@ -60,6 +60,16 @@ async def owner_rows(engine: AsyncEngine, sql: str, **params: Any) -> list[Any]:
         return list((await connection.execute(text(sql), params)).all())
 
 
+async def auth_rows(engine: AsyncEngine, sql: str, **params: Any) -> list[Any]:
+    """Чтение секретов (хэш пароля, шифртекст TOTP): ими владеет kut_auth, логины их не читают.
+
+    Нужен движок kut_owner: он входит в kut_auth и делает SET ROLE (сам он под FORCE RLS слеп).
+    """
+    async with engine.begin() as connection:
+        await connection.execute(text("SET LOCAL ROLE kut_auth"))
+        return list((await connection.execute(text(sql), params)).all())
+
+
 def fresh_hash() -> bytes:
     return hashlib.sha256(uuid4().bytes).digest()
 

@@ -402,3 +402,39 @@ def test_forwarded_for_is_ignored_unless_the_proxy_is_trusted(env: pytest.Monkey
     clear_caches()
     assert client_ip(spoofed) == "203.0.113.9"  # последний хоп дописал доверенный прокси
     assert client_ip(request_from("10.0.0.5")) == "10.0.0.5"
+
+
+@pytest.mark.parametrize(
+    ("app_env", "explicit", "trusted"),
+    [
+        ("development", None, True),  # API за прокси web
+        ("test", None, False),
+        ("production", None, False),  # без явного решения заголовку не верим
+        ("production", "true", True),  # явный выбор оператора за доверенным прокси
+        ("production", "false", False),
+        ("development", "false", False),
+    ],
+)
+def test_forwarded_for_is_trusted_by_default_only_in_development(
+    env: pytest.MonkeyPatch, app_env: str, explicit: str | None, trusted: bool
+) -> None:
+    env.setenv("APP_ENV", app_env)
+    if explicit is None:
+        env.delenv("TRUST_FORWARDED_FOR", raising=False)
+    else:
+        env.setenv("TRUST_FORWARDED_FOR", explicit)
+    clear_caches()
+
+    assert get_settings().forwarded_for_trusted is trusted
+
+
+def test_in_production_a_spoofed_forwarded_for_does_not_change_the_client_address(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("APP_ENV", "production")
+    env.delenv("TRUST_FORWARDED_FOR", raising=False)
+    clear_caches()
+
+    spoofed = request_from("198.51.100.4", "6.6.6.6")
+
+    assert client_ip(spoofed) == "198.51.100.4"  # лимит попыток по IP не обойти заголовком

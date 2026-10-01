@@ -1,3 +1,5 @@
+import asyncio
+import json
 import time
 import uuid
 from dataclasses import dataclass
@@ -7,6 +9,7 @@ from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.redis import get_redis
 from app.modules.auth import denylist, limits, repository, totp
 from app.modules.auth.crypto import SecretDecryptionError, decrypt_totp_secret, encrypt_totp_secret
 from app.modules.auth.errors import (
@@ -29,12 +32,7 @@ from app.modules.auth.security import (
     sha256,
     verify_password_async,
 )
-from app.modules.auth.tokens import (
-    InvalidTokenError,
-    decode_mfa,
-    issue_access,
-    issue_mfa,
-)
+from app.modules.auth.tokens import issue_access, issue_mfa
 
 # Прораб и мастер входят с личных телефонов: сессия живёт дольше (ADR-001 §7, вопрос 5).
 FIELD_ROLES = frozenset({"foreman", "master"})
@@ -164,16 +162,12 @@ async def _mfa_failure(
 async def verify_mfa(
     session: AsyncSession,
     *,
-    mfa_token: str,
+    user_id: uuid.UUID,
     code: str | None,
     recovery_code: str | None,
     ip: str,
 ) -> IssuedSession:
-    try:
-        claims = decode_mfa(mfa_token, scope="verify")
-    except InvalidTokenError as error:
-        raise InvalidToken from error
-    user_id = claims.user_id
+    """Второй фактор. Сессия открыта под контекстом пользователя из проверенного mfa_token."""
     keys = [limits.mfa_key(user_id), limits.mfa_ip_key(ip)]
     if wait := await limits.blocked_for(keys):
         raise RateLimited(wait)
@@ -181,7 +175,7 @@ async def verify_mfa(
     otp_at: int | None = None
     amr: tuple[str, ...]
     if code is not None:
-        record = await repository.totp_get(session, user_id)
+        record = await repository.totp_get(session)
         if record is None or not record.confirmed or record.secret_enc is None or not record.key_id:
             await _mfa_failure(session, keys, user_id, ip, "mfa_failed")
             raise InvalidCode
@@ -199,7 +193,7 @@ async def verify_mfa(
         if recovery_code is None:  # схема запроса гарантирует ровно одно из двух
             raise InvalidCode
         digest = sha256(totp.normalize_recovery_code(recovery_code))
-        if not await repository.recovery_code_use(session, user_id=user_id, code_hash=digest):
+        if not await repository.recovery_code_use(session, code_hash=digest):
             await _mfa_failure(session, keys, user_id, ip, "mfa_failed")
             raise InvalidCode
         await session.commit()
@@ -209,12 +203,58 @@ async def verify_mfa(
     return await _start_session(session, user_id=user_id, amr=amr, otp_at=otp_at, ip=ip)
 
 
+def _grace_key(old_hash: bytes) -> str:
+    return f"rg:{old_hash.hex()}"
+
+
+async def _grace_store(old_hash: bytes, issued: IssuedSession) -> None:
+    """Выданная пара живёт в Redis на время окна: повтор запроса получит её же."""
+    payload = json.dumps(
+        {
+            "access_token": issued.access_token,
+            "expires_in": issued.expires_in,
+            "refresh_token": issued.refresh_token,
+            "refresh_max_age": issued.refresh_max_age,
+            "me": issued.me.model_dump(mode="json"),
+        }
+    )
+    ttl = get_settings().refresh_grace_seconds + 2
+    await get_redis().set(_grace_key(old_hash), payload, ex=ttl)
+
+
+async def _grace_load(old_hash: bytes) -> IssuedSession | None:
+    # Между COMMIT ротации и записью пары в Redis проходят миллисекунды: ждём недолго.
+    for _ in range(5):
+        raw = await get_redis().get(_grace_key(old_hash))
+        if raw is not None:
+            data = json.loads(raw)
+            return IssuedSession(
+                access_token=data["access_token"],
+                expires_in=data["expires_in"],
+                refresh_token=data["refresh_token"],
+                refresh_max_age=data["refresh_max_age"],
+                me=MeResponse.model_validate(data["me"]),
+            )
+        await asyncio.sleep(0.2)
+    return None
+
+
 async def refresh(session: AsyncSession, *, refresh_token: str) -> IssuedSession:
+    settings = get_settings()
+    old_hash = sha256(refresh_token)
     new_token = new_opaque_token()
     result = await repository.refresh_rotate(
-        session, old_hash=sha256(refresh_token), new_hash=sha256(new_token)
+        session,
+        old_hash=old_hash,
+        new_hash=sha256(new_token),
+        grace=timedelta(seconds=settings.refresh_grace_seconds),
     )
     await session.commit()
+    if result.status == "grace":
+        replay = await _grace_load(old_hash)
+        if replay is None:  # окно открыто, но пары нет: отказ без отзыва семьи
+            raise InvalidToken
+        return replay
     if result.family_id is not None and result.status != "ok":
         # Семья отозвана (или была отозвана раньше): access-токены этой сессии больше не годятся.
         await denylist.deny([result.family_id])
@@ -233,13 +273,15 @@ async def refresh(session: AsyncSession, *, refresh_token: str) -> IssuedSession
         if record.role_code in FIELD_ROLES
         else get_settings().refresh_ttl_days
     )
-    return IssuedSession(
+    issued = IssuedSession(
         access_token=access_token,
         expires_in=expires_in,
         refresh_token=new_token,
         refresh_max_age=days * 86400,
         me=me_response(record, amr=result.amr),
     )
+    await _grace_store(old_hash, issued)
+    return issued
 
 
 async def logout(
@@ -258,13 +300,19 @@ async def logout(
 
 
 async def start_mfa_setup(
-    session: AsyncSession, *, user_id: uuid.UUID, account: str
+    session: AsyncSession, *, user_id: uuid.UUID, account: str, password: str
 ) -> tuple[str, str]:
+    """Ключ выдаётся после проверки пароля: одного токена (даже украденного) для этого мало."""
+    key = limits.password_key(user_id)
+    if wait := await limits.blocked_for([key]):
+        raise RateLimited(wait)
+    if not await verify_password_async(await repository.password_hash(session), password):
+        await limits.record_failure([key])
+        raise InvalidCurrentPassword
+    await limits.reset(key)
     secret = totp.new_secret()
     blob, key_id = encrypt_totp_secret(secret, user_id=user_id)
-    if not await repository.totp_set_pending(
-        session, user_id=user_id, secret_enc=blob, key_id=key_id
-    ):
+    if not await repository.totp_set_pending(session, secret_enc=blob, key_id=key_id):
         raise MfaAlreadyEnabled
     await session.commit()
     return secret, totp.provisioning_uri(secret, account)
@@ -276,7 +324,7 @@ async def confirm_mfa(
     keys = [limits.mfa_key(user_id), limits.mfa_ip_key(ip)]
     if wait := await limits.blocked_for(keys):
         raise RateLimited(wait)
-    record = await repository.totp_get(session, user_id)
+    record = await repository.totp_get(session)
     if record is None or record.secret_enc is None or not record.key_id:
         raise MfaNotStarted
     if record.confirmed:
@@ -291,7 +339,7 @@ async def confirm_mfa(
         raise InvalidCode
     codes = totp.new_recovery_codes()
     hashes = [sha256(totp.normalize_recovery_code(item)) for item in codes]
-    if not await repository.totp_confirm(session, user_id=user_id, code_hashes=hashes):
+    if not await repository.totp_confirm(session, code_hashes=hashes):
         raise MfaAlreadyEnabled
     await session.commit()
     await limits.reset(limits.mfa_key(user_id))
@@ -312,7 +360,7 @@ async def change_password(
     key = limits.password_key(principal.user_id)
     if wait := await limits.blocked_for([key]):
         raise RateLimited(wait)
-    stored = await repository.password_hash(session, principal.user_id)
+    stored = await repository.password_hash(session)
     if not await verify_password_async(stored, current):
         await limits.record_failure([key])
         raise InvalidCurrentPassword
@@ -325,3 +373,19 @@ async def change_password(
     await session.commit()
     await limits.reset(key)
     await denylist.deny(families)
+
+
+async def activate_invite(session: AsyncSession, *, token: str, password: str, ip: str) -> None:
+    """Пароль по одноразовой ссылке администратора (новый пользователь или сброс пароля)."""
+    keys = [limits.activate_ip_key(ip)]
+    if wait := await limits.blocked_for(keys):
+        raise RateLimited(wait)
+    new_hash = await hash_password_async(password)  # одинаковая работа для верной и неверной ссылки
+    consumed = await repository.invite_consume(
+        session, token_hash=sha256(token), password_hash=new_hash
+    )
+    if consumed is None:
+        await limits.record_failure(keys)
+        raise InvalidToken
+    await session.commit()
+    await denylist.deny(consumed.families)

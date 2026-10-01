@@ -41,7 +41,14 @@ class MfaConfirmRequest(_Strict):
 
 
 class MfaSetupRequest(_Strict):
+    # Ключ выдаётся только после ввода текущего пароля: украденного токена для этого мало.
+    password: str = Field(min_length=1, max_length=256)
     mfa_token: str | None = Field(default=None, max_length=4096)
+
+
+class ActivateRequest(_Strict):
+    token: str = Field(min_length=20, max_length=200)
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
 
 
 class PasswordChangeRequest(_Strict):

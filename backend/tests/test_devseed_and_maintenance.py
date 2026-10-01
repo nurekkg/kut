@@ -65,7 +65,8 @@ def test_the_purge_task_removes_expired_rows_through_the_definer_function(
 
     counts = tasks.purge_auth_data()
 
-    assert counts["refresh_tokens"] >= 1 and set(counts) == {"refresh_tokens", "idempotency_keys"}
+    assert counts["refresh_tokens"] >= 1
+    assert set(counts) == {"refresh_tokens", "idempotency_keys", "user_invites"}
     with owner_sync_engine.begin() as connection:
         connection.execute(text("SET LOCAL ROLE kut_auth"))
         left = {
@@ -92,7 +93,7 @@ def test_the_partitions_task_creates_future_months_once(
 
 
 def test_a_second_seed_run_changes_nothing_and_never_overwrites_a_password(
-    auth_world: AuthWorld, worker_sync_engine: Engine
+    auth_world: AuthWorld, worker_sync_engine: Engine, owner_sync_engine: Engine
 ) -> None:
     def snapshot() -> tuple[int, int, int, str]:
         with worker_sync_engine.connect() as connection:
@@ -108,7 +109,9 @@ def test_a_second_seed_run_changes_nothing_and_never_overwrites_a_password(
             links = connection.execute(
                 text("SELECT count(*) FROM user_project_access")
             ).scalar_one()
-            hash_ = connection.execute(
+        with owner_sync_engine.begin() as auth:
+            auth.execute(text("SET LOCAL ROLE kut_auth"))
+            hash_ = auth.execute(
                 text("SELECT password_hash FROM \"user\" WHERE email = 'foreman@kut.test'")
             ).scalar_one()
         return users, projects, links, hash_

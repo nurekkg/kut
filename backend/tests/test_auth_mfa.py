@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.modules.auth.crypto import SecretDecryptionError, decrypt_totp_secret
 from tests.auth_support import (
     AUTH,
+    PASSWORD,
     TOTP_SECRET,
     AuthWorld,
     bearer,
@@ -49,7 +50,7 @@ async def enroll(client: AsyncClient, email: str) -> tuple[str, list[str], Respo
     first = (await login(client, email)).json()
     assert first["status"] == "mfa_enrollment_required"
     token = first["mfa_token"]
-    setup = await client.post(f"{AUTH}/mfa/setup", json={"mfa_token": token})
+    setup = await client.post(f"{AUTH}/mfa/setup", json={"mfa_token": token, "password": PASSWORD})
     secret = setup.json()["secret"]
     confirmed = await client.post(
         f"{AUTH}/mfa/confirm", json={"mfa_token": token, "code": totp_code(secret)}
@@ -135,7 +136,9 @@ async def test_mfa_tokens_are_bound_to_their_purpose(api: AsyncClient) -> None:
 
     as_bearer = await api.get(f"{AUTH}/me", headers=bearer(verify_token))
     access_as_mfa = await verify(api, access, code=totp_code(step_offset=1))
-    verify_as_enroll = await api.post(f"{AUTH}/mfa/setup", json={"mfa_token": verify_token})
+    verify_as_enroll = await api.post(
+        f"{AUTH}/mfa/setup", json={"mfa_token": verify_token, "password": PASSWORD}
+    )
 
     assert as_bearer.status_code == 401
     assert access_as_mfa.status_code == 401
@@ -167,7 +170,8 @@ async def test_an_unenrolled_accountant_cannot_get_a_session_without_setting_up_
     assert response.status_code == 200 and body["status"] == "mfa_enrollment_required"
     assert "access_token" not in body and "kut_refresh" not in response.cookies
     assert (await api.get(f"{AUTH}/me", headers=bearer(body["mfa_token"]))).status_code == 401
-    assert (await api.post(f"{AUTH}/mfa/setup", json={})).status_code == 401
+    no_token = await api.post(f"{AUTH}/mfa/setup", json={"password": PASSWORD})
+    assert no_token.status_code == 401
     enroll_as_verify = await verify(api, body["mfa_token"], code=totp_code())
     assert enroll_as_verify.status_code == 401
 
@@ -181,7 +185,7 @@ async def test_enrollment_issues_a_secret_ten_recovery_codes_and_the_first_sessi
     user_id, email = new_user("accountant")
     token = (await login(api, email)).json()["mfa_token"]
 
-    setup = await api.post(f"{AUTH}/mfa/setup", json={"mfa_token": token})
+    setup = await api.post(f"{AUTH}/mfa/setup", json={"mfa_token": token, "password": PASSWORD})
     secret = setup.json()["secret"]
     uri = setup.json()["otpauth_uri"]
     wrong = await api.post(f"{AUTH}/mfa/confirm", json={"mfa_token": token, "code": "000000"})
@@ -197,7 +201,8 @@ async def test_enrollment_issues_a_secret_ten_recovery_codes_and_the_first_sessi
     assert all(RECOVERY_CODE.match(code) for code in codes)
     assert body["session"]["status"] == "ok" and body["session"]["user"]["amr"] == ["pwd", "otp"]
     assert "kut_refresh" in confirmed.cookies
-    with worker_sync_engine.connect() as connection:
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         row = connection.execute(
             text(
                 'SELECT totp_secret_enc, totp_key_id, totp_confirmed_at FROM "user" WHERE id = :id'
@@ -227,7 +232,9 @@ async def test_once_enrolled_the_login_asks_for_a_code_and_setup_cannot_be_repea
 
     again = (await login(api, email)).json()
     done = await verify(api, again["mfa_token"], code=totp_code(secret, step_offset=1))
-    repeat_setup = await api.post(f"{AUTH}/mfa/setup", json={}, headers=bearer(session_access))
+    repeat_setup = await api.post(
+        f"{AUTH}/mfa/setup", json={"password": PASSWORD}, headers=bearer(session_access)
+    )
 
     assert again["status"] == "mfa_required"
     assert done.status_code == 200 and done.json()["user"]["amr"] == ["pwd", "otp"]
@@ -289,7 +296,7 @@ async def test_a_foreman_can_enable_2fa_voluntarily_and_then_must_use_it(
     _, email = new_user("foreman")
     access = (await login(api, email)).json()["access_token"]
 
-    setup = await api.post(f"{AUTH}/mfa/setup", json={}, headers=bearer(access))
+    setup = await api.post(f"{AUTH}/mfa/setup", json={"password": PASSWORD}, headers=bearer(access))
     confirmed = await api.post(
         f"{AUTH}/mfa/confirm",
         json={"code": totp_code(setup.json()["secret"])},
@@ -303,9 +310,10 @@ async def test_a_foreman_can_enable_2fa_voluntarily_and_then_must_use_it(
 
 
 async def test_the_seeded_totp_secret_is_encrypted_with_the_user_bound_key(
-    auth_world: AuthWorld, worker_sync_engine: Engine
+    auth_world: AuthWorld, owner_sync_engine: Engine
 ) -> None:
-    with worker_sync_engine.connect() as connection:
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         rows: dict[str, Any] = {
             row.email.split("@")[0]: row
             for row in connection.execute(
@@ -325,3 +333,57 @@ async def test_the_seeded_totp_secret_is_encrypted_with_the_user_bound_key(
             bytes(owner.totp_secret_enc), owner.totp_key_id, user_id=auth_world.users["finance"]
         )
     assert TOTP_SECRET.encode() not in bytes(owner.totp_secret_enc)
+
+
+async def secret_stored(engine: Engine, user_id: UUID) -> bool:
+    with engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
+        value = connection.execute(
+            text('SELECT totp_secret_enc FROM "user" WHERE id = :id'), {"id": user_id}
+        ).scalar_one()
+    return value is not None
+
+
+async def test_setup_needs_the_current_password_on_both_paths(
+    api: AsyncClient,
+    new_user: Callable[..., tuple[UUID, str]],
+    owner_sync_engine: Engine,
+) -> None:
+    accountant, accountant_email = new_user("accountant")
+    foreman, foreman_email = new_user("foreman")
+    enroll_token = (await login(api, accountant_email)).json()["mfa_token"]
+    access = (await login(api, foreman_email)).json()["access_token"]
+
+    no_password = await api.post(f"{AUTH}/mfa/setup", json={"mfa_token": enroll_token})
+    wrong_enroll = await api.post(
+        f"{AUTH}/mfa/setup", json={"mfa_token": enroll_token, "password": "not-the-password"}
+    )
+    wrong_access = await api.post(
+        f"{AUTH}/mfa/setup", json={"password": "not-the-password"}, headers=bearer(access)
+    )
+
+    assert no_password.status_code == 422
+    assert (wrong_enroll.status_code, wrong_access.status_code) == (401, 401)
+    assert wrong_enroll.json() == wrong_access.json() == {"detail": "invalid_password"}
+    assert not await secret_stored(owner_sync_engine, accountant)
+    assert not await secret_stored(owner_sync_engine, foreman)  # украденный токен ключа не даёт
+    right = await api.post(f"{AUTH}/mfa/setup", json={"password": PASSWORD}, headers=bearer(access))
+    assert right.status_code == 200 and await secret_stored(owner_sync_engine, foreman)
+
+
+async def test_guessing_the_password_through_setup_is_rate_limited(
+    api: AsyncClient, new_user: Callable[..., tuple[UUID, str]]
+) -> None:
+    _, email = new_user("foreman")
+    access = (await login(api, email)).json()["access_token"]
+
+    codes = []
+    for _ in range(6):
+        response = await api.post(
+            f"{AUTH}/mfa/setup", json={"password": "guess-guess-guess"}, headers=bearer(access)
+        )
+        codes.append(response.status_code)
+    right = await api.post(f"{AUTH}/mfa/setup", json={"password": PASSWORD}, headers=bearer(access))
+
+    assert codes == [401, 401, 401, 401, 401, 429]
+    assert right.status_code == 429  # после пятой неудачи блокировка и для верного пароля

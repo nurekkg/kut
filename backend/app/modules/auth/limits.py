@@ -27,6 +27,10 @@ def password_key(user_id: uuid.UUID) -> str:
     return f"rl:pwd:{user_id}"
 
 
+def activate_ip_key(ip: str) -> str:
+    return f"rl:act-ip:{ip}"
+
+
 async def blocked_for(keys: Sequence[str]) -> int:
     """Сколько секунд осталось блокировки (0, если можно пробовать).
 

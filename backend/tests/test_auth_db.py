@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import Engine, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.context import use_context
@@ -48,6 +49,11 @@ EXECUTE_GRANTS: dict[str, set[str]] = {
     "assign_role": {"kut_app"},
     "set_user_active": {"kut_app"},
     "purge_expired_auth_data": {"kut_worker"},
+    "admin_create_user": {"kut_app"},
+    "admin_issue_invite": {"kut_app"},
+    "invite_consume": {"kut_app"},
+    "admin_reset_totp": {"kut_app"},
+    "admin_auth_events": {"kut_app"},
 }
 
 
@@ -83,7 +89,7 @@ async def test_no_application_login_can_become_kut_auth_and_the_owner_only_via_s
         assert row[0] is False, login
 
 
-@pytest.mark.parametrize("table", ["refresh_token", "recovery_code"])
+@pytest.mark.parametrize("table", ["refresh_token", "recovery_code", "user_invite"])
 async def test_session_tables_are_closed_to_every_login_and_to_the_owner_under_force_rls(
     owner_engine: AsyncEngine, owner_sync_engine: Engine, new_user: Callable[..., Any], table: str
 ) -> None:
@@ -109,6 +115,10 @@ async def test_session_tables_are_closed_to_every_login_and_to_the_owner_under_f
             " VALUES (:u, gen_random_uuid(), :h, '{pwd}', now() + interval '1 day')"
         ),
         "recovery_code": ("INSERT INTO recovery_code (user_id, code_hash) VALUES (:u, :h)"),
+        "user_invite": (
+            "INSERT INTO user_invite (user_id, token_hash, expires_at)"
+            " VALUES (:u, :h, now() + interval '1 day')"
+        ),
     }[table]
     with owner_sync_engine.begin() as connection:
         connection.execute(text("SET LOCAL ROLE kut_auth"))
@@ -310,3 +320,54 @@ async def test_auth_context_expands_scope_into_projects_and_permissions(
         not item.endswith(":write") for item in sub_a.o_permissions
     )  # внешние: только чтение
     assert await call(None, "SELECT * FROM app.auth_context(:u)", u=uuid4()) == []
+
+
+# --- kut_worker: секреты только на запись ---
+
+
+async def test_the_worker_login_reads_no_secret_columns_but_can_still_write_them(
+    owner_engine: AsyncEngine,
+) -> None:
+    """Сид и фоновые задачи пишут хэш и секрет TOTP, но читать их воркеру не нужно."""
+    for column in await user_columns(owner_engine):
+        (row,) = await owner_rows(
+            owner_engine,
+            "SELECT has_column_privilege('kut_worker', 'public.\"user\"', :c, 'SELECT'),"
+            " has_column_privilege('kut_worker', 'public.\"user\"', :c, 'UPDATE')",
+            c=column,
+        )
+        assert row[0] is (column in USER_READABLE), column
+        assert row[1] is True, column  # запись не отзывалась
+    (table_level,) = await owner_rows(
+        owner_engine, "SELECT has_table_privilege('kut_worker', 'public.\"user\"', 'SELECT')"
+    )
+    assert table_level[0] is False  # табличного SELECT нет: новая колонка по умолчанию закрыта
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        'SELECT password_hash FROM "user"',
+        'SELECT totp_secret_enc FROM "user"',
+        'SELECT totp_key_id FROM "user"',
+        'SELECT * FROM "user"',
+        'SELECT count(*) FROM "user" WHERE password_hash IS NOT NULL',
+    ],
+)
+async def test_the_worker_is_refused_the_secrets_in_sql(
+    worker_engine: AsyncEngine, statement: str
+) -> None:
+    async with worker_engine.connect() as connection:
+        with pytest.raises(DBAPIError) as info:
+            await connection.execute(text(statement))
+    assert getattr(info.value.orig, "sqlstate", None) == INSUFFICIENT_PRIVILEGE
+
+
+async def test_the_worker_still_reads_the_non_secret_user_columns(
+    worker_engine: AsyncEngine,
+) -> None:
+    rows = await owner_rows(
+        worker_engine, 'SELECT id, email, role_id, is_active FROM "user" LIMIT 1'
+    )
+
+    assert len(rows) == 1
