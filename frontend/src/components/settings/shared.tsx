@@ -21,16 +21,22 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ApiError } from "@/lib/auth/api";
+import { OBJECTS_ERRORS } from "@/lib/projects/types";
 import { KNOWN_ERRORS } from "@/lib/settings/types";
 
 const KNOWN = new Set<string>(KNOWN_ERRORS);
+const OBJECTS_KNOWN = new Set<string>(OBJECTS_ERRORS);
 type KnownError = (typeof KNOWN_ERRORS)[number];
+type ObjectsError = (typeof OBJECTS_ERRORS)[number];
 
-// Текст ошибки API для пользователя: код из ответа, а не сообщение сервера.
+// Текст ошибки API для пользователя: код из ответа, а не сообщение сервера. Общие коды (нет прав,
+// неверные данные, повтор запроса) берутся из настроек, правила объектов и дерева - из своего раздела.
 export function useErrorMessage(): (error: unknown) => string {
   const t = useTranslations("Settings.errors");
+  const objects = useTranslations("ObjectsErrors");
   return (error) => {
     if (!(error instanceof ApiError)) return t("network");
+    if (OBJECTS_KNOWN.has(error.code)) return objects(error.code as ObjectsError);
     return KNOWN.has(error.code) ? t(error.code as KnownError) : t("unknown");
   };
 }
