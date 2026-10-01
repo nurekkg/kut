@@ -1,0 +1,171 @@
+# Роли и матрица прав (ТЗ §7.3, ADR-001 §3). Источник истины для сида: PO подписывает этот файл.
+# Загрузка идемпотентна: `python -m app.modules.rbac.seed` (её запускает сервис migrate после alembic).
+#
+# Ячейки матрицы записаны ровно так, как в ТЗ §7.3:
+#   R      read              R/W    read + write              —    нет доступа
+#   «(свой)» — ограничение «только свои объекты / свой контрагент». Это свойство области видимости
+#   (user_project_access, counterparty_id, RLS), а не права, поэтому в role_permission не попадает.
+# Остальные глаголы ТЗ (approve, delete, export, admin) матрицей §7.3 не заданы и никому не выданы,
+# кроме явных записей в разделе extra.
+
+version: 1
+
+# scope: group — все объекты группы; project — объекты из user_project_access;
+#        counterparty — данные своего контрагента (внешние роли, только чтение).
+# rank — для маршрутов согласования (владелец > финдир / техдир > руководители отделов > исполнители).
+# ДОПУЩЕНИЯ, НУЖНА ПРОВЕРКА PO: scope техдиректора (ADR называет group только владельца и финдира);
+# разбиение остальных внутренних ролей на «руководителей отделов» (50) и «исполнителей» (30).
+roles:
+  - {code: owner, name: "Владелец / руководитель", scope: group, rank: 100, requires_2fa: true}
+  - {code: finance_director, name: "Финансовый директор", scope: group, rank: 90, requires_2fa: true}
+  - {code: technical_director, name: "Технический директор / гл. инженер", scope: project, rank: 90}
+  - {code: foreman, name: "Прораб", scope: project, rank: 50}
+  - {code: master, name: "Мастер", scope: project, rank: 30}
+  - {code: estimator, name: "Сметчик / ПТО", scope: project, rank: 50}
+  - {code: procurement, name: "Снабженец", scope: project, rank: 50}
+  - {code: storekeeper, name: "Кладовщик", scope: project, rank: 30}
+  - {code: accountant, name: "Бухгалтер", scope: project, rank: 50, requires_2fa: true}
+  - {code: lawyer, name: "Юрист", scope: project, rank: 50}
+  - {code: customer, name: "Представитель заказчика / инвестора", scope: counterparty, rank: 0}
+  - {code: subcontractor, name: "Субподрядчик", scope: counterparty, rank: 0}
+  - {code: supplier, name: "Поставщик", scope: counterparty, rank: 0}
+
+# Таблица ТЗ §7.3: модуль -> роль -> ячейка.
+matrix:
+  objects:
+    owner: "R/W"
+    finance_director: "R"
+    technical_director: "R/W"
+    foreman: "R/W (свой)"
+    master: "R (свой)"
+    estimator: "R"
+    procurement: "R"
+    storekeeper: "R"
+    accountant: "R"
+    lawyer: "R"
+    customer: "R (свой)"
+    subcontractor: "R (свой)"
+    supplier: "—"
+  gpr:
+    owner: "R"
+    finance_director: "R"
+    technical_director: "R/W"
+    foreman: "R/W"
+    master: "R"
+    estimator: "R/W"
+    procurement: "—"
+    storekeeper: "—"
+    accountant: "—"
+    lawyer: "—"
+    customer: "R"
+    subcontractor: "R (свой)"
+    supplier: "—"
+  work_actual:
+    owner: "R"
+    finance_director: "—"
+    technical_director: "R"
+    foreman: "R/W"
+    master: "R/W"
+    estimator: "R"
+    procurement: "—"
+    storekeeper: "—"
+    accountant: "—"
+    lawyer: "—"
+    customer: "R"
+    subcontractor: "R (свой)"
+    supplier: "—"
+  documents:
+    owner: "R"
+    finance_director: "R"
+    technical_director: "R/W"
+    foreman: "R/W"
+    master: "R"
+    estimator: "R/W"
+    procurement: "R/W"
+    storekeeper: "R"
+    accountant: "R/W"
+    lawyer: "R/W"
+    customer: "R"
+    subcontractor: "R (свой)"
+    supplier: "R (свой)"
+  materials:
+    owner: "R"
+    finance_director: "R"
+    technical_director: "R"
+    foreman: "R/W"
+    master: "R/W"
+    estimator: "R"
+    procurement: "R/W"
+    storekeeper: "R/W"
+    accountant: "R"
+    lawyer: "—"
+    customer: "—"
+    subcontractor: "—"
+    supplier: "—"
+  procurement:
+    owner: "R"
+    finance_director: "R"
+    technical_director: "R"
+    foreman: "R/W"
+    master: "R/W"
+    estimator: "—"
+    procurement: "R/W"
+    storekeeper: "R"
+    accountant: "R"
+    lawyer: "—"
+    customer: "—"
+    subcontractor: "—"
+    supplier: "R (свой)"
+  subcontract:
+    owner: "R"
+    finance_director: "R"
+    technical_director: "R/W"
+    foreman: "R/W"
+    master: "—"
+    estimator: "R/W"
+    procurement: "—"
+    storekeeper: "—"
+    accountant: "R"
+    lawyer: "R"
+    customer: "—"
+    subcontractor: "R (свой)"
+    supplier: "—"
+  finance:
+    owner: "R"
+    finance_director: "R/W"
+    technical_director: "R"
+    foreman: "R"
+    master: "—"
+    estimator: "—"
+    procurement: "R"
+    storekeeper: "—"
+    accountant: "R/W"
+    lawyer: "R"
+    customer: "—"
+    subcontractor: "—"
+    supplier: "R (свой)"
+  reports:
+    owner: "R"
+    finance_director: "R"
+    technical_director: "R"
+    foreman: "R"
+    master: "R"
+    estimator: "R"
+    procurement: "R"
+    storekeeper: "R"
+    accountant: "R"
+    lawyer: "R"
+    customer: "R"
+    subcontractor: "R (свой)"
+    supplier: "R (свой)"
+
+# Права вне матрицы §7.3, формат «модуль:действие[:уточнение]».
+extra:
+  # Решение PO по ADR-001 §7, вопрос 7: правка согласованного факта и превышение лимита ЛЗК —
+  # техдиректор. Лимитов сумм на согласование платежей в MVP нет.
+  - {role: technical_director, permission: "work_actual:write:after_approval"}
+  - {role: technical_director, permission: "materials:approve:limit_override"}
+  # ДОПУЩЕНИЕ, НУЖНА ПРОВЕРКА PO: модуль settings в §7.3 отсутствует; управлять им может только владелец.
+  - {role: owner, permission: "settings:read"}
+  - {role: owner, permission: "settings:write"}
+  - {role: owner, permission: "settings:admin"}
