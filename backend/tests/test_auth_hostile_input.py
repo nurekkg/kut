@@ -17,7 +17,7 @@ REFRESH_COOKIE = "kut_refresh"
         ("/login", {"identifier": 12345, "password": "x"}),
         ("/login", {"identifier": ["a@b.c"], "password": "x"}),
         ("/login", {"identifier": "a@b.c", "password": "x\x00y"}),
-        ("/login", {"identifier": "😀@kut.test", "password": "‮"}),
+        ("/login", {"identifier": "😀@kut.test", "password": chr(0x202E)}),
         ("/login", {"identifier": "a@b.c"}),
         ("/login", []),
         ("/mfa/verify", {"mfa_token": "\x00" * 20, "code": "123456"}),
