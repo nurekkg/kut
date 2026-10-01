@@ -366,6 +366,25 @@ async def test_credential_functions_only_ever_touch_the_user_of_the_context(
     assert {row.id: row.totp_key_id for row in stored} == {alice: "ka", bob: "kb"}
 
 
+async def test_the_password_hash_function_returns_the_hash_of_the_context_user_only(
+    new_user: NewUser, worker_sync_engine: Engine
+) -> None:
+    alice, _ = new_user("accountant")
+    bob, _ = new_user("accountant")
+    hashes = {alice: ARGON_SAMPLE + "-alice", bob: ARGON_SAMPLE + "-bob"}
+    with worker_sync_engine.begin() as connection:
+        for user_id, value in hashes.items():
+            connection.execute(
+                text('UPDATE "user" SET password_hash = :h WHERE id = :i'),
+                {"h": value, "i": user_id},
+            )
+
+    alices = await call(context(alice), "SELECT app.auth_password_hash()")
+    bobs = await call(context(bob), "SELECT app.auth_password_hash()")
+
+    assert (alices[0][0], bobs[0][0]) == (hashes[alice], hashes[bob])
+
+
 async def test_the_old_credential_signatures_with_a_user_parameter_are_gone(
     owner_engine: AsyncEngine,
 ) -> None:
