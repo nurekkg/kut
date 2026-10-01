@@ -1,0 +1,59 @@
+"use client";
+
+import { LogOut, Settings } from "lucide-react";
+import { useTranslations } from "next-intl";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+import { useAuth } from "@/components/auth/auth-provider";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { isRole } from "@/lib/roles";
+
+export function UserMenu() {
+  const t = useTranslations("Auth");
+  const roles = useTranslations("Roles");
+  const settings = useTranslations("Settings");
+  const { user, signOut } = useAuth();
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+
+  if (!user) return null;
+
+  async function logout() {
+    setPending(true);
+    try {
+      await signOut();
+    } finally {
+      router.replace("/login");
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium" data-testid="user-name">
+          {user.full_name}
+        </p>
+        <p className="truncate text-sm text-muted-foreground" data-testid="user-role">
+          {isRole(user.role) ? roles(user.role) : user.role}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {user.permissions.includes("settings:admin") ? (
+          <Link
+            href="/settings/legal-entities"
+            className={buttonVariants({ variant: "outline", size: "lg", className: "h-10" })}
+          >
+            <Settings data-icon="inline-start" aria-hidden />
+            {settings("title")}
+          </Link>
+        ) : null}
+        <Button variant="outline" size="lg" className="h-10" onClick={() => void logout()} disabled={pending}>
+          <LogOut data-icon="inline-start" aria-hidden />
+          {t("logout")}
+        </Button>
+      </div>
+    </div>
+  );
+}

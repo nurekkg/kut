@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main, phase-0, phase-1]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: kut
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      UV_FROZEN: "1"
+      APP_ENV: test
+      # Одноразовые учётки job-а (контейнер postgres живёт только на время прогона). Суперпользователь
+      # postgres нужен лишь шагу bootstrap; приложение и тесты работают под ролями kut_*.
+      KUT_OWNER_PASSWORD: ci_owner_password
+      KUT_APP_PASSWORD: ci_app_password
+      KUT_PORTAL_PASSWORD: ci_portal_password
+      KUT_WORKER_PASSWORD: ci_worker_password
+      DATABASE_URL: postgresql+psycopg://kut_app:ci_app_password@localhost:5432/kut_test
+      DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:ci_portal_password@localhost:5432/kut_test
+      TEST_DATABASE_OWNER_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut_test
+      TEST_DATABASE_WORKER_URL: postgresql+psycopg://kut_worker:ci_worker_password@localhost:5432/kut_test
+      # Одноразовые ключи job-а (kid без префикса «dev»): подпись JWT и шифрование секретов TOTP.
+      JWT_PRIVATE_KEYS: ci-1:Vq3N1kQ0y1m4GmQe4Cj0Hj0oQ7yq8t5cVx2sB9pRz1Y
+      JWT_ACTIVE_KID: ci-1
+      TOTP_ENCRYPTION_KEYS: ci-1:Zm9yLWNpLW9ubHktbm90LWEtcmVhbC1rZXktMDAwMDA
+      TOTP_ACTIVE_KEY_ID: ci-1
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      CELERY_RESULT_BACKEND: redis://localhost:6379/2
+      S3_ENDPOINT_URL: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: kut-files
+      S3_ACCESS_KEY: ci_access_key
+      S3_SECRET_KEY: ci_secret_key
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.21"
+          python-version: "3.12"
+          working-directory: backend
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        run: uv sync
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: Mypy
+        run: uv run mypy app
+      - name: Start MinIO and create bucket
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER="$S3_ACCESS_KEY" -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 server /data
+          for _ in $(seq 1 30); do
+            curl -fsS http://localhost:9000/minio/health/live && break
+            sleep 1
+          done
+          docker exec minio mc alias set local http://localhost:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+          docker exec minio mc mb --ignore-existing "local/$S3_BUCKET"
+      - name: Bootstrap database roles
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: kut
+          KUT_BOOTSTRAP_TEST_DB: "1"
+        run: psql -X -q -v ON_ERROR_STOP=1 -f ../db/bootstrap.sql
+      - name: Pytest
+        run: uv run pytest -q
+      - name: Alembic upgrade, downgrade, upgrade, seeds
+        env:
+          DATABASE_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+          uv run python -m app.modules.rbac.seed
+      - name: Alembic check (models match migrations)
+        env:
+          DATABASE_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut
+        run: uv run alembic check
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build

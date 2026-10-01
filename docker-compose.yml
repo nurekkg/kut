@@ -1,0 +1,277 @@
+name: kut
+
+x-backend-build: &backend-build
+  context: ./backend
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-development}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET: ${S3_BUCKET:-kut-files}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kut_dev_access}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-kut_dev_secret_key}
+
+# Ключи подписи JWT и шифрования TOTP: плейсхолдеры для разработки (префикс kid «dev» запрещён при
+# APP_ENV=production). Воркеру, beat и migrate ключи не выдаются.
+x-auth-env: &auth-env
+  JWT_PRIVATE_KEYS: ${JWT_PRIVATE_KEYS:-dev-1:GLp4ipa8ygJMpz5w-usHPDsFMC-QZyMJLNMKBU33drQ}
+  JWT_ACTIVE_KID: ${JWT_ACTIVE_KID:-dev-1}
+  TOTP_ENCRYPTION_KEYS: ${TOTP_ENCRYPTION_KEYS:-dev-1:J4WKMm-ZdEWech8b3xRh2jNaRBI8NTBQQE46PaqMRGc}
+  TOTP_ACTIVE_KEY_ID: ${TOTP_ACTIVE_KEY_ID:-dev-1}
+
+x-backend-volumes: &backend-volumes
+  - ./backend/app:/app/app
+  - ./backend/tests:/app/tests
+  - ./backend/migrations:/app/migrations
+  - ./backend/seeds:/app/seeds
+
+x-minio-image: &minio-image pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kut}
+      POSTGRES_USER: ${POSTGRES_USER:-kut}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kut_dev_password}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  minio:
+    image: *minio-image
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-kut_dev_access}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-kut_dev_secret_key}
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  minio-init:
+    image: *minio-image
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kut_dev_access}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-kut_dev_secret_key}
+      S3_BUCKET: ${S3_BUCKET:-kut-files}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" && mc mb --ignore-existing "local/$$S3_BUCKET"
+    restart: "no"
+
+  db-bootstrap:
+    image: postgres:16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-kut}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-kut_dev_password}
+      PGDATABASE: ${POSTGRES_DB:-kut}
+      APP_ENV: ${APP_ENV:-development}
+      KUT_OWNER_PASSWORD: ${KUT_OWNER_PASSWORD:-kut_owner_dev_password}
+      KUT_APP_PASSWORD: ${KUT_APP_PASSWORD:-kut_app_dev_password}
+      KUT_PORTAL_PASSWORD: ${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}
+      KUT_WORKER_PASSWORD: ${KUT_WORKER_PASSWORD:-kut_worker_dev_password}
+      KUT_BOOTSTRAP_TEST_DB: ${KUT_BOOTSTRAP_TEST_DB:-1}
+    volumes:
+      - ./db/bootstrap.sql:/bootstrap/bootstrap.sql:ro
+    command: ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "/bootstrap/bootstrap.sql"]
+    restart: "no"
+
+  migrate:
+    build: *backend-build
+    image: kut-backend:dev
+    command: ["sh", "-c", "alembic upgrade head && python -m app.modules.rbac.seed"]
+    environment:
+      <<: *backend-env
+      DATABASE_URL: postgresql+psycopg://kut_owner:${KUT_OWNER_PASSWORD:-kut_owner_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    build: *backend-build
+    image: kut-backend:dev
+    command:
+      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+    environment:
+      <<: [*backend-env, *auth-env]
+      DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      WATCHFILES_FORCE_POLLING: "true"
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  worker:
+    build: *backend-build
+    image: kut-backend:dev
+    command: ["celery", "-A", "app.core.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    environment:
+      <<: *backend-env
+      DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+    volumes: *backend-volumes
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        ["CMD-SHELL", "celery -A app.core.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # Периодические задачи обслуживания (очистка токенов и ключей идемпотентности, партиции audit_log).
+  # Только ставит задачи в очередь; выполняет их worker.
+  beat:
+    build: *backend-build
+    image: kut-backend:dev
+    command:
+      ["celery", "-A", "app.core.celery_app:celery_app", "beat", "--loglevel=INFO", "-s", "/tmp/celerybeat-schedule"]
+    environment:
+      <<: *backend-env
+      MAINTENANCE_PURGE_SECONDS: ${MAINTENANCE_PURGE_SECONDS:-3600}
+      MAINTENANCE_PARTITIONS_SECONDS: ${MAINTENANCE_PARTITIONS_SECONDS:-86400}
+      DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+    volumes: *backend-volumes
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Демо-пользователи, объекты и контрагенты (идемпотентно). Только APP_ENV=development: в остальных
+  # окружениях сервис ничего не делает. Пароль и секрет TOTP берутся из DEV_SEED_* (см. .env.example).
+  dev-seed:
+    build: *backend-build
+    image: kut-backend:dev
+    command:
+      - sh
+      - -c
+      - 'if [ "$$APP_ENV" = development ]; then python -m app.modules.auth.devseed; else echo "dev seed skipped: APP_ENV is $$APP_ENV"; fi'
+    environment:
+      <<: *backend-env
+      DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      TOTP_ENCRYPTION_KEYS: ${TOTP_ENCRYPTION_KEYS:-dev-1:J4WKMm-ZdEWech8b3xRh2jNaRBI8NTBQQE46PaqMRGc}
+      TOTP_ACTIVE_KEY_ID: ${TOTP_ACTIVE_KEY_ID:-dev-1}
+      DEV_SEED_PASSWORD: ${DEV_SEED_PASSWORD:-dev_password_change_me}
+      DEV_SEED_TOTP_SECRET: ${DEV_SEED_TOTP_SECRET:-JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP}
+    volumes: *backend-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # Тесты: `docker compose run --rm test pytest -q`. Нужны учётки всех ролей и тестовая БД (<POSTGRES_DB>_test),
+  # которую создаёт db-bootstrap; в сервисе api этих учёток нет, как и в боевом окружении.
+  test:
+    build: *backend-build
+    image: kut-backend:dev
+    profiles: ["test"]
+    command: ["pytest", "-q"]
+    environment:
+      <<: [*backend-env, *auth-env]
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+      DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+      REDIS_URL: redis://redis:6379/15  # отдельная БД Redis: тесты сбрасывают её целиком
+      TEST_DATABASE_OWNER_URL: postgresql+psycopg://kut_owner:${KUT_OWNER_PASSWORD:-kut_owner_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+      TEST_DATABASE_WORKER_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+    volumes: *backend-volumes
+    depends_on:
+      db-bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  web:
+    build:
+      context: ./frontend
+    image: kut-frontend:dev
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3100}:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/messages:/app/messages
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
