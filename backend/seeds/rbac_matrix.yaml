@@ -13,12 +13,13 @@ version: 1
 # scope: group — все объекты группы; project — объекты из user_project_access;
 #        counterparty — данные своего контрагента (внешние роли, только чтение).
 # rank — для маршрутов согласования (владелец > финдир / техдир > руководители отделов > исполнители).
-# ДОПУЩЕНИЯ, НУЖНА ПРОВЕРКА PO: scope техдиректора (ADR называет group только владельца и финдира);
-# разбиение остальных внутренних ролей на «руководителей отделов» (50) и «исполнителей» (30).
+# Решение PO после S1a: техдиректор — scope=group (все объекты, как владелец и финдир).
+# ДОПУЩЕНИЕ, НУЖНА ПРОВЕРКА PO: разбиение остальных внутренних ролей на «руководителей отделов» (50)
+# и «исполнителей» (30).
 roles:
   - {code: owner, name: "Владелец / руководитель", scope: group, rank: 100, requires_2fa: true}
   - {code: finance_director, name: "Финансовый директор", scope: group, rank: 90, requires_2fa: true}
-  - {code: technical_director, name: "Технический директор / гл. инженер", scope: project, rank: 90}
+  - {code: technical_director, name: "Технический директор / гл. инженер", scope: group, rank: 90}
   - {code: foreman, name: "Прораб", scope: project, rank: 50}
   - {code: master, name: "Мастер", scope: project, rank: 30}
   - {code: estimator, name: "Сметчик / ПТО", scope: project, rank: 50}

@@ -15,6 +15,9 @@ dependencies = [
     "redis>=5",
     "boto3>=1.43",
     "pyyaml>=6.0",
+    "argon2-cffi>=25.1",
+    "pyjwt[crypto]>=2.10",
+    "pyotp>=2.9",
 ]
 
 [dependency-groups]
@@ -43,8 +46,10 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
-"migrations/**" = ["S608"]  # DDL собирается только из констант модуля
-"migrations/versions/*" = ["F401"]
+# DDL собирается только из констант модуля; длинные строки внутри SQL не переносим.
+"migrations/**" = ["S608", "E501"]
+# S105: константы с SQL-функциями называются по сути (AUTH_PASSWORD_HASH), это не пароли.
+"migrations/versions/*" = ["F401", "S105"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends"]

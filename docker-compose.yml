@@ -14,6 +14,14 @@ x-backend-env: &backend-env
   S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kut_dev_access}
   S3_SECRET_KEY: ${S3_SECRET_KEY:-kut_dev_secret_key}
 
+# Ключи подписи JWT и шифрования TOTP: плейсхолдеры для разработки (префикс kid «dev» запрещён при
+# APP_ENV=production). Воркеру, beat и migrate ключи не выдаются.
+x-auth-env: &auth-env
+  JWT_PRIVATE_KEYS: ${JWT_PRIVATE_KEYS:-dev-1:GLp4ipa8ygJMpz5w-usHPDsFMC-QZyMJLNMKBU33drQ}
+  JWT_ACTIVE_KID: ${JWT_ACTIVE_KID:-dev-1}
+  TOTP_ENCRYPTION_KEYS: ${TOTP_ENCRYPTION_KEYS:-dev-1:J4WKMm-ZdEWech8b3xRh2jNaRBI8NTBQQE46PaqMRGc}
+  TOTP_ACTIVE_KEY_ID: ${TOTP_ACTIVE_KEY_ID:-dev-1}
+
 x-backend-volumes: &backend-volumes
   - ./backend/app:/app/app
   - ./backend/tests:/app/tests
@@ -124,9 +132,10 @@ services:
     command:
       ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
     environment:
-      <<: *backend-env
+      <<: [*backend-env, *auth-env]
       DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
       DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      TRUST_FORWARDED_FOR: ${TRUST_FORWARDED_FOR:-true}
       WATCHFILES_FORCE_POLLING: "true"
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
@@ -171,6 +180,47 @@ services:
       retries: 5
       start_period: 20s
 
+  # Периодические задачи обслуживания (очистка токенов и ключей идемпотентности, партиции audit_log).
+  # Только ставит задачи в очередь; выполняет их worker.
+  beat:
+    build: *backend-build
+    image: kut-backend:dev
+    command:
+      ["celery", "-A", "app.core.celery_app:celery_app", "beat", "--loglevel=INFO", "-s", "/tmp/celerybeat-schedule"]
+    environment:
+      <<: *backend-env
+      MAINTENANCE_PURGE_SECONDS: ${MAINTENANCE_PURGE_SECONDS:-3600}
+      MAINTENANCE_PARTITIONS_SECONDS: ${MAINTENANCE_PARTITIONS_SECONDS:-86400}
+      DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+    volumes: *backend-volumes
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Демо-пользователи, объекты и контрагенты (идемпотентно). Только APP_ENV=development: в остальных
+  # окружениях сервис ничего не делает. Пароль и секрет TOTP берутся из DEV_SEED_* (см. .env.example).
+  dev-seed:
+    build: *backend-build
+    image: kut-backend:dev
+    command:
+      - sh
+      - -c
+      - 'if [ "$$APP_ENV" = development ]; then python -m app.modules.auth.devseed; else echo "dev seed skipped: APP_ENV is $$APP_ENV"; fi'
+    environment:
+      <<: *backend-env
+      DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      TOTP_ENCRYPTION_KEYS: ${TOTP_ENCRYPTION_KEYS:-dev-1:J4WKMm-ZdEWech8b3xRh2jNaRBI8NTBQQE46PaqMRGc}
+      TOTP_ACTIVE_KEY_ID: ${TOTP_ACTIVE_KEY_ID:-dev-1}
+      DEV_SEED_PASSWORD: ${DEV_SEED_PASSWORD:-dev_password_change_me}
+      DEV_SEED_TOTP_SECRET: ${DEV_SEED_TOTP_SECRET:-JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP}
+    volumes: *backend-volumes
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   # Тесты: `docker compose run --rm test pytest -q`. Нужны учётки всех ролей и тестовая БД (<POSTGRES_DB>_test),
   # которую создаёт db-bootstrap; в сервисе api этих учёток нет, как и в боевом окружении.
   test:
@@ -179,10 +229,11 @@ services:
     profiles: ["test"]
     command: ["pytest", "-q"]
     environment:
-      <<: *backend-env
+      <<: [*backend-env, *auth-env]
       APP_ENV: test
       DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
       DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
+      REDIS_URL: redis://redis:6379/15  # отдельная БД Redis: тесты сбрасывают её целиком
       TEST_DATABASE_OWNER_URL: postgresql+psycopg://kut_owner:${KUT_OWNER_PASSWORD:-kut_owner_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
       TEST_DATABASE_WORKER_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
     volumes: *backend-volumes

@@ -1,7 +1,7 @@
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -14,8 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 
 from app.core.config import get_settings
 from app.core.db import dispose_engine
+from app.core.redis import get_redis
 from app.main import create_app
+from app.modules.auth import devseed
+from app.modules.auth.security import hash_password
 from app.modules.rbac.seed import load_spec, sync_rbac
+from tests import support_routes as test_routes
+from tests.auth_support import PASSWORD, TOTP_SECRET, AuthWorld
 from tests.models import ScratchBase
 from tests.support import World
 
@@ -198,10 +203,116 @@ async def session(test_database: None, owner_engine: AsyncEngine) -> AsyncIterat
 
 @pytest.fixture
 def app(test_database: None) -> FastAPI:
-    return create_app()
+    application = create_app()
+    application.include_router(test_routes.router)  # только тестовое приложение
+    return application
 
 
 @pytest.fixture
 async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http_client:
         yield http_client
+
+
+@pytest.fixture(scope="session")
+def worker_sync_engine(test_database: None) -> Iterator[Engine]:
+    engine = create_engine(require_test_url("TEST_DATABASE_WORKER_URL"))
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def auth_world(worker_sync_engine: Engine) -> AuthWorld:
+    """Демо-данные devseed (14 пользователей, 2 объекта) с известными паролем и TOTP."""
+    with worker_sync_engine.begin() as connection:
+        devseed.seed(
+            connection,
+            password_hash=hash_password(PASSWORD),
+            totp_secret=TOTP_SECRET,
+            # В dev бухгалтер без 2FA (так проверяется настройка при входе), но тестам HTTP-матрицы
+            # нужен готовый сеанс, поэтому здесь 2FA есть и у него. Настройку проверяют одноразовые.
+            totp_roles=devseed.TOTP_ROLES | {"accountant"},
+        )
+        users = {
+            row.email.split("@")[0]: row.id
+            for row in connection.execute(
+                text('SELECT id, email FROM "user" WHERE email LIKE :pattern'),
+                {"pattern": f"%@{devseed.EMAIL_DOMAIN}"},
+            )
+        }
+        projects = {
+            key: connection.execute(
+                text("SELECT id FROM project WHERE name = :name"), {"name": name}
+            ).scalar_one()
+            for key, name in (("east", devseed.EAST), ("west", devseed.WEST))
+        }
+        counterparties = {
+            name: connection.execute(
+                text("SELECT id FROM counterparty WHERE name = :name"), {"name": name}
+            ).scalar_one()
+            for name, _kind in devseed.COUNTERPARTIES
+        }
+        legal_entities = {
+            name: connection.execute(
+                text("SELECT id FROM legal_entity WHERE name = :name"), {"name": name}
+            ).scalar_one()
+            for name in devseed.LEGAL_ENTITIES
+        }
+        roles = {row.code: row.id for row in connection.execute(text("SELECT code, id FROM role"))}
+    return AuthWorld(
+        users=users,
+        projects=projects,
+        counterparties=counterparties,
+        legal_entities=legal_entities,
+        roles=roles,
+    )
+
+
+@pytest.fixture
+async def clean_redis() -> AsyncIterator[None]:
+    """Лимиты попыток, denylist и кэш прав живут в Redis: каждый тест начинает с чистой БД Redis."""
+    if get_settings().app_env != "test":
+        pytest.exit("refusing to flush Redis outside APP_ENV=test")
+    await get_redis().flushdb()
+    yield
+
+
+@pytest.fixture
+async def api(app: FastAPI, clean_redis: None, auth_world: AuthWorld) -> AsyncIterator[AsyncClient]:
+    # https: cookie с флагом Secure отправляется клиентом только по защищённой схеме.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        yield client
+
+
+@pytest.fixture
+def new_user(
+    worker_sync_engine: Engine, auth_world: AuthWorld
+) -> Iterator[Callable[..., tuple[UUID, str]]]:
+    """Одноразовый пользователь без объектов: (id, email), пароль PASSWORD; потом удаляется."""
+    created: list[UUID] = []
+    password_hash = hash_password(PASSWORD)
+
+    def make(role: str = "foreman") -> tuple[UUID, str]:
+        email = f"tmp-{uuid4().hex[:12]}@kut.test"
+        with worker_sync_engine.begin() as connection:
+            user_id = connection.execute(
+                text(
+                    'INSERT INTO "user" (email, full_name, role_id, password_hash)'
+                    " VALUES (:email, :name, :role, :hash) RETURNING id"
+                ),
+                {
+                    "email": email,
+                    "name": f"Временный {role}",
+                    "role": auth_world.roles[role],
+                    "hash": password_hash,
+                },
+            ).scalar_one()
+        created.append(user_id)
+        return user_id, email
+
+    yield make
+    if created:
+        with worker_sync_engine.begin() as connection:
+            connection.execute(
+                text('UPDATE "user" SET deleted_at = now() WHERE id = ANY(:ids)'), {"ids": created}
+            )

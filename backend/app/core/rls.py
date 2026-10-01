@@ -11,7 +11,8 @@ _SET_CONTEXT = text(
     " set_config('app.project_ids', :project_ids, true),"
     " set_config('app.legal_entity_ids', :legal_entity_ids, true),"
     " set_config('app.counterparty_id', :counterparty_id, true),"
-    " set_config('app.request_id', :request_id, true)"
+    " set_config('app.request_id', :request_id, true),"
+    " set_config('app.sees_all_users', :sees_all_users, true)"
 )
 
 
@@ -27,6 +28,7 @@ def context_params(context: RequestContext) -> dict[str, str]:
         "legal_entity_ids": _join(context.legal_entity_ids),
         "counterparty_id": str(context.counterparty_id or ""),
         "request_id": str(context.request_id or ""),
+        "sees_all_users": "true" if context.sees_all_users else "false",
     }
 
 

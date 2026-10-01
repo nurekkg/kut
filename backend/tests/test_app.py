@@ -7,17 +7,32 @@ from httpx import ASGITransport, AsyncClient
 from app.api import API_V1_PREFIX, api_v1_router
 from app.core.config import get_settings
 from app.main import create_app
+from app.modules.auth.keys import get_jwt_keys, get_totp_keys
 
 DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
+# Не секреты: ключи без префикса «dev», чтобы API стартовал с APP_ENV=production.
+PRODUCTION_LIKE_KEY = "Zm9yLXRlc3RzLW9ubHktbm90LWEtcmVhbC1rZXktMDA"
+
+
+def clear_auth_caches() -> None:
+    get_settings.cache_clear()
+    get_jwt_keys.cache_clear()
+    get_totp_keys.cache_clear()
 
 
 @pytest.fixture
 def production_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("APP_ENV", "production")
-    get_settings.cache_clear()
+    monkeypatch.setenv("JWT_PRIVATE_KEYS", f"prod-1:{PRODUCTION_LIKE_KEY}")
+    monkeypatch.setenv("JWT_ACTIVE_KID", "prod-1")
+    monkeypatch.setenv("TOTP_ENCRYPTION_KEYS", f"prod-1:{PRODUCTION_LIKE_KEY}")
+    monkeypatch.setenv("TOTP_ACTIVE_KEY_ID", "prod-1")
+    clear_auth_caches()
     yield
     monkeypatch.undo()
-    get_settings.cache_clear()
+    clear_auth_caches()
 
 
 @pytest.mark.parametrize("path", DOCS_PATHS)

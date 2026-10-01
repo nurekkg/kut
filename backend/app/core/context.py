@@ -17,6 +17,7 @@ class RequestContext:
     legal_entity_ids: frozenset[UUID] = frozenset()
     counterparty_id: UUID | None = None
     request_id: UUID | None = None
+    sees_all_users: bool = False
 
 
 _current: ContextVar[RequestContext | None] = ContextVar("request_context", default=None)

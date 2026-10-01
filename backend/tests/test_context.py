@@ -60,6 +60,7 @@ def test_context_params_are_deterministic_and_empty_means_empty_string() -> None
         "legal_entity_ids": "",
         "counterparty_id": "",
         "request_id": "",
+        "sees_all_users": "false",
     }
 
 

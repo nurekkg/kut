@@ -116,6 +116,7 @@ async def test_there_are_ten_internal_and_three_external_roles_with_the_agreed_s
     assert {code for code, (scope, _f, _s) in rows.items() if scope == "group"} == {
         "owner",
         "finance_director",
+        "technical_director",  # решение PO после S1a
     }
     assert all(is_system for _scope, _tfa, is_system in rows.values())
 

@@ -52,14 +52,21 @@ SELECT (:'app_env' = 'production'
 \endif
 
 SELECT format('CREATE ROLE %I NOLOGIN', r.name)
-FROM (VALUES ('kut_owner'), ('kut_app'), ('kut_portal'), ('kut_worker')) AS r(name)
+FROM (VALUES ('kut_owner'), ('kut_app'), ('kut_portal'), ('kut_worker'), ('kut_auth')) AS r(name)
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r.name) \gexec
 
--- Ни одна роль не суперпользователь. BYPASSRLS только у kut_worker (Celery).
+-- Ни одна роль не суперпользователь. BYPASSRLS только у kut_worker (Celery) и у kut_auth.
 ALTER ROLE kut_owner  WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'owner_pw';
 ALTER ROLE kut_app    WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'app_pw';
 ALTER ROLE kut_portal WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'portal_pw';
 ALTER ROLE kut_worker WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS   PASSWORD :'worker_pw';
+
+-- kut_auth: НЕ логин (NOLOGIN, пароля нет). Владелец SECURITY DEFINER-функций авторизации: они читают и
+-- меняют учётные данные в обход RLS, а приложение получает лишь право EXECUTE на эти функции.
+-- kut_owner может сделать SET ROLE kut_auth (так миграция создаёт функции от его имени), но права
+-- kut_auth не наследует: обычные сессии kut_owner остаются под FORCE RLS.
+ALTER ROLE kut_auth   WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS PASSWORD NULL;
+GRANT kut_auth TO kut_owner WITH INHERIT FALSE, SET TRUE;
 
 SELECT current_database() AS maindb \gset
 

@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, LargeBinary, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base import BusinessBase
@@ -12,7 +13,13 @@ class User(BusinessBase):
     phone: Mapped[str | None] = mapped_column(default=None)
     email: Mapped[str | None] = mapped_column(default=None)
     full_name: Mapped[str]
-    password_hash: Mapped[str | None] = mapped_column(default=None)
+    # Секреты закрыты колонковыми правами (kut_app их не читает и не пишет: только функции app.*);
+    # deferred: обычный select(User) не просит их у БД.
+    password_hash: Mapped[str | None] = mapped_column(default=None, deferred=True)
+    totp_secret_enc: Mapped[bytes | None] = mapped_column(LargeBinary, default=None, deferred=True)
+    totp_key_id: Mapped[str | None] = mapped_column(default=None, deferred=True)
+    totp_confirmed_at: Mapped[datetime | None] = mapped_column(default=None)
+    password_changed_at: Mapped[datetime | None] = mapped_column(default=None)
     role_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("role.id"), index=True)
     counterparty_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("counterparty.id"), default=None, index=True
