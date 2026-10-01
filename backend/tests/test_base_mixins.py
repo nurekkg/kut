@@ -1,11 +1,21 @@
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.context import current_user_id
+from app.core.context import system_context, use_context
 from tests.models import Widget
+from tests.support import internal
+
+
+@pytest.fixture(autouse=True)
+def _system_context() -> Iterator[None]:
+    # Любая транзакция Session требует контекст запроса (после_begin-хук RLS).
+    with system_context():
+        yield
 
 
 async def test_defaults_are_filled_on_insert(session: AsyncSession) -> None:
@@ -37,30 +47,24 @@ async def test_updated_at_is_bumped_by_an_update(session: AsyncSession) -> None:
 
 async def test_actor_is_stamped_on_insert_and_update(session: AsyncSession) -> None:
     author, editor = uuid.uuid4(), uuid.uuid4()
-    token = current_user_id.set(author)
-    try:
-        widget = Widget(name="a")
+    widget = Widget(name="a")
+    with use_context(internal(author)):
         session.add(widget)
         await session.flush()
-        assert (widget.created_by, widget.updated_by) == (author, author)
+    assert (widget.created_by, widget.updated_by) == (author, author)
 
-        current_user_id.set(editor)
+    with use_context(internal(editor)):
         widget.name = "b"
         await session.flush()
-        assert (widget.created_by, widget.updated_by) == (author, editor)
-    finally:
-        current_user_id.reset(token)
+    assert (widget.created_by, widget.updated_by) == (author, editor)
 
 
 async def test_system_change_without_a_user_leaves_the_actor_null(session: AsyncSession) -> None:
     author = uuid.uuid4()
-    token = current_user_id.set(author)
-    try:
-        widget = Widget(name="a")
+    widget = Widget(name="a")
+    with use_context(internal(author)):
         session.add(widget)
         await session.flush()
-    finally:
-        current_user_id.reset(token)
 
     widget.name = "b"
     await session.flush()
