@@ -203,18 +203,10 @@ class RefOut(BaseModel):
     name: str
 
 
-async def _internal_reader(principal: Reader) -> Principal:
-    """Справочники группы читает только внутренний пользователь: внешнему пулу они закрыты."""
-    if not principal.is_internal:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
-    return principal
-
-
-InternalReader = Annotated[Principal, Depends(_internal_reader)]
-
-
+# Эти справочники нужны только форме карточки объекта, а карточку правят роли scope=group с
+# правом записи: остальным (прораб, мастер, внешние) список юрлиц и заказчиков группы не отдаётся.
 @router.get("/legal-entities", response_model=list[RefOut])
-async def list_legal_entities(session: Db, _principal: InternalReader) -> list[RefOut]:
+async def list_legal_entities(session: Db, _principal: Admin) -> list[RefOut]:
     """Юрлица, видимые пользователю (форма создания объекта): границу ставит RLS."""
     rows = await session.execute(
         select(LegalEntity.id, LegalEntity.name).order_by(LegalEntity.name, LegalEntity.id)
@@ -223,7 +215,7 @@ async def list_legal_entities(session: Db, _principal: InternalReader) -> list[R
 
 
 @router.get("/customers", response_model=list[RefOut])
-async def list_customers(session: Db, _principal: InternalReader) -> list[RefOut]:
+async def list_customers(session: Db, _principal: Admin) -> list[RefOut]:
     """Контрагенты с типом «заказчик» (поле заказчика в карточке объекта)."""
     rows = await session.execute(
         select(Counterparty.id, Counterparty.name)

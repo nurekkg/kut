@@ -711,9 +711,17 @@ async def test_the_seed_brings_thirty_works_in_seven_categories(api: AsyncClient
 
 @pytest.mark.parametrize(
     ("who", "expected"),
-    [("owner", 200), ("techdir", 200), ("foreman", 200), ("customer", 403), ("sub_a", 403)],
+    [
+        ("owner", 200),
+        ("techdir", 200),
+        ("finance", 403),
+        ("foreman", 403),
+        ("master", 403),
+        ("customer", 403),
+        ("sub_a", 403),
+    ],
 )
-async def test_the_group_directories_for_the_forms_are_closed_to_external_roles(
+async def test_the_group_directories_for_the_forms_are_for_the_roles_that_edit_the_card(
     api: AsyncClient, auth_world: AuthWorld, who: str, expected: int
 ) -> None:
     token = await token_for(api, who)
