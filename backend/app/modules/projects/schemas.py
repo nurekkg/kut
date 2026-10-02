@@ -106,9 +106,22 @@ def _check_coordinates(latitude: Decimal | None, longitude: Decimal | None) -> N
         raise ValueError("latitude and longitude are set together")
 
 
+# Поля карточки, которые лежат в project_finance и видны только ролям с правом finance:read.
+FINANCE_FIELDS = (
+    "planned_budget",
+    "customer_id",
+    "address",
+    "latitude",
+    "longitude",
+    "warranty_until",
+)
+
+
 class ProjectOut(BaseModel):
     """Поля после id, name, status и legal_entity_id внешним ролям не отдаются (None): их колонки
-    закрыты для пула kut_portal (бюджет, заказчик, гарантия - внутренние данные)."""
+    закрыты для пула kut_portal. Бюджет, заказчик, адрес, координаты и гарантия отдаются только
+    ролям с правом finance:read (finance_visible): остальным они None, и это граница БД (RLS
+    таблицы project_finance), а не только условие в ответе."""
 
     id: uuid.UUID
     name: str
@@ -126,6 +139,7 @@ class ProjectOut(BaseModel):
     longitude: Decimal | None = None
     warranty_until: date | None = None
     node_count: int | None = None
+    finance_visible: bool = False
 
 
 # --- узлы дерева ------------------------------------------------------------------------------

@@ -20,6 +20,27 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "node.has_dependents": (409, "node_has_dependents"),
     "project.has_dependents": (409, "project_has_nodes"),
     "project.customer_invalid": (422, "customer_invalid"),
+    # ГПР и справочник работ. Отказ по праву (forbidden) - это тот же 403, что даёт require():
+    # правило в БД - вторая линия, если путь в обход API нашёл бы код без проверки.
+    "schedule.forbidden": (403, "forbidden"),
+    "schedule.node_invalid": (422, "schedule_node_invalid"),
+    "schedule.work_invalid": (422, "schedule_work_invalid"),
+    "schedule.has_dependents": (409, "schedule_item_has_dependents"),
+    "dependency.cycle": (422, "dependency_cycle"),
+    "dependency.item_invalid": (422, "dependency_item_invalid"),
+    "work.has_dependents": (409, "work_has_dependents"),
+    "work.unit_locked": (409, "work_unit_locked"),
+    # Факт работ и фото.
+    "actual.forbidden": (403, "forbidden"),
+    "actual.transition_forbidden": (409, "actual_transition_forbidden"),
+    "actual.locked": (409, "actual_locked"),
+    "actual.date_in_future": (422, "actual_date_in_future"),
+    "actual.reason_required": (422, "actual_reason_required"),
+    "actual.node_invalid": (422, "actual_node_invalid"),
+    "actual.work_invalid": (422, "actual_work_invalid"),
+    "actual.item_invalid": (422, "actual_item_invalid"),
+    "actual.has_dependents": (409, "actual_has_photos"),
+    "photo.forbidden": (403, "forbidden"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -30,8 +51,15 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "ck_project_node_polygon_valid": (422, "polygon_invalid"),
     "ck_project_node_planned_dates_ordered": (422, "dates_invalid"),
     "ck_project_planned_dates_ordered": (422, "dates_invalid"),
-    "ck_project_coordinates_valid": (422, "coordinates_invalid"),
-    "ck_project_budget_not_negative": (422, "budget_invalid"),
+    "ck_project_finance_coordinates_valid": (422, "coordinates_invalid"),
+    "ck_project_finance_budget_not_negative": (422, "budget_invalid"),
+    "uq_schedule_item_node_id_work_id": (409, "schedule_item_exists"),
+    "uq_schedule_dependency_predecessor_id_successor_id": (409, "dependency_exists"),
+    "ck_schedule_item_dates_ordered": (422, "dates_invalid"),
+    "ck_work_actual_coordinates_valid": (422, "coordinates_invalid"),
+    "ck_work_actual_accuracy_valid": (422, "coordinates_invalid"),
+    "ck_work_photo_coordinates_valid": (422, "coordinates_invalid"),
+    "uq_work_photo_s3_key": (409, "photo_already_confirmed"),
 }
 
 

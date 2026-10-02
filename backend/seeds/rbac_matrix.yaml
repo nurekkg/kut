@@ -166,6 +166,12 @@ extra:
   # техдиректор. Лимитов сумм на согласование платежей в MVP нет.
   - {role: technical_director, permission: "work_actual:write:after_approval"}
   - {role: technical_director, permission: "materials:approve:limit_override"}
+  # Факт работ (решения PO по S3): мастер вносит и отправляет, прораб подтверждает или отклоняет, факт
+  # прораба и техдиректора согласуется сразу. В §7.3 глагола approve нет, а у техдиректора в этой
+  # строке только «R»: чтобы его факт создавался сразу согласованным, ему нужны write и approve.
+  - {role: foreman, permission: "work_actual:approve"}
+  - {role: technical_director, permission: "work_actual:write"}
+  - {role: technical_director, permission: "work_actual:approve"}
   # ДОПУЩЕНИЕ, НУЖНА ПРОВЕРКА PO: модуль settings в §7.3 отсутствует; управлять им может только владелец.
   - {role: owner, permission: "settings:read"}
   - {role: owner, permission: "settings:write"}

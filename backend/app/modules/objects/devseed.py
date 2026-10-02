@@ -133,21 +133,28 @@ def _scalar(connection: Connection, sql: str, **params: Any) -> Any:
 def ensure_project_card(
     connection: Connection, project_id: Any, key: str, counterparties: dict[str, Any]
 ) -> bool:
-    """Заполняет карточку объекта, пока в ней нет ни дат, ни бюджета (то есть один раз)."""
+    """Заполняет карточку объекта, пока в ней нет дат (то есть один раз): стадия и даты в project,
+    бюджет, заказчик и адрес - в project_finance (их видят только роли с finance:read)."""
     stage, start, end, budget, address, lat, lon, customer = PROJECT_CARDS[key]
     result = connection.execute(
         text(
             "UPDATE project SET lifecycle_stage = :stage, planned_start = CAST(:start AS date),"
-            " planned_end = CAST(:end AS date), planned_budget = CAST(:budget AS numeric),"
-            " address = :address, latitude = CAST(:lat AS numeric),"
-            " longitude = CAST(:lon AS numeric), customer_id = :customer"
+            " planned_end = CAST(:end AS date)"
             " WHERE id = :id AND planned_start IS NULL AND planned_end IS NULL"
-            " AND planned_budget IS NULL"
+        ),
+        {"stage": stage, "start": start, "end": end, "id": project_id},
+    )
+    if not result.rowcount:
+        return False
+    connection.execute(
+        text(
+            "INSERT INTO project_finance (project_id, legal_entity_id, planned_budget, address,"
+            " latitude, longitude, customer_id)"
+            " SELECT id, legal_entity_id, CAST(:budget AS numeric), :address,"
+            " CAST(:lat AS numeric), CAST(:lon AS numeric), :customer FROM project WHERE id = :id"
+            " ON CONFLICT (project_id) DO NOTHING"
         ),
         {
-            "stage": stage,
-            "start": start,
-            "end": end,
             "budget": budget,
             "address": address,
             "lat": lat,
@@ -156,7 +163,7 @@ def ensure_project_card(
             "id": project_id,
         },
     )
-    return bool(result.rowcount)
+    return True
 
 
 def ensure_works(connection: Connection) -> int:

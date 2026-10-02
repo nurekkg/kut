@@ -17,12 +17,24 @@ class Settings(BaseSettings):
     celery_result_backend: SecretStr
 
     s3_endpoint_url: str
+    # Адрес S3 в подписанных ссылках для браузера (в docker-сети s3_endpoint_url браузеру недоступен);
+    # не задан - подписи идут с s3_endpoint_url.
+    s3_public_endpoint_url: str | None = None
     s3_region: str
     s3_bucket: str
     s3_access_key: str
     s3_secret_key: SecretStr
 
     health_check_timeout_seconds: float = 2.0
+
+    # Фото факта: ссылка на загрузку живёт 15 минут (медленная мобильная связь), на скачивание - 2.
+    photo_upload_ttl_seconds: int = 900
+    photo_download_ttl_seconds: int = 120
+
+    # Ответы API короче порога не сжимаются; уровень 5 - компромисс скорости и размера (дерево на
+    # 10 тыс. узлов: см. wiki/arch/s3a-schedule-and-actuals.md).
+    gzip_minimum_bytes: int = 1024
+    gzip_compresslevel: int = 5
 
     # --- аутентификация (ADR-001 §2). Ключи только из окружения; API без них не стартует. ---
     # «kid:<base64url 32-байтного seed Ed25519>[,kid:...]»; подписывает ключ jwt_active_kid,
