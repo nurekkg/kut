@@ -482,6 +482,15 @@ async def test_external_roles_see_only_approved_facts_and_no_people_or_geolocati
         assert (await send(api, "GET", url(auth_world, approved), who)).status_code == 200, who
 
 
+@pytest.mark.parametrize("params", [{"offset": 99999999999999999999}, {"limit": 5001}])
+async def test_paging_outside_the_bounds_is_refused_not_a_server_error(
+    api: AsyncClient, auth_world: AuthWorld, params: dict[str, Any]
+) -> None:
+    response = await send(api, "GET", url(auth_world), "foreman", params=params)
+
+    assert response.status_code == 422, response.text
+
+
 # --- удаление -------------------------------------------------------------------------------------
 
 

@@ -9,13 +9,16 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from botocore.exceptions import EndpointConnectionError
 from httpx import AsyncClient, Response
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.core import storage
 from app.core.config import get_settings
 from tests.auth_support import AuthWorld, bearer, token_for
-from tests.db_support import owner_rows
-from tests.gpr_support import Plan, make_plan, purge
+from tests.db_support import call, owner_rows
+from tests.gpr_support import Plan, ctx, make_plan, purge
 
 P = "/api/v1/projects"
 JPEG = b"\xff\xd8\xff\xe0" + b"jpeg-bytes" * 50
@@ -205,6 +208,25 @@ async def test_confirming_a_file_that_was_never_uploaded_is_refused_and_leaves_n
     response = await confirm(api, auth_world, "master", fact, [issued[0]["key"]])
 
     assert (response.status_code, response.json()["detail"]) == (409, "photo_not_uploaded")
+    listed = await send(api, "GET", photos(auth_world), "master", params={"work_actual_id": fact})
+    assert listed.json() == []
+
+
+async def test_a_storage_outage_gives_503_and_leaves_no_record(
+    api: AsyncClient, auth_world: AuthWorld, plan: Plan, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fact = await new_fact(api, auth_world, "master", plan)
+    issued = (await presign(api, auth_world, "master", fact, [("image/jpeg", 100)])).json()[
+        "items"
+    ][0]
+
+    async def unreachable(key: str) -> None:
+        raise EndpointConnectionError(endpoint_url="http://minio:9000")
+
+    monkeypatch.setattr(storage, "head_object", unreachable)
+    response = await confirm(api, auth_world, "master", fact, [issued["key"]])
+
+    assert (response.status_code, response.json()["detail"]) == (503, "storage_unavailable")
     listed = await send(api, "GET", photos(auth_world), "master", params={"work_actual_id": fact})
     assert listed.json() == []
 
@@ -402,6 +424,72 @@ async def test_a_link_for_a_foreign_object_or_a_foreign_fact_is_not_issued(
     assert foreign_object.status_code == 404
     assert unknown_fact.status_code == 404
     assert through_west.status_code == 404  # techdir видит «Запад», но факт «Востока» там не его
+
+
+@pytest.mark.parametrize(
+    ("who", "sees"),
+    [
+        ("foreman", True),
+        ("master", True),
+        ("techdir", True),
+        ("estimator", True),
+        ("owner", True),
+        ("finance", False),
+        ("lawyer", False),
+        ("storekeeper", False),
+    ],
+)
+async def test_the_database_shows_photo_rows_only_to_roles_with_the_fact_read_permission(
+    auth_world: AuthWorld, worker_engine: AsyncEngine, plan: Plan, who: str, sees: bool
+) -> None:
+    """На снимках люди и техника: мало объекта роли, нужно и право читать факт (как в API)."""
+    async with worker_engine.begin() as connection:
+        fact = await connection.scalar(
+            text(
+                "INSERT INTO work_actual (project_id, legal_entity_id, node_id, work_id,"
+                " schedule_item_id, volume, work_date, author_id, status, approved_by, approved_at)"
+                " VALUES (:p, :le, :n, :w, :i, 1, DATE '2026-09-03', :u, 'approved', :u, now())"
+                " RETURNING id"
+            ),
+            {"p": plan.project, "le": plan.entity, "n": plan.node, "w": plan.work, "i": plan.item,
+             "u": auth_world.users["foreman"]},
+        )  # fmt: skip
+        await connection.execute(
+            text(
+                "INSERT INTO work_photo (project_id, legal_entity_id, work_actual_id, s3_key,"
+                " content_type, size_bytes, uploaded_by) VALUES (:p, :le, :f,"
+                " 'project/' || CAST(CAST(:p AS uuid) AS text) || '/fact/x/'"
+                " || gen_random_uuid() || '.jpg', 'image/jpeg', 1000, :u)"
+            ),
+            {"p": plan.project, "le": plan.entity, "f": fact, "u": auth_world.users["foreman"]},
+        )
+
+    rows = await call(
+        ctx(auth_world, who),
+        "SELECT count(*) AS n FROM work_photo WHERE work_actual_id = :f",
+        f=fact,
+    )
+
+    assert (rows[0].n == 1) is sees
+
+
+async def test_responses_with_signed_links_are_not_cacheable(
+    api: AsyncClient, auth_world: AuthWorld, s3: httpx.AsyncClient, plan: Plan
+) -> None:
+    fact = await new_fact(api, auth_world, "master", plan)
+    presigned = await presign(api, auth_world, "master", fact, [("image/jpeg", len(JPEG))])
+    item = presigned.json()["items"][0]
+    assert (await upload(s3, item, JPEG)).status_code == 200
+    photo = (await confirm(api, auth_world, "master", fact, [item["key"]])).json()[0]
+
+    link = await send(api, "GET", photos(auth_world, photo["id"], "download-url"), "master")
+    listed = await send(
+        api, "GET", photos(auth_world), "master",
+        params={"work_actual_id": fact, "with_urls": "true"},
+    )  # fmt: skip
+
+    for response in (presigned, link, listed):
+        assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
 
 
 async def test_a_photo_of_another_object_is_not_downloadable_through_the_wrong_path(

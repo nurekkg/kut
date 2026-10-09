@@ -20,6 +20,7 @@ from app.modules.schedule.schemas import (
 router = APIRouter(prefix="/projects/{project_id}/schedule", tags=["schedule"])
 
 Db = Annotated[AsyncSession, Depends(get_db)]
+MAX_OFFSET = 1_000_000  # выше значения БД даёт ошибку 500, а не пустой список
 Reader = Annotated[Principal, Depends(require(Module.GPR, Action.READ, project_param="project_id"))]
 Writer = Annotated[
     Principal, Depends(require(Module.GPR, Action.WRITE, project_param="project_id"))
@@ -29,9 +30,13 @@ Writer = Annotated[
 # Зависимости объявлены раньше «/{item_id}»: иначе слово dependencies попало бы в параметр пути.
 @router.get("/dependencies", response_model=list[DependencyOut])
 async def list_dependencies(
-    project_id: uuid.UUID, session: Db, _principal: Reader
+    project_id: uuid.UUID,
+    session: Db,
+    _principal: Reader,
+    limit: Annotated[int, Query(ge=1, le=20_000)] = 10_000,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
 ) -> list[DependencyOut]:
-    return await service.list_dependencies(session, project_id)
+    return await service.list_dependencies(session, project_id, limit=limit, offset=offset)
 
 
 @router.post("/dependencies", status_code=status.HTTP_201_CREATED, response_model=DependencyOut)
@@ -70,7 +75,7 @@ async def list_items(
     subtree: Annotated[bool, Query(description="узел и все его потомки")] = False,
     work_id: uuid.UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=10_000)] = 1000,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
 ) -> list[ScheduleItemOut]:
     return await service.list_items(
         session,

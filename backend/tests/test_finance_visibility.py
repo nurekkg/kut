@@ -4,6 +4,7 @@ finance:read (решение PO, tz-changes §3); граница стоит в �
 
 from collections.abc import Iterator
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.core.rules import rule_error
 from app.modules.auth import devseed
 from app.modules.auth.principal import Principal
 from app.modules.projects.router import _require_finance_for
@@ -290,6 +292,34 @@ async def test_the_customer_of_a_finance_row_must_be_a_live_customer_counterpart
                 {"c": auth_world.counterparties[devseed.SUB_A], "p": auth_world.projects["east"]},
             )
         await connection.rollback()
+
+
+@pytest.mark.parametrize(
+    ("who", "visible"), [(who, True) for who in READERS] + [(who, False) for who in BLIND]
+)
+async def test_the_journal_rows_of_the_finance_table_follow_finance_read(
+    auth_world: AuthWorld, who: str, visible: bool
+) -> None:
+    """В журнале лежат старые и новые значения: без этой политики бюджет читался бы оттуда."""
+    east = auth_world.projects["east"]
+    sql = "SELECT count(*) AS n FROM audit_log WHERE table_name = :t AND project_id = :p"
+
+    finance = await call(ctx(auth_world, who), sql, t="project_finance", p=east)
+    other = await call(ctx(auth_world, who), sql, t="project", p=east)
+
+    assert (finance[0].n > 0) is visible
+    assert other[0].n > 0  # остальной журнал объекта остаётся читаемым
+
+
+def test_two_first_saves_of_the_finance_card_are_a_conflict_not_a_server_error() -> None:
+    diag = SimpleNamespace(
+        message_primary="duplicate key value violates unique constraint",
+        constraint_name="uq_project_finance_project_id",
+    )
+    translated = rule_error(DBAPIError("INSERT", {}, SimpleNamespace(diag=diag)))  # type: ignore[arg-type]
+
+    assert translated is not None
+    assert (translated.status_code, translated.detail) == (409, "finance_card_conflict")
 
 
 # --- БД: функция права ----------------------------------------------------------------------------

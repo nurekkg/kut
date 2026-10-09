@@ -237,6 +237,13 @@ def upgrade() -> None:
         legal_entity_column="legal_entity_id",
         frozen_columns=("project_id", "legal_entity_id"),
     )
+    # Журнал хранит старые и новые значения, поэтому бюджет и адрес читал бы из него любой внутренний
+    # пользователь с объектом (политика журнала S1 смотрит только на объект). Записи таблицы
+    # project_finance видят лишь роли с finance:read: RESTRICTIVE-политика действует поверх прежней.
+    op.execute(
+        "CREATE POLICY audit_log_finance_rows ON audit_log AS RESTRICTIVE FOR SELECT TO kut_app"
+        f" USING (table_name IS DISTINCT FROM 'project_finance' OR {CAN_SEE_FINANCE})"
+    )
 
     # --- UPDATE(path) закрыт для логинов приложения ---
     op.execute(f"REVOKE UPDATE ON project_node FROM {WRITERS}")
@@ -249,6 +256,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP POLICY audit_log_finance_rows ON audit_log")
     _create_repath(NODE_REPATH_INVOKER, definer=False)
     op.execute("REVOKE EXECUTE ON FUNCTION app.is_valid_polygon(jsonb) FROM kut_auth")
     op.execute("REVOKE UPDATE (path) ON project_node FROM kut_auth")

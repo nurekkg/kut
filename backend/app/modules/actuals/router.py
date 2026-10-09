@@ -16,6 +16,7 @@ from app.modules.rbac.enums import Action, Module
 router = APIRouter(prefix="/projects/{project_id}/work-actuals", tags=["work-actuals"])
 
 Db = Annotated[AsyncSession, Depends(get_db)]
+MAX_OFFSET = 1_000_000  # выше значения БД даёт ошибку 500, а не пустой список
 Reader = Annotated[
     Principal, Depends(require(Module.WORK_ACTUAL, Action.READ, project_param="project_id"))
 ]
@@ -41,7 +42,7 @@ async def list_actuals(
     date_from: date | None = None,
     date_to: date | None = None,
     limit: Annotated[int, Query(ge=1, le=5000)] = 500,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
 ) -> list[ActualOut]:
     """Внешним ролям отдаётся только подтверждённый факт (граница в БД: политика kut_portal)."""
     return await service.list_actuals(

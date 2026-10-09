@@ -1,3 +1,4 @@
+import asyncio
 import re
 import uuid
 from typing import Any
@@ -108,14 +109,17 @@ async def confirm(
         raise not_found()
     await _require_may_add(session, project_id, data.work_actual_id)
     prefix = f"project/{project_id}/fact/{data.work_actual_id}/"
-    photos = []
     for item in data.items:
         if not (item.key.startswith(prefix) and _KEY.fullmatch(item.key)):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "photo_key_invalid")
-        try:
-            stored = await storage.head_object(item.key)
-        except (ClientError, BotoCoreError) as error:
-            raise storage_unavailable() from error
+    # Проверки файлов идут одновременно: последовательные HEAD с таймаутом держали бы соединение
+    # пула и ключ идемпотентности до 10 x 4 с при деградации хранилища.
+    try:
+        stored_objects = await asyncio.gather(*(storage.head_object(i.key) for i in data.items))
+    except (ClientError, BotoCoreError) as error:
+        raise storage_unavailable() from error
+    photos = []
+    for item, stored in zip(data.items, stored_objects, strict=True):
         if stored is None:
             raise HTTPException(status.HTTP_409_CONFLICT, "photo_not_uploaded")
         if stored.content_type not in EXTENSIONS or not 0 < stored.size <= MAX_PHOTO_BYTES:

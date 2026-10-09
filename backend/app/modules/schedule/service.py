@@ -197,7 +197,9 @@ async def delete_item(
 # --- зависимости ------------------------------------------------------------------------------
 
 
-async def list_dependencies(session: AsyncSession, project_id: uuid.UUID) -> list[DependencyOut]:
+async def list_dependencies(
+    session: AsyncSession, project_id: uuid.UUID, *, limit: int, offset: int
+) -> list[DependencyOut]:
     rows = await session.execute(
         select(
             ScheduleDependency.id,
@@ -207,6 +209,8 @@ async def list_dependencies(session: AsyncSession, project_id: uuid.UUID) -> lis
         )
         .where(ScheduleDependency.project_id == project_id)
         .order_by(ScheduleDependency.created_at, ScheduleDependency.id)
+        .limit(limit)
+        .offset(offset)
     )
     return [DependencyOut.model_validate(row, from_attributes=True) for row in rows]
 

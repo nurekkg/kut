@@ -430,6 +430,35 @@ async def test_a_dependency_can_be_deleted_once(
     assert reverse.status_code == 201  # после удаления обратная связь уже не цикл
 
 
+@pytest.mark.parametrize(
+    "params",
+    [{"offset": 99999999999999999999}, {"offset": 1_000_001}, {"limit": 0}, {"limit": 10_001}],
+)
+async def test_paging_outside_the_bounds_is_refused_not_a_server_error(
+    api: AsyncClient, auth_world: AuthWorld, params: dict[str, Any]
+) -> None:
+    response = await send(api, "GET", url(auth_world), "foreman", params=params)
+
+    assert response.status_code == 422, response.text
+
+
+async def test_the_dependency_list_is_paged(
+    api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine
+) -> None:
+    first, second = await two_items(api, auth_world, worker_engine)
+    path = url(auth_world, "dependencies")
+    link = {"predecessor_id": first["id"], "successor_id": second["id"]}
+    assert (await send(api, "POST", path, "foreman", json=link, key=uuid4())).status_code == 201
+
+    page = await send(api, "GET", path, "foreman", params={"limit": 1, "offset": 0})
+    beyond = await send(api, "GET", path, "foreman", params={"limit": 1, "offset": 999_999})
+    too_big = await send(api, "GET", path, "foreman", params={"limit": 20_001})
+
+    assert page.status_code == 200 and len(page.json()) == 1
+    assert beyond.status_code == 200 and beyond.json() == []
+    assert too_big.status_code == 422
+
+
 # --- удаление -----------------------------------------------------------------------------------
 
 

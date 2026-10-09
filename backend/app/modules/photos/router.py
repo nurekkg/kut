@@ -23,6 +23,11 @@ router = APIRouter(prefix="/projects/{project_id}/photos", tags=["photos"])
 Db = Annotated[AsyncSession, Depends(get_db)]
 
 
+def _no_store(response: Response) -> None:
+    """Подписанные ссылки живут недолго: ответы с ними не должны оседать в кэше браузера."""
+    response.headers["Cache-Control"] = "no-store"
+
+
 def _internal_only(
     base: Callable[..., Awaitable[Principal]],
 ) -> Callable[..., Awaitable[Principal]]:
@@ -47,7 +52,7 @@ Writer = Annotated[
 ]
 
 
-@router.post("/presign", response_model=PresignResponse)
+@router.post("/presign", response_model=PresignResponse, dependencies=[Depends(_no_store)])
 async def presign(
     project_id: uuid.UUID, body: PresignRequest, session: Db, _principal: Writer
 ) -> PresignResponse:
@@ -81,7 +86,7 @@ async def confirm(
     return result.to_response()
 
 
-@router.get("", response_model=list[PhotoOut])
+@router.get("", response_model=list[PhotoOut], dependencies=[Depends(_no_store)])
 async def list_photos(
     project_id: uuid.UUID,
     session: Db,
@@ -96,7 +101,9 @@ async def list_photos(
     )
 
 
-@router.get("/{photo_id}/download-url", response_model=DownloadUrl)
+@router.get(
+    "/{photo_id}/download-url", response_model=DownloadUrl, dependencies=[Depends(_no_store)]
+)
 async def download_url(
     project_id: uuid.UUID, photo_id: uuid.UUID, session: Db, _principal: Reader
 ) -> DownloadUrl:

@@ -34,6 +34,7 @@ WRITERS = "kut_app, kut_worker"
 LOGINS = "kut_app, kut_worker, kut_portal"
 INTERNAL = "(SELECT app.is_internal())"
 PROJECTS = "((SELECT app.project_ids())::uuid[])"
+CAN_READ_FACTS = "(SELECT app.has_permission('work_actual', 'read'))"
 
 STATUSES = ("draft", "submitted", "approved", "rejected")
 CONTENT_TYPES = ("image/jpeg", "image/png", "image/heic", "image/webp")
@@ -542,9 +543,13 @@ def upgrade() -> None:
 
     for table in ("work_actual", "work_photo"):
         force_rls(table)
+        visible = f"{INTERNAL} AND project_id = ANY {PROJECTS}"
+        if table == "work_photo":
+            # На снимках люди и техника, как и в API нужно модульное право чтения факта. Для самого
+            # факта это условие нельзя: его строки считают готовность для ролей с одним gpr:read.
+            visible += f" AND {CAN_READ_FACTS}"
         op.execute(
-            f"CREATE POLICY {table}_select_app ON {table} FOR SELECT TO kut_app"
-            f" USING ({INTERNAL} AND project_id = ANY {PROJECTS})"
+            f"CREATE POLICY {table}_select_app ON {table} FOR SELECT TO kut_app USING ({visible})"
         )
         op.execute(
             f"CREATE POLICY {table}_insert_app ON {table} FOR INSERT TO kut_app"
