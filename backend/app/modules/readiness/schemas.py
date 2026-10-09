@@ -62,6 +62,22 @@ class ItemProgress(BaseModel):
     overdue_days: int
 
 
+class ItemProgressBrief(BaseModel):
+    """Готовность одной строки ГПР в списке ГПР (S3b): те же числа, что в ItemProgress, и календарь
+    подтверждённого факта (первая и последняя дата) для полосы «факт» на диаграмме. weight -
+    действующий вес: ручной или плановая длительность."""
+
+    weight: Decimal
+    confirmed_volume: Decimal
+    percent: Decimal
+    planned_percent: Decimal
+    delay_days: Decimal
+    state: str
+    overdue_days: int
+    first_fact_date: date | None = None
+    last_fact_date: date | None = None
+
+
 class UnplannedVolume(BaseModel):
     """Подтверждённый факт по виду работ, которого нет в ГПР узла: в готовность он не входит."""
 

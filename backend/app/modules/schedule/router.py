@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
@@ -76,6 +77,12 @@ async def list_items(
     work_id: uuid.UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=10_000)] = 1000,
     offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
+    with_progress: Annotated[
+        bool, Query(description="добавить готовность каждой строки (поле progress)")
+    ] = False,
+    as_of: Annotated[
+        date | None, Query(description="дата расчёта готовности (по умолчанию сегодня, Бишкек)")
+    ] = None,
 ) -> list[ScheduleItemOut]:
     return await service.list_items(
         session,
@@ -86,6 +93,8 @@ async def list_items(
         work_id=work_id,
         limit=limit,
         offset=offset,
+        with_progress=with_progress,
+        as_of=as_of,
     )
 
 

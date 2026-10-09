@@ -12,7 +12,8 @@ from app.core import storage
 from app.core.config import get_settings
 from app.core.rules import db_rules
 from app.modules.actuals.models import WorkActual
-from app.modules.objects.models import Project
+from app.modules.identity.models import User
+from app.modules.objects.models import Project, ProjectNode
 from app.modules.photos.models import EXTENSIONS, MAX_PHOTO_BYTES, WorkPhoto
 from app.modules.photos.schemas import (
     DownloadUrl,
@@ -22,6 +23,7 @@ from app.modules.photos.schemas import (
     PresignRequest,
     PresignResponse,
 )
+from app.modules.works.models import Work
 
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _KEY = re.compile(rf"project/{_UUID}/fact/{_UUID}/{_UUID}\.(?:jpg|png|heic|webp)")
@@ -152,13 +154,44 @@ async def list_photos(
     session: AsyncSession,
     project_id: uuid.UUID,
     *,
-    actual_id: uuid.UUID | None,
+    actual_ids: list[uuid.UUID] | None,
+    node_id: uuid.UUID | None = None,
+    subtree: bool = False,
+    newest_first: bool = False,
+    limit: int = 500,
+    offset: int = 0,
     with_urls: bool,
 ) -> list[PhotoOut]:
-    statement = select(*_COLUMNS, WorkPhoto.s3_key).where(WorkPhoto.project_id == project_id)
-    if actual_id is not None:
-        statement = statement.where(WorkPhoto.work_actual_id == actual_id)
-    rows = await session.execute(statement.order_by(WorkPhoto.created_at, WorkPhoto.id).limit(500))
+    """Фото объекта: по факту (одному или нескольким), по узлу или поддереву; страницами."""
+    statement = (
+        select(
+            *_COLUMNS,
+            WorkPhoto.s3_key,
+            User.full_name.label("uploaded_by_name"),
+            WorkActual.node_id,
+            Work.name.label("work_name"),
+            WorkActual.work_date,
+        )
+        .join(WorkActual, WorkActual.id == WorkPhoto.work_actual_id)
+        .outerjoin(Work, Work.id == WorkActual.work_id)
+        .outerjoin(User, User.id == WorkPhoto.uploaded_by)
+        .where(WorkPhoto.project_id == project_id)
+    )
+    if actual_ids:
+        statement = statement.where(WorkPhoto.work_actual_id.in_(actual_ids))
+    if node_id is not None:
+        if subtree:
+            statement = statement.join(ProjectNode, ProjectNode.id == WorkActual.node_id).where(
+                ProjectNode.path.contains([node_id])
+            )
+        else:
+            statement = statement.where(WorkActual.node_id == node_id)
+    order = (
+        (WorkPhoto.created_at.desc(), WorkPhoto.id.desc())
+        if newest_first
+        else (WorkPhoto.created_at, WorkPhoto.id)
+    )
+    rows = await session.execute(statement.order_by(*order).limit(limit).offset(offset))
     ttl = get_settings().photo_download_ttl_seconds
     return [
         _out(
