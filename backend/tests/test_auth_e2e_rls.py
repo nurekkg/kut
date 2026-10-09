@@ -31,6 +31,23 @@ def live_projects(engine: Engine) -> set[UUID]:
         return set(connection.scalars(text("SELECT id FROM project WHERE deleted_at IS NULL")))
 
 
+PROJECT_BASE_FIELDS = {"id", "name", "status", "legal_entity_id"}
+PROJECT_FIELDS = PROJECT_BASE_FIELDS | {
+    "lifecycle_stage",
+    "planned_start",
+    "planned_end",
+    "planned_budget",
+    "budget_currency",
+    "customer_id",
+    "customer_name",
+    "address",
+    "latitude",
+    "longitude",
+    "warranty_until",
+    "node_count",
+}
+
+
 @pytest.mark.parametrize(
     ("who", "visible"),
     [
@@ -53,7 +70,11 @@ async def test_scoped_roles_list_only_their_own_projects(
 
     assert response.status_code == 200
     assert project_ids(response.json()) == {auth_world.projects[name] for name in visible}
-    assert set(response.json()[0]) == {"id", "name", "status", "legal_entity_id"}
+    body = response.json()[0]
+    assert set(body) == PROJECT_FIELDS
+    assert not {"created_by", "updated_by", "deleted_at"} & set(body)
+    if who in {"customer", "sub_a", "sub_b"}:  # колонки бюджета, заказчика, гарантии закрыты пулу
+        assert all(body[field] is None for field in PROJECT_FIELDS - PROJECT_BASE_FIELDS)
 
 
 @pytest.mark.parametrize("who", ["owner", "finance", "techdir"])

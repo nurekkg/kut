@@ -13,6 +13,7 @@ class Module(StrEnum):
     FINANCE = "finance"
     REPORTS = "reports"
     SETTINGS = "settings"
+    WORKS = "works"
 
 
 class Action(StrEnum):

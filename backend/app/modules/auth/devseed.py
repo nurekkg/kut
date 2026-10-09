@@ -16,6 +16,7 @@ from sqlalchemy import Connection, create_engine, text
 from app.core.config import get_settings
 from app.modules.auth.crypto import encrypt_totp_secret
 from app.modules.auth.security import MIN_PASSWORD_LENGTH, hash_password
+from app.modules.objects.devseed import ensure_project_card, ensure_tree, ensure_works
 
 EAST = "ЖК «Восток» (dev)"
 WEST = "ЖК «Запад» (dev)"
@@ -77,8 +78,9 @@ USERS = (
 class SeedReport:
     created: dict[str, int] = field(default_factory=dict)
 
-    def add(self, table: str) -> None:
-        self.created[table] = self.created.get(table, 0) + 1
+    def add(self, table: str, count: int = 1) -> None:
+        if count:
+            self.created[table] = self.created.get(table, 0) + count
 
     @property
     def changed(self) -> bool:
@@ -222,6 +224,7 @@ def seed(
     password_hash: str,
     totp_secret: str | None,
     totp_roles: frozenset[str] = TOTP_ROLES,
+    tree: bool = True,
 ) -> SeedReport:
     report = SeedReport()
     roles = {
@@ -242,8 +245,13 @@ def seed(
         name: _ensure_project(connection, report, name, legal_entities[entity])
         for name, entity in PROJECTS
     }
+    for key, name in (("east", EAST), ("west", WEST)):
+        if ensure_project_card(connection, projects[name], key, counterparties):
+            report.add("project_card")
+    report.add("work", ensure_works(connection))
+    user_ids: dict[str, Any] = {}
     for user in USERS:
-        user_id = _ensure_user(
+        user_id = user_ids[user.login] = _ensure_user(
             connection,
             report,
             user,
@@ -266,6 +274,17 @@ def seed(
                 user_id,
                 legal_entities[entity],
             )
+    if tree:
+        report.add(
+            "project_node",
+            ensure_tree(
+                connection,
+                projects[EAST],
+                legal_entities[LE_EAST],
+                foreman_id=user_ids["foreman"],
+                master_id=user_ids["master"],
+            ),
+        )
     return report
 
 

@@ -76,6 +76,25 @@ EXTRA_GRANTS = {
     ("owner", "settings", "read", None),
     ("owner", "settings", "write", None),
     ("owner", "settings", "admin", None),
+    # Справочник видов работ (S2): пишут владелец, техдир и ПТО, читают все внутренние роли.
+    *{
+        (role, "works", "read", None)
+        for role in (
+            "owner",
+            "finance_director",
+            "technical_director",
+            "foreman",
+            "master",
+            "estimator",
+            "procurement",
+            "storekeeper",
+            "accountant",
+            "lawyer",
+        )
+    },
+    ("owner", "works", "write", None),
+    ("technical_director", "works", "write", None),
+    ("estimator", "works", "write", None),
 }
 
 
