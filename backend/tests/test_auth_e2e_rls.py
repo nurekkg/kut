@@ -45,7 +45,10 @@ PROJECT_FIELDS = PROJECT_BASE_FIELDS | {
     "longitude",
     "warranty_until",
     "node_count",
+    "finance_visible",
 }
+# finance_visible - признак, а не данные: всегда булево (у внешних и без finance:read - ложь).
+PROJECT_DATA_FIELDS = PROJECT_FIELDS - PROJECT_BASE_FIELDS - {"finance_visible"}
 
 
 @pytest.mark.parametrize(
@@ -74,7 +77,8 @@ async def test_scoped_roles_list_only_their_own_projects(
     assert set(body) == PROJECT_FIELDS
     assert not {"created_by", "updated_by", "deleted_at"} & set(body)
     if who in {"customer", "sub_a", "sub_b"}:  # колонки бюджета, заказчика, гарантии закрыты пулу
-        assert all(body[field] is None for field in PROJECT_FIELDS - PROJECT_BASE_FIELDS)
+        assert all(body[field] is None for field in PROJECT_DATA_FIELDS)
+        assert body["finance_visible"] is False
 
 
 @pytest.mark.parametrize("who", ["owner", "finance", "techdir"])

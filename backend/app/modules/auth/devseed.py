@@ -17,6 +17,8 @@ from app.core.config import get_settings
 from app.modules.auth.crypto import encrypt_totp_secret
 from app.modules.auth.security import MIN_PASSWORD_LENGTH, hash_password
 from app.modules.objects.devseed import ensure_project_card, ensure_tree, ensure_works
+from app.modules.photos.devseed import ensure_photos
+from app.modules.schedule.devseed import ensure_schedule
 
 EAST = "ЖК «Восток» (dev)"
 WEST = "ЖК «Запад» (dev)"
@@ -225,6 +227,7 @@ def seed(
     totp_secret: str | None,
     totp_roles: frozenset[str] = TOTP_ROLES,
     tree: bool = True,
+    schedule: bool = True,
 ) -> SeedReport:
     report = SeedReport()
     roles = {
@@ -285,7 +288,32 @@ def seed(
                 master_id=user_ids["master"],
             ),
         )
+    if tree and schedule:
+        plan = ensure_schedule(
+            connection,
+            projects[EAST],
+            legal_entities[LE_EAST],
+            foreman_id=user_ids["foreman"],
+            master_id=user_ids["master"],
+        )
+        report.add("schedule_item", plan.items)
+        report.add("schedule_dependency", plan.dependencies)
+        report.add("work_actual", plan.actuals)
     return report
+
+
+def seed_media(connection: Connection, report: SeedReport) -> None:
+    """Фото факта: файлы идут в S3, поэтому отдельно от основного сида (тестам S3 не нужен)."""
+    project = _find(
+        connection, "SELECT id FROM project WHERE name = :name AND deleted_at IS NULL", name=EAST
+    )
+    entity = _find(
+        connection,
+        "SELECT legal_entity_id FROM project WHERE id = :id",
+        id=project,
+    )
+    if project is not None:
+        report.add("work_photo", ensure_photos(connection, project, entity))
 
 
 def main() -> int:
@@ -304,6 +332,7 @@ def main() -> int:
     engine = create_engine(settings.database_url.get_secret_value())
     with engine.begin() as connection:
         report = seed(connection, password_hash=hash_password(password), totp_secret=totp_secret)
+        seed_media(connection, report)
     engine.dispose()
     print(f"dev seed: created {report.created}" if report.changed else "dev seed: nothing to do")
     return 0

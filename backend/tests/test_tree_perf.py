@@ -5,6 +5,7 @@
 тест страхует от порядкового провала, а не измеряет железо.
 """
 
+import gzip
 import math
 import statistics
 import time
@@ -16,6 +17,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.core.config import get_settings
 from app.core.context import use_context
 from app.core.db import get_sessionmaker
 from app.modules.projects import service
@@ -154,3 +156,177 @@ async def test_the_tree_of_ten_thousand_nodes_loads_within_the_budget(
     print("\n".join(plan))
     assert http_p50 < P50_LIMIT_MS, f"p50={http_p50:.0f} ms"
     assert http_p95 < P95_LIMIT_MS, f"p95={http_p95:.0f} ms"
+
+
+# --- S3a: gzip ответа дерева -------------------------------------------------------------------
+
+
+async def test_gzip_shrinks_the_tree_of_ten_thousand_nodes_and_the_body_is_unchanged(
+    api: AsyncClient, big_project: UUID
+) -> None:
+    """Размер на проводе и время ответа без сжатия и со сжатием (уровень из настроек), плюс цена
+    сжатия того же тела на уровнях 1, 5, 6 и 9 (по ней выбирается gzip_compresslevel)."""
+    token = await token_for(api, "foreman")
+    url = f"/api/v1/projects/{big_project}/tree"
+    plain_headers = {**bearer(token), "Accept-Encoding": "identity"}
+    gzip_headers = {**bearer(token), "Accept-Encoding": "gzip"}
+
+    plain = await api.get(url, headers=plain_headers)
+    zipped = await api.get(url, headers=gzip_headers)
+    assert plain.status_code == zipped.status_code == 200
+    assert "content-encoding" not in plain.headers
+    assert (
+        zipped.headers["content-encoding"] == "gzip" and "Accept-Encoding" in zipped.headers["vary"]
+    )
+    assert zipped.content == plain.content  # после распаковки тело то же
+    plain_bytes, zipped_bytes = plain.num_bytes_downloaded, zipped.num_bytes_downloaded
+    assert plain_bytes == len(plain.content) and zipped_bytes < plain_bytes / 5
+
+    timings: dict[str, list[float]] = {"identity": [], "gzip": []}
+    for _ in range(RUNS):
+        for name, headers in (("identity", plain_headers), ("gzip", gzip_headers)):
+            started = time.perf_counter()
+            response = await api.get(url, headers=headers)
+            timings[name].append(time.perf_counter() - started)
+            assert response.status_code == 200
+
+    print(f"\nGZIP nodes={EXPECTED} compresslevel={get_settings().gzip_compresslevel}")
+    print(
+        f"GZIP wire bytes: identity={plain_bytes} gzip={zipped_bytes}"
+        f" ratio={plain_bytes / zipped_bytes:.1f}x"
+        f" saved={(1 - zipped_bytes / plain_bytes) * 100:.1f}%"
+    )
+    for name, values in timings.items():
+        p50, p95, top = percentiles(values)
+        print(f"GZIP GET /tree {name:8} p50={p50:.0f} ms p95={p95:.0f} ms max={top:.0f} ms")
+    for level in (1, 5, 6, 9):
+        started = time.perf_counter()
+        for _ in range(5):
+            size = len(gzip.compress(plain.content, compresslevel=level))
+        print(
+            f"GZIP compress level={level} size={size}"
+            f" cpu={(time.perf_counter() - started) / 5 * 1000:.0f} ms"
+        )
+
+
+async def test_small_responses_are_not_compressed_and_large_ones_are(client: AsyncClient) -> None:
+    small = await client.get("/health", headers={"Accept-Encoding": "gzip"})
+    large = await client.get("/openapi.json", headers={"Accept-Encoding": "gzip"})
+
+    assert small.status_code == large.status_code == 200
+    assert len(small.content) < get_settings().gzip_minimum_bytes
+    assert "content-encoding" not in small.headers
+    assert large.headers["content-encoding"] == "gzip"
+    assert large.json()["info"]["title"] == "Kut ERP API"
+
+
+# --- S3a: готовность на 10 000 узлов -----------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+async def planned_project(big_project: UUID, worker_engine: AsyncEngine) -> AsyncIterator[UUID]:
+    """Те же 10 665 узлов; на каждом этаже (960) по 5 работ ГПР и по подтверждённому факту."""
+    async with worker_engine.begin() as connection:
+        entity = await connection.scalar(
+            text("SELECT legal_entity_id FROM project WHERE id = :p"), {"p": big_project}
+        )
+        author = await connection.scalar(
+            text("SELECT id FROM \"user\" WHERE email = 'foreman@kut.test'")
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO work (code, name, unit, category)"
+                " SELECT 'PERF-' || g, 'Работа PERF ' || g, 'м3', 'PERF'"
+                " FROM generate_series(1, 5) g ON CONFLICT DO NOTHING"
+            )
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO schedule_item (project_id, legal_entity_id, node_id, work_id,"
+                " plan_start, plan_end, plan_volume)"
+                " SELECT :p, :le, floor.id, w.id, DATE '2026-06-01' + (w.n - 1)::int * 5,"
+                " DATE '2026-06-01' + w.n::int * 5 - 1, 100"
+                " FROM project_node floor CROSS JOIN ("
+                "   SELECT id, row_number() OVER (ORDER BY code) AS n FROM work"
+                "   WHERE code LIKE 'PERF-%'"
+                " ) w WHERE floor.project_id = :p AND floor.type = 'floor'"
+                " AND floor.deleted_at IS NULL"
+            ),
+            {"p": big_project, "le": entity},
+        )
+        await connection.execute(
+            text(
+                "INSERT INTO work_actual (project_id, legal_entity_id, node_id, work_id,"
+                " schedule_item_id, volume, work_date, author_id, status, approved_by, approved_at)"
+                " SELECT :p, :le, item.node_id, item.work_id, item.id, 60, DATE '2026-06-10', :u,"
+                " 'approved', :u, now() FROM schedule_item item WHERE item.project_id = :p"
+            ),
+            {"p": big_project, "le": entity, "u": author},
+        )
+        await connection.execute(text("ANALYZE schedule_item"))
+        await connection.execute(text("ANALYZE work_actual"))
+    yield big_project
+    async with worker_engine.begin() as connection:
+        for statement in (
+            "UPDATE work_actual SET deleted_at = now() WHERE project_id = :p"
+            " AND deleted_at IS NULL",
+            "UPDATE schedule_item SET deleted_at = now() WHERE project_id = :p"
+            " AND deleted_at IS NULL",
+        ):
+            await connection.execute(text(statement), {"p": big_project})
+        await connection.execute(
+            text(
+                "UPDATE work SET deleted_at = now() WHERE code LIKE 'PERF-%' AND deleted_at IS NULL"
+            )
+        )
+
+
+async def test_readiness_of_an_object_of_ten_thousand_nodes_is_fast_enough_without_a_cache(
+    api: AsyncClient, planned_project: UUID, auth_world: AuthWorld
+) -> None:
+    token = await token_for(api, "foreman")
+    whole = f"/api/v1/projects/{planned_project}/readiness"
+    first_stage = (
+        await api.get(f"/api/v1/projects/{planned_project}/tree", headers=bearer(token))
+    ).json()
+    stage = next(node for node in first_stage if node["type"] == "stage")["id"]
+    one = f"/api/v1/projects/{planned_project}/nodes/{stage}/readiness"
+
+    results: dict[str, list[float]] = {"object": [], "stage": []}
+    sizes: dict[str, int] = {}
+    for _ in range(RUNS):
+        for name, path in (("object", whole), ("stage", one)):
+            started = time.perf_counter()
+            response = await api.get(path, headers=bearer(token))
+            results[name].append(time.perf_counter() - started)
+            assert response.status_code == 200, response.text
+            sizes[name] = response.num_bytes_downloaded
+    body = (await api.get(whole, headers=bearer(token))).json()
+    assert body["project"]["items"] == 960 * 5 and len(body["nodes"]) == 5 + 20 + 80 + 960
+    assert body["project"]["percent"] == "60.00"  # 60 из 100 на каждой работе
+
+    context = internal(auth_world.users["foreman"], projects=[planned_project])
+    with use_context(context):
+        async with get_sessionmaker()() as session:
+            plan = list(
+                await session.scalars(
+                    text(
+                        "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM app.project_readiness("
+                        ":p, DATE '2026-07-01', NULL)"
+                    ),
+                    {"p": planned_project},
+                )
+            )
+
+    print(f"\nREADINESS nodes={EXPECTED} items={960 * 5} facts={960 * 5} runs={RUNS}")
+    for name, values in results.items():
+        p50, p95, top = percentiles(values)
+        print(
+            f"READINESS GET {name:6} bytes={sizes[name]} p50={p50:.0f} ms p95={p95:.0f} ms"
+            f" max={top:.0f} ms"
+        )
+        print(f"READINESS {name} timings ms:", " ".join(f"{value * 1000:.0f}" for value in values))
+    print("READINESS EXPLAIN (ANALYZE, BUFFERS) of app.project_readiness for the whole object:")
+    print("\n".join(plan))
+    assert percentiles(results["object"])[0] < P50_LIMIT_MS
+    assert percentiles(results["stage"])[0] < P50_LIMIT_MS

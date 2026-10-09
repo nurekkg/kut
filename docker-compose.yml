@@ -85,9 +85,10 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kut_dev_access}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-kut_dev_secret_key}
       S3_BUCKET: ${S3_BUCKET:-kut-files}
+      S3_TEST_BUCKET: ${S3_TEST_BUCKET:-kut-files-test}
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" && mc mb --ignore-existing "local/$$S3_BUCKET"
+      - mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" && mc mb --ignore-existing "local/$$S3_BUCKET" "local/$$S3_TEST_BUCKET"
     restart: "no"
 
   db-bootstrap:
@@ -135,6 +136,8 @@ services:
       <<: [*backend-env, *auth-env]
       DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
       DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      # Ссылки на загрузку и скачивание фото подписываются адресом, доступным браузеру (не minio:9000).
+      S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_PORT:-9000}
       WATCHFILES_FORCE_POLLING: "true"
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
@@ -230,6 +233,7 @@ services:
     environment:
       <<: [*backend-env, *auth-env]
       APP_ENV: test
+      S3_BUCKET: ${S3_TEST_BUCKET:-kut-files-test}  # тесты фото пишут в свой бакет, не в dev-бакет
       DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
       DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:${KUT_PORTAL_PASSWORD:-kut_portal_dev_password}@postgres:5432/${POSTGRES_DB:-kut}_test
       REDIS_URL: redis://redis:6379/15  # отдельная БД Redis: тесты сбрасывают её целиком

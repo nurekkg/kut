@@ -14,6 +14,7 @@ from app.modules.identity.models import User
 from app.modules.org.models import Counterparty, LegalEntity
 from app.modules.projects import service
 from app.modules.projects.schemas import (
+    FINANCE_FIELDS,
     NodeCreate,
     NodeDetail,
     NodeMove,
@@ -60,6 +61,17 @@ Admin = Annotated[Principal, Depends(require_project_admin())]
 ProjectAdmin = Annotated[Principal, Depends(require_project_admin("project_id"))]
 
 
+def finance_visible(principal: Principal) -> bool:
+    """Бюджет, заказчик, адрес и гарантия объекта - внутренним ролям с правом finance:read."""
+    return principal.is_internal and principal.has(Module.FINANCE, Action.READ)
+
+
+def _require_finance_for(fields: set[str], principal: Principal) -> None:
+    """Писать коммерческие поля карточки нельзя, не имея права их читать."""
+    if fields & set(FINANCE_FIELDS) and not finance_visible(principal):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+
+
 async def _create(
     request: Request,
     session: AsyncSession,
@@ -84,20 +96,26 @@ async def _create(
 @router.get("/projects", response_model=list[ProjectOut])
 async def list_projects(session: Db, principal: Reader) -> list[ProjectOut]:
     """Объекты, видимые пользователю: фильтр делает RLS, а не код запроса."""
-    return await service.list_projects(session, internal=principal.is_internal)
+    return await service.list_projects(
+        session, internal=principal.is_internal, finance=finance_visible(principal)
+    )
 
 
 @router.post("/projects", status_code=status.HTTP_201_CREATED, response_model=ProjectOut)
 async def create_project(
     body: ProjectCreate, request: Request, key: IdempotencyKeyHeader, principal: Admin, session: Db
 ) -> Response:
+    given = {field for field in FINANCE_FIELDS if getattr(body, field) is not None}
+    _require_finance_for(given, principal)
     reply = await _create(
         request,
         session,
         principal,
         key,
         body,
-        lambda: service.create_project(session, body, principal.legal_entity_ids),
+        lambda: service.create_project(
+            session, body, principal.legal_entity_ids, finance=finance_visible(principal)
+        ),
     )
     # Новый объект сразу виден всем ролям scope=group, а не через минуту кэша прав.
     await principal_store.bump_scope()
@@ -106,14 +124,19 @@ async def create_project(
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
 async def get_project(project_id: uuid.UUID, session: Db, principal: ProjectReader) -> ProjectOut:
-    return await service.get_project(session, project_id, internal=principal.is_internal)
+    return await service.get_project(
+        session, project_id, internal=principal.is_internal, finance=finance_visible(principal)
+    )
 
 
 @router.patch("/projects/{project_id}", response_model=ProjectOut)
 async def update_project(
-    project_id: uuid.UUID, body: ProjectPatch, session: Db, _principal: ProjectAdmin
+    project_id: uuid.UUID, body: ProjectPatch, session: Db, principal: ProjectAdmin
 ) -> ProjectOut:
-    return await service.update_project(session, project_id, body)
+    _require_finance_for(set(body.model_fields_set), principal)
+    return await service.update_project(
+        session, project_id, body, finance=finance_visible(principal)
+    )
 
 
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

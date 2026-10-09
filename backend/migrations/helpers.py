@@ -8,6 +8,7 @@ create_audit_triggers(); тесты покрытия (tests/test_rls_coverage.py
 import re
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
 
 APP_LOGINS = ("kut_app", "kut_portal", "kut_worker")
@@ -19,6 +20,33 @@ def _ident(name: str) -> str:
     if not _IDENTIFIER.match(name):
         raise ValueError(f"unsafe SQL identifier: {name!r}")
     return f'"{name}"'
+
+
+def business_table(name: str, *items: sa.schema.SchemaItem) -> None:
+    """Таблица с общими колонками BusinessBase: id, created_at/by, updated_at/by, deleted_at."""
+    op.create_table(
+        name,
+        sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("created_by", sa.Uuid(), nullable=True),
+        sa.Column("updated_by", sa.Uuid(), nullable=True),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        *items,
+        sa.PrimaryKeyConstraint("id", name=op.f(f"pk_{name}")),
+    )
+    for column in ("created_by", "updated_by"):
+        op.create_foreign_key(op.f(f"fk_{name}_{column}_user"), name, "user", [column], ["id"])
 
 
 def force_rls(table: str) -> None:

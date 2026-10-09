@@ -179,10 +179,18 @@ async def test_every_write_to_nodes_or_works_through_the_portal_pool_is_refused(
 
 
 async def test_the_portal_pool_cannot_read_the_works_catalog(world: World) -> None:
+    """С S3a портал видит названия работ, которые встречаются в ГПР его объектов (иначе график
+    без названий), и только выданные колонки; остального каталога для него нет."""
     with use_context(world.customer_ctx()):
         async with get_portal_sessionmaker()() as session:
+            # Колонка без права (created_by) закрыта, как и раньше.
             with pytest.raises(ProgrammingError, match="permission denied"):
-                await session.execute(text("SELECT id FROM work"))
+                await session.execute(text("SELECT created_by FROM work"))
+            await session.rollback()
+            # Выданные колонки: строки есть только у видов работ из ГПР своего объекта; в мире
+            # этого теста ГПР нет, значит каталог для заказчика пуст.
+            rows = await session.execute(text("SELECT id, code, name, unit, category FROM work"))
+            assert rows.all() == []
 
 
 # --- запись внутренних пользователей ------------------------------------------------------------

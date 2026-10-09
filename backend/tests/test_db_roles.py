@@ -171,6 +171,24 @@ PORTAL_COLUMNS = {
         "planned_end",
         "polygon",
     },
+    # S3a: ГПР и подтверждённый факт своего объекта - без ответственного, автора, геометок и
+    # служебных created_by/updated_by; справочник работ - только колонки названия и единицы (строки
+    # политика открывает ровно для видов работ из ГПР своих объектов).
+    "schedule_item": BASE_COLUMNS
+    | {"project_id", "node_id", "work_id", "plan_start", "plan_end", "plan_volume", "weight"},
+    "schedule_dependency": BASE_COLUMNS | {"project_id", "predecessor_id", "successor_id"},
+    "work_actual": BASE_COLUMNS
+    | {
+        "project_id",
+        "node_id",
+        "work_id",
+        "schedule_item_id",
+        "volume",
+        "work_date",
+        "status",
+        "approved_at",
+    },
+    "work": BASE_COLUMNS | {"code", "name", "unit", "category"},
 }
 
 

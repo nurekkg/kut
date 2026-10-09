@@ -71,6 +71,9 @@ _NODE_TYPES = ", ".join(f"'{kind.value}'" for kind in NodeType)
 
 
 class Project(BusinessBase):
+    """Объект. Бюджет, заказчик, адрес и гарантия лежат в ProjectFinance: их видят только роли с
+    правом finance:read (решение PO по S2), и граница стоит в БД, а не только в API."""
+
     __tablename__ = "project"
 
     legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
@@ -82,6 +85,31 @@ class Project(BusinessBase):
     )
     planned_start: Mapped[date | None] = mapped_column(Date, default=None)
     planned_end: Mapped[date | None] = mapped_column(Date, default=None)
+
+    __table_args__ = (
+        # Цель составного FK потомков (project_id, legal_entity_id), ADR-001 §5.2.
+        UniqueConstraint("id", "legal_entity_id", name="uq_project_id_legal_entity_id"),
+        CheckConstraint(f"status IN ({_STATUSES})", name="status_valid"),
+        CheckConstraint(f"lifecycle_stage IN ({_STAGES})", name="lifecycle_stage_valid"),
+        CheckConstraint(
+            "planned_end IS NULL OR planned_start IS NULL OR planned_end >= planned_start",
+            name="planned_dates_ordered",
+        ),
+    )
+
+
+class ProjectFinance(BusinessBase):
+    """Коммерческая часть карточки объекта: бюджет, заказчик, адрес, координаты, гарантия.
+
+    Строки видят роли с правом finance:read (политика RLS по app.has_permission), правят владелец и
+    технический директор. Внешнему пулу kut_portal таблица закрыта целиком. Строка появляется при
+    первой записи этих полей; нет строки - все поля пусты.
+    """
+
+    __tablename__ = "project_finance"
+
+    project_id: Mapped[uuid.UUID]
+    legal_entity_id: Mapped[uuid.UUID] = mapped_column(index=True)
     planned_budget: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), default=None)
     budget_currency: Mapped[str] = mapped_column(default=CURRENCY, server_default=CURRENCY)
     customer_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -94,14 +122,12 @@ class Project(BusinessBase):
     warranty_until: Mapped[date | None] = mapped_column(Date, default=None)
 
     __table_args__ = (
-        # Цель составного FK потомков (project_id, legal_entity_id), ADR-001 §5.2.
-        UniqueConstraint("id", "legal_entity_id", name="uq_project_id_legal_entity_id"),
-        CheckConstraint(f"status IN ({_STATUSES})", name="status_valid"),
-        CheckConstraint(f"lifecycle_stage IN ({_STAGES})", name="lifecycle_stage_valid"),
-        CheckConstraint(
-            "planned_end IS NULL OR planned_start IS NULL OR planned_end >= planned_start",
-            name="planned_dates_ordered",
+        ForeignKeyConstraint(
+            ["project_id", "legal_entity_id"],
+            ["project.id", "project.legal_entity_id"],
+            name="fk_project_finance_project_id_project",
         ),
+        UniqueConstraint("project_id", name="uq_project_finance_project_id"),
         CheckConstraint(
             "planned_budget IS NULL OR planned_budget >= 0", name="budget_not_negative"
         ),

@@ -21,12 +21,40 @@ AUDITED_TABLES = (
     "user_legal_entity_access",
     "project_node",
     "work",
+    "project_finance",
+    "schedule_item",
+    "schedule_dependency",
+    "work_actual",
+    "work_photo",
 )
 # Колонки, которые обязаны быть неизменяемыми (id есть у всех, у project ещё и юрлицо, у узла
-# объект и юрлицо).
+# объект и юрлицо, у таблиц S3a - объект, юрлицо и то, что определяет смысл строки).
 FROZEN = {table: {"id"} for table in AUDITED_TABLES} | {
     "project": {"id", "legal_entity_id"},
     "project_node": {"id", "project_id", "legal_entity_id"},
+    "project_finance": {"id", "project_id", "legal_entity_id"},
+    "schedule_item": {"id", "project_id", "legal_entity_id", "node_id", "work_id"},
+    "schedule_dependency": {
+        "id",
+        "project_id",
+        "legal_entity_id",
+        "predecessor_id",
+        "successor_id",
+    },
+    "work_actual": {"id", "project_id", "legal_entity_id", "author_id"},
+    "work_photo": {
+        "id",
+        "project_id",
+        "legal_entity_id",
+        "work_actual_id",
+        "s3_key",
+        "content_type",
+        "size_bytes",
+        "latitude",
+        "longitude",
+        "taken_at",
+        "uploaded_by",
+    },
 }
 
 

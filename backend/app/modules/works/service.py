@@ -76,13 +76,15 @@ async def update_work(session: AsyncSession, work_id: uuid.UUID, patch: WorkPatc
 
 
 async def delete_work(session: AsyncSession, work_id: uuid.UUID, actor: uuid.UUID) -> None:
-    deleted = await session.scalar(
-        update(Work)
-        .where(Work.id == work_id, Work.deleted_at.is_(None))
-        .values(deleted_at=func.now(), updated_by=actor)
-        .returning(Work.id)
-        .execution_options(synchronize_session=False)
-    )
-    if deleted is None:
-        raise not_found()
-    await session.commit()
+    """Вид работ со строками ГПР или фактом БД не отпускает (409 work_has_dependents)."""
+    async with db_rules(session):
+        deleted = await session.scalar(
+            update(Work)
+            .where(Work.id == work_id, Work.deleted_at.is_(None))
+            .values(deleted_at=func.now(), updated_by=actor)
+            .returning(Work.id)
+            .execution_options(synchronize_session=False)
+        )
+        if deleted is None:
+            raise not_found()
+        await session.commit()

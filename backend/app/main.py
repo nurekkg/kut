@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.api import api_v1_router
 from app.core.config import get_settings
@@ -23,7 +24,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     configure_logging()
     validate_auth_config()
-    docs_enabled = get_settings().docs_enabled
+    settings = get_settings()
+    docs_enabled = settings.docs_enabled
     app = FastAPI(
         title="Kut ERP API",
         version="0.1.0",
@@ -31,6 +33,11 @@ def create_app() -> FastAPI:
         docs_url="/docs" if docs_enabled else None,
         redoc_url="/redoc" if docs_enabled else None,
         openapi_url="/openapi.json" if docs_enabled else None,
+    )
+    app.add_middleware(
+        GZipMiddleware,
+        minimum_size=settings.gzip_minimum_bytes,
+        compresslevel=settings.gzip_compresslevel,
     )
     app.add_middleware(RequestIdMiddleware)
     app.include_router(health_router)

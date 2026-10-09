@@ -11,9 +11,10 @@ from app.core.context import require_context, use_context
 from app.core.rls import apply_context
 from app.core.rules import db_rules
 from app.modules.identity.models import User, UserProjectAccess
-from app.modules.objects.models import Project, ProjectNode
+from app.modules.objects.models import Project, ProjectFinance, ProjectNode
 from app.modules.org.models import Counterparty, LegalEntity
 from app.modules.projects.schemas import (
+    FINANCE_FIELDS,
     NodeCreate,
     NodeDetail,
     NodePatch,
@@ -44,44 +45,69 @@ def _project_select(*, internal: bool) -> Select[Any]:
         .correlate(Project)
         .scalar_subquery()
     )
-    return select(
-        *_PROJECT_PORTAL,
-        Project.lifecycle_stage,
-        Project.planned_start,
-        Project.planned_end,
-        Project.planned_budget,
-        Project.budget_currency,
-        Project.customer_id,
-        Counterparty.name.label("customer_name"),
-        Project.address,
-        Project.latitude,
-        Project.longitude,
-        Project.warranty_until,
-        live_nodes.label("node_count"),
-    ).outerjoin(Counterparty, Counterparty.id == Project.customer_id)
+    # Коммерческие поля читаются из project_finance: у ролей без finance:read политика RLS отдаёт
+    # ноль строк, и внешнее соединение даёт NULL (границу ставит БД, а не этот запрос).
+    return (
+        select(
+            *_PROJECT_PORTAL,
+            Project.lifecycle_stage,
+            Project.planned_start,
+            Project.planned_end,
+            ProjectFinance.planned_budget,
+            ProjectFinance.budget_currency,
+            ProjectFinance.customer_id,
+            Counterparty.name.label("customer_name"),
+            ProjectFinance.address,
+            ProjectFinance.latitude,
+            ProjectFinance.longitude,
+            ProjectFinance.warranty_until,
+            live_nodes.label("node_count"),
+        )
+        .outerjoin(ProjectFinance, ProjectFinance.project_id == Project.id)
+        .outerjoin(Counterparty, Counterparty.id == ProjectFinance.customer_id)
+    )
 
 
-async def list_projects(session: AsyncSession, *, internal: bool) -> list[ProjectOut]:
+def _out(row: Any, *, finance: bool) -> ProjectOut:
+    return ProjectOut.model_validate(row, from_attributes=True).model_copy(
+        update={"finance_visible": finance}
+    )
+
+
+def _split(values: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Поля карточки: свои (project) и коммерческие (project_finance)."""
+    finance = {key: value for key, value in values.items() if key in FINANCE_FIELDS}
+    core = {key: value for key, value in values.items() if key not in FINANCE_FIELDS}
+    return core, finance
+
+
+async def list_projects(
+    session: AsyncSession, *, internal: bool, finance: bool
+) -> list[ProjectOut]:
     """Объекты, видимые пользователю: границу доступа ставит RLS, а не условие запроса."""
     rows = await session.execute(
         _project_select(internal=internal).order_by(Project.name, Project.id)
     )
-    return [ProjectOut.model_validate(row, from_attributes=True) for row in rows]
+    return [_out(row, finance=finance) for row in rows]
 
 
 async def get_project(
-    session: AsyncSession, project_id: uuid.UUID, *, internal: bool
+    session: AsyncSession, project_id: uuid.UUID, *, internal: bool, finance: bool
 ) -> ProjectOut:
     row = (
         await session.execute(_project_select(internal=internal).where(Project.id == project_id))
     ).one_or_none()
     if row is None:
         raise not_found()
-    return ProjectOut.model_validate(row, from_attributes=True)
+    return _out(row, finance=finance)
 
 
 async def create_project(
-    session: AsyncSession, data: ProjectCreate, legal_entity_ids: frozenset[uuid.UUID]
+    session: AsyncSession,
+    data: ProjectCreate,
+    legal_entity_ids: frozenset[uuid.UUID],
+    *,
+    finance: bool,
 ) -> ProjectOut:
     """Без COMMIT: вызывается внутри идемпотентной транзакции."""
     if data.legal_entity_id not in legal_entity_ids:
@@ -97,23 +123,43 @@ async def create_project(
     # не увидел бы собственную строку (ADR-001, apply_context).
     with use_context(replace(context, project_ids=context.project_ids | {new_id})):
         await apply_context(session)
+    core, commercial = _split(data.model_dump())
     async with db_rules(session):
-        session.add(Project(id=new_id, **data.model_dump()))
+        session.add(Project(id=new_id, **core))
         await session.flush()
-    return await get_project(session, new_id, internal=True)
+        if any(value is not None for value in commercial.values()):
+            session.add(
+                ProjectFinance(
+                    project_id=new_id, legal_entity_id=data.legal_entity_id, **commercial
+                )
+            )
+            await session.flush()
+    return await get_project(session, new_id, internal=True, finance=finance)
 
 
 async def update_project(
-    session: AsyncSession, project_id: uuid.UUID, patch: ProjectPatch
+    session: AsyncSession, project_id: uuid.UUID, patch: ProjectPatch, *, finance: bool
 ) -> ProjectOut:
     project = (await session.scalars(select(Project).where(Project.id == project_id))).one_or_none()
     if project is None:
         raise not_found()
-    for field in patch.model_fields_set:
-        setattr(project, field, getattr(patch, field))
+    core, commercial = _split({field: getattr(patch, field) for field in patch.model_fields_set})
+    for field, value in core.items():
+        setattr(project, field, value)
+    if commercial:
+        row = (
+            await session.scalars(
+                select(ProjectFinance).where(ProjectFinance.project_id == project_id)
+            )
+        ).one_or_none()
+        if row is None:
+            row = ProjectFinance(project_id=project_id, legal_entity_id=project.legal_entity_id)
+            session.add(row)
+        for field, value in commercial.items():
+            setattr(row, field, value)
     async with db_rules(session):
         await session.commit()
-    return await get_project(session, project_id, internal=True)
+    return await get_project(session, project_id, internal=True, finance=finance)
 
 
 async def delete_project(session: AsyncSession, project_id: uuid.UUID, actor: uuid.UUID) -> None:
