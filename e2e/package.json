@@ -1,0 +1,13 @@
+{
+  "name": "kut-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Сквозные проверки интерфейса S3: мастер, прораб, ГПР, права (Playwright)",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}
