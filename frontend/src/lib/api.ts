@@ -1,12 +1,16 @@
 import { apiFetch } from "@/lib/auth/session";
 
-type Query = Record<string, string | number | boolean | null | undefined>;
+type QueryValue = string | number | boolean | null | undefined;
+// Массив повторяет параметр (?id=a&id=b): так сервер принимает несколько значений одного фильтра.
+type Query = Record<string, QueryValue | QueryValue[]>;
 
 function withQuery(path: string, params?: Query): string {
   if (!params) return path;
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") search.set(key, String(value));
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (item !== undefined && item !== null && item !== "") search.append(key, String(item));
+    }
   }
   const text = search.toString();
   return text ? `${path}?${text}` : path;

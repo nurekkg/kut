@@ -57,12 +57,14 @@ export function FormActions({
   pendingLabel,
   onCancel,
   error,
+  disabled = false,
 }: {
   pending: boolean;
   submitLabel: string;
   pendingLabel: string;
   onCancel: () => void;
   error: unknown;
+  disabled?: boolean;
 }) {
   const t = useTranslations("Settings.common");
   return (
@@ -72,7 +74,7 @@ export function FormActions({
         <Button type="button" variant="outline" size="lg" onClick={onCancel}>
           {t("cancel")}
         </Button>
-        <Button type="submit" size="lg" disabled={pending}>
+        <Button type="submit" size="lg" disabled={pending || disabled}>
           <PendingIcon pending={pending} />
           {pending ? pendingLabel : submitLabel}
         </Button>

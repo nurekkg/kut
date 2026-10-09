@@ -5,7 +5,12 @@ import { ArrowDown, ArrowLeft, ArrowUp, FolderTree, Pencil, Plus, Trash2 } from 
 import { useTranslations } from "next-intl";
 import type { ReactNode } from "react";
 
+import { useAuth } from "@/components/auth/auth-provider";
+import { NodeDatesTab } from "@/components/projects/node-dates-tab";
 import { NodeIcon } from "@/components/projects/node-icon";
+import { NodeMediaTab } from "@/components/projects/node-media-tab";
+import { NodeReadinessSummary } from "@/components/projects/node-readiness";
+import { NodeWorksTab } from "@/components/projects/node-works-tab";
 import { QueryState } from "@/components/settings/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +21,9 @@ import { API, nodeKey } from "@/lib/projects/keys";
 import { ancestors, siblingsOf, type TreeIndex } from "@/lib/projects/tree";
 import { allowedChildren, isNodeType, type NodeDetail, type TreeNode } from "@/lib/projects/types";
 
-const STUB_TABS = ["costs", "works", "contractors", "dates", "documents", "media"] as const;
+// Порядок вкладок по ТЗ §8.2. «Расходы», «Подрядчики» и «Документы» остаются заглушками (S5+).
+const TABS = ["costs", "works", "contractors", "dates", "documents", "media"] as const;
+const STUB_TABS: readonly string[] = ["costs", "contractors", "documents"];
 
 export type NodeActions = {
   onBack: () => void;
@@ -50,6 +57,14 @@ export function NodeCard({ projectId, node, index, internal, canWrite, actions }
   const t = useTranslations("NodeCard");
   const types = useTranslations("NodeType");
   const form = useTranslations("NodeForm");
+  const { user } = useAuth();
+  // ГПР и готовность видят роли с gpr:read; фото - только внутренние роли (внешним они не отдаются).
+  const canSeeSchedule = user?.permissions.includes("gpr:read") ?? false;
+  const tabs = TABS.filter((tab) => {
+    if (tab === "works" || tab === "dates") return canSeeSchedule;
+    if (tab === "media") return internal;
+    return true;
+  });
   const parents = ancestors(index, node);
   const siblings = siblingsOf(index, node);
   const position = siblings.findIndex((item) => item.id === node.id);
@@ -153,13 +168,14 @@ export function NodeCard({ projectId, node, index, internal, canWrite, actions }
       <Tabs defaultValue="overview">
         <TabsList aria-label={form("editTitle")}>
           <TabsTrigger value="overview">{t("tabs.overview")}</TabsTrigger>
-          {STUB_TABS.map((tab) => (
+          {tabs.map((tab) => (
             <TabsTrigger key={tab} value={tab}>
               {t(`tabs.${tab}`)}
             </TabsTrigger>
           ))}
         </TabsList>
         <TabsContent value="overview" className="space-y-5 pt-1">
+          {canSeeSchedule ? <NodeReadinessSummary projectId={projectId} nodeId={node.id} /> : null}
           <QueryState loading={internal && detail.isPending} error={detail.error} onRetry={() => void detail.refetch()}>
             <dl className="space-y-3">
               <Row label={t("type")}>{isNodeType(node.type) ? types(node.type) : node.type}</Row>
@@ -204,11 +220,35 @@ export function NodeCard({ projectId, node, index, internal, canWrite, actions }
             )}
           </section>
         </TabsContent>
-        {STUB_TABS.map((tab) => (
-          <TabsContent key={tab} value={tab} className="pt-1">
-            <p className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">{t("stub")}</p>
+        {tabs
+          .filter((tab) => STUB_TABS.includes(tab))
+          .map((tab) => (
+            <TabsContent key={tab} value={tab} className="pt-1">
+              <p className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">
+                {t("stub")}
+              </p>
+            </TabsContent>
+          ))}
+        {canSeeSchedule ? (
+          <>
+            <TabsContent value="works" className="pt-1">
+              <NodeWorksTab projectId={projectId} node={node} index={index} showWeight={internal} />
+            </TabsContent>
+            <TabsContent value="dates" className="pt-1">
+              <NodeDatesTab
+                projectId={projectId}
+                node={node}
+                index={index}
+                onSelect={actions.onSelect}
+              />
+            </TabsContent>
+          </>
+        ) : null}
+        {internal ? (
+          <TabsContent value="media" className="pt-1">
+            <NodeMediaTab projectId={projectId} node={node} index={index} />
           </TabsContent>
-        ))}
+        ) : null}
       </Tabs>
     </article>
   );

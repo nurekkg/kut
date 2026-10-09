@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, CalendarRange, ChevronDown, Pencil, Trash2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -18,7 +18,7 @@ import { ProjectFormModal } from "@/components/projects/project-form-modal";
 import { ConfirmModal } from "@/components/settings/dialogs";
 import { QueryState } from "@/components/settings/shared";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { api } from "@/lib/api";
 import { ApiError } from "@/lib/auth/api";
@@ -50,6 +50,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const internal = user?.is_internal ?? false;
   const canWrite = user?.permissions.includes("objects:write") ?? false;
   const canEditCard = canWrite && user?.scope === "group";
+  const canSeeSchedule = user?.permissions.includes("gpr:read") ?? false;
 
   const project = useQuery({
     queryKey: projectKey(projectId),
@@ -150,18 +151,29 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                     {isStatus(project.data.status) ? projects(`status.${project.data.status}`) : project.data.status}
                   </Badge>
                 </div>
-                {canEditCard ? (
-                  <div className="flex gap-2">
-                    <Button type="button" variant="outline" size="lg" className="h-10" onClick={() => setDialog({ kind: "project-edit" })}>
-                      <Pencil data-icon="inline-start" aria-hidden />
-                      {form("edit")}
-                    </Button>
-                    <Button type="button" variant="destructive" size="lg" className="h-10" onClick={() => { removeProject.reset(); setDialog({ kind: "project-delete" }); }}>
-                      <Trash2 data-icon="inline-start" aria-hidden />
-                      {form("delete")}
-                    </Button>
-                  </div>
-                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  {canSeeSchedule ? (
+                    <Link
+                      href={`/projects/${projectId}/schedule`}
+                      className={buttonVariants({ variant: "outline", size: "lg", className: "h-10" })}
+                    >
+                      <CalendarRange data-icon="inline-start" aria-hidden />
+                      {t("schedule")}
+                    </Link>
+                  ) : null}
+                  {canEditCard ? (
+                    <>
+                      <Button type="button" variant="outline" size="lg" className="h-10" onClick={() => setDialog({ kind: "project-edit" })}>
+                        <Pencil data-icon="inline-start" aria-hidden />
+                        {form("edit")}
+                      </Button>
+                      <Button type="button" variant="destructive" size="lg" className="h-10" onClick={() => { removeProject.reset(); setDialog({ kind: "project-delete" }); }}>
+                        <Trash2 data-icon="inline-start" aria-hidden />
+                        {form("delete")}
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
               </div>
             </header>
 
