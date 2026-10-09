@@ -8,6 +8,9 @@ import { defineConfig } from "@playwright/test";
 // E2E_CHANNEL - на установленный в системе браузер ("chrome", "msedge").
 const executablePath = process.env.E2E_CHROMIUM_PATH || undefined;
 const channel = process.env.E2E_CHANNEL || undefined;
+// Слабая машина (нехватка памяти, медленный диск, PostgreSQL уходит в восстановление на минуты):
+// E2E_SLOW=3 растягивает ожидания втрое.
+const slow = Number(process.env.E2E_SLOW) || 1;
 
 export default defineConfig({
   testDir: "./tests",
@@ -18,8 +21,8 @@ export default defineConfig({
   // Сценарии заводят свои данные, поэтому повтор безопасен; он страхует от сбоев слабой машины
   // (PostgreSQL иногда уходит в восстановление на десяток секунд посреди прогона).
   retries: 2,
-  timeout: 180_000,
-  expect: { timeout: 20_000 },
+  timeout: 180_000 * slow,
+  expect: { timeout: 20_000 * slow },
   reporter: [["list"], ["html", { open: "never", outputFolder: "./artifacts/report" }]],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3100",

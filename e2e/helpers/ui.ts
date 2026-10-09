@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { DESKTOP, GEO, PASSWORD, PHONE, SCREENS } from "./env";
+import { waitForStack } from "./health";
 
 // Ошибки страницы и консоли браузера (в том числе «нет текста» next-intl и сбои гидратации):
 // сценарии без заведомых отказов сервера в конце проверяют, что список пуст.
@@ -22,11 +23,28 @@ export function watchErrors(page: Page): string[] {
 
 // Форма входа на открытой странице входа: страница не перезагружается, поэтому состояние приложения
 // (сессия, очередь отправки) переживает смену человека на устройстве, как на общем телефоне.
+// Если сервер ответил сбоем (PostgreSQL на слабой машине иногда уходит в восстановление), вход
+// повторяется после того, как стек снова готов, а не висит до конца времени сценария.
 export async function signInHere(page: Page, user: string): Promise<void> {
-  await page.locator("#identifier").fill(`${user}@kut.test`);
-  await page.locator("#password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Войти" }).click();
-  await page.waitForURL(/\/projects/);
+  for (let attempt = 1; ; attempt += 1) {
+    await page.locator("#identifier").fill(`${user}@kut.test`);
+    await page.locator("#password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Войти" }).click();
+    const signedIn = page
+      .waitForURL(/\/projects/, { timeout: 40_000 })
+      .then(() => "ok" as const)
+      .catch(() => "timeout" as const);
+    const refused = page
+      .getByRole("alert")
+      .filter({ hasText: "Не удалось выполнить действие" })
+      .waitFor({ timeout: 40_000 })
+      .then(() => "refused" as const)
+      .catch(() => "timeout" as const);
+    const outcome = await Promise.race([signedIn, refused]);
+    if (outcome === "ok") return;
+    expect(attempt, `вход ${user}: ${outcome} после ${attempt} попыток`).toBeLessThan(4);
+    await waitForStack(page.request);
+  }
 }
 
 export async function signIn(page: Page, user: string): Promise<void> {

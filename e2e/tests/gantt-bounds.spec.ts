@@ -1,8 +1,31 @@
 import { expect, test } from "../helpers/test";
 
-import { apiLogin, get, post, projectId, remove } from "../helpers/api";
+import { apiLogin, get, post, projectId, remove, type Session } from "../helpers/api";
+import type { APIRequestContext } from "@playwright/test";
 import { WEST, today } from "../helpers/env";
 import { desktopContext, shot, signIn, watchErrors } from "../helpers/ui";
+
+const PREFIX = "E2E Гант";
+
+// Остатки прерванных прогонов (после тайм-аута до `finally` дело не доходит) убираем перед началом:
+// «Запад» должен быть пуст, иначе в графике окажутся чужие строки.
+async function removeLeftovers(
+  request: APIRequestContext,
+  session: Session,
+  base: string,
+): Promise<void> {
+  const tree = await get<{ id: string; name: string }[]>(request, session, `${base}/tree`);
+  const stale = tree.filter((node) => node.name.startsWith(PREFIX));
+  if (stale.length === 0) return;
+  const nodes = new Set(stale.map((node) => node.id));
+  const items = await get<{ id: string; node_id: string }[]>(request, session, `${base}/schedule`, {
+    limit: 10_000,
+  });
+  for (const item of items.filter((row) => nodes.has(row.node_id))) {
+    await remove(request, session, `${base}/schedule/${item.id}`);
+  }
+  for (const node of stale) await remove(request, session, `${base}/nodes/${node.id}`);
+}
 
 // Сервер принимает любые даты ГПР (до 9999-12-31). Одна такая строка не должна растягивать шкалу
 // Ганта на миллионы суток и подвешивать вкладку у всех, кто откроет диаграмму: шкала ограничена
@@ -15,9 +38,10 @@ test("Гант с датой из другого века: шкала огран
   const techdir = await apiLogin(request, "techdir");
   const west = await projectId(request, techdir, WEST);
   const base = `/api/v1/projects/${west}`;
+  await removeLeftovers(request, techdir, base);
   const node = await post<{ id: string }>(request, techdir, `${base}/nodes`, {
     type: "building",
-    name: `E2E Гант ${Date.now()}`,
+    name: `${PREFIX} ${Date.now()}`,
   });
   const works = await get<{ id: string }[]>(request, techdir, "/api/v1/works", { limit: 2 });
   const created: string[] = [];
