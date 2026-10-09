@@ -51,7 +51,11 @@ class ScheduleItem(BusinessBase):
         ),
         UniqueConstraint("project_id", "id", name="uq_schedule_item_project_id_id"),
         UniqueConstraint(
-            "project_id", "id", "node_id", "work_id", name="uq_schedule_item_project_id_id_node_id_work_id"
+            "project_id",
+            "id",
+            "node_id",
+            "work_id",
+            name="uq_schedule_item_project_id_id_node_id_work_id",
         ),
         CheckConstraint("plan_end >= plan_start", name="dates_ordered"),
         CheckConstraint("plan_volume > 0", name="volume_positive"),

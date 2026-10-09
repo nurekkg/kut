@@ -228,11 +228,13 @@ def upgrade() -> None:
         # (project_id, id, node_id, work_id): факт, привязанный к строке ГПР, того же узла и вида работ.
         sa.UniqueConstraint("project_id", "id", name="uq_schedule_item_project_id_id"),
         sa.UniqueConstraint(
-            "project_id", "id", "node_id", "work_id", name="uq_schedule_item_project_id_id_node_id_work_id"
+            "project_id",
+            "id",
+            "node_id",
+            "work_id",
+            name="uq_schedule_item_project_id_id_node_id_work_id",
         ),
-        sa.CheckConstraint(
-            "plan_end >= plan_start", name=op.f("ck_schedule_item_dates_ordered")
-        ),
+        sa.CheckConstraint("plan_end >= plan_start", name=op.f("ck_schedule_item_dates_ordered")),
         sa.CheckConstraint("plan_volume > 0", name=op.f("ck_schedule_item_volume_positive")),
         sa.CheckConstraint(
             "weight IS NULL OR weight > 0", name=op.f("ck_schedule_item_weight_positive")
@@ -245,7 +247,9 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("deleted_at IS NULL"),
     )
-    op.create_index("ix_schedule_item_project_id_node_id", "schedule_item", ["project_id", "node_id"])
+    op.create_index(
+        "ix_schedule_item_project_id_node_id", "schedule_item", ["project_id", "node_id"]
+    )
     op.create_index("ix_schedule_item_work_id", "schedule_item", ["work_id"])
     op.create_index("ix_schedule_item_legal_entity_id", "schedule_item", ["legal_entity_id"])
     op.create_index(

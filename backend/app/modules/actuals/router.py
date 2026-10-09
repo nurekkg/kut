@@ -83,9 +83,7 @@ async def create_actual(
 async def get_actual(
     project_id: uuid.UUID, actual_id: uuid.UUID, session: Db, principal: Reader
 ) -> ActualOut:
-    return await service.get_actual(
-        session, project_id, actual_id, internal=principal.is_internal
-    )
+    return await service.get_actual(session, project_id, actual_id, internal=principal.is_internal)
 
 
 @router.patch("/{actual_id}", response_model=ActualOut)
@@ -96,7 +94,7 @@ async def update_actual(
     session: Db,
     _principal: Writer,
 ) -> ActualOut:
-    """Правка содержания: автор - пока факт черновик или отклонён, согласованный - только техдиректор."""
+    """Правка содержания: автор - пока факт черновик или отклонён; согласованный - техдиректор."""
     return await service.update_actual(session, project_id, actual_id, body)
 
 

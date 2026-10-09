@@ -23,6 +23,11 @@ RLS_TABLES = (
     "user_legal_entity_access",
     "project_node",
     "work",
+    "project_finance",
+    "schedule_item",
+    "schedule_dependency",
+    "work_actual",
+    "work_photo",
 )
 
 
@@ -59,7 +64,17 @@ async def test_an_empty_context_sees_nothing_through_the_application_login(
 
 
 @pytest.mark.parametrize(
-    "table", ["counterparty", "user", "project", "user_project_access", "project_node"]
+    "table",
+    [
+        "counterparty",
+        "user",
+        "project",
+        "user_project_access",
+        "project_node",
+        "schedule_item",
+        "schedule_dependency",
+        "work_actual",
+    ],
 )
 async def test_an_empty_context_sees_nothing_through_the_portal_login(
     world: World, table: str

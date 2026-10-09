@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Sequence
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -110,7 +111,7 @@ def _node(row: Any) -> NodeReadiness | None:
     )
 
 
-def _object_total(rows: list[Any]) -> Aggregate | None:
+def _object_total(rows: Sequence[Any]) -> Aggregate | None:
     """Объект - сумма своих итогов всех узлов (каждая работа считается один раз)."""
 
     def total(column: str) -> Any:
@@ -130,7 +131,7 @@ def _object_total(rows: list[Any]) -> Aggregate | None:
 
 
 async def _as_of(session: AsyncSession, as_of: date | None) -> date:
-    return as_of if as_of is not None else await session.scalar(_TODAY)  # type: ignore[return-value]
+    return as_of if as_of is not None else await session.scalar(_TODAY)
 
 
 async def project_readiness(

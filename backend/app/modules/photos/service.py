@@ -56,9 +56,7 @@ async def _require_may_add(
 ) -> None:
     """Факт виден пользователю (RLS и объект из пути) и ему можно добавлять фото (правило БД)."""
     found = await session.scalar(
-        select(WorkActual.id).where(
-            WorkActual.id == actual_id, WorkActual.project_id == project_id
-        )
+        select(WorkActual.id).where(WorkActual.id == actual_id, WorkActual.project_id == project_id)
     )
     if found is None:
         raise not_found()
@@ -81,7 +79,7 @@ async def presign(
             PresignedUpload(
                 key=key,
                 upload_url=storage.presign_put(key, file.content_type, file.size_bytes, ttl),
-                headers={"Content-Type": file.content_type},
+                headers={"Content-Type": file.content_type, **storage.WRITE_ONCE_HEADERS},
                 expires_in=ttl,
             )
         )

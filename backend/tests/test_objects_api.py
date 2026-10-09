@@ -122,12 +122,13 @@ async def test_internal_roles_get_the_whole_card_and_external_roles_only_the_bas
     assert card["planned_budget"] == "2400000000.00" and card["budget_currency"] == "KGS"
     assert card["customer_name"] == devseed.CUSTOMER
     assert card["address"] and card["latitude"] and card["longitude"]
-    assert card["node_count"] == 1166
+    assert card["node_count"] == 1166 and card["finance_visible"] is True
 
     external = (await call(api, "GET", f"{P}/{east}", await token_for(api, "customer"))).json()
     assert external["name"] == card["name"] and external["status"] == card["status"]
-    hidden = set(card) - {"id", "name", "status", "legal_entity_id"}
+    hidden = set(card) - {"id", "name", "status", "legal_entity_id", "finance_visible"}
     assert all(external[field] is None for field in hidden)
+    assert external["finance_visible"] is False
 
 
 @pytest.mark.parametrize(

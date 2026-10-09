@@ -20,9 +20,7 @@ from app.modules.schedule.schemas import (
 router = APIRouter(prefix="/projects/{project_id}/schedule", tags=["schedule"])
 
 Db = Annotated[AsyncSession, Depends(get_db)]
-Reader = Annotated[
-    Principal, Depends(require(Module.GPR, Action.READ, project_param="project_id"))
-]
+Reader = Annotated[Principal, Depends(require(Module.GPR, Action.READ, project_param="project_id"))]
 Writer = Annotated[
     Principal, Depends(require(Module.GPR, Action.WRITE, project_param="project_id"))
 ]
@@ -30,13 +28,13 @@ Writer = Annotated[
 
 # Зависимости объявлены раньше «/{item_id}»: иначе слово dependencies попало бы в параметр пути.
 @router.get("/dependencies", response_model=list[DependencyOut])
-async def list_dependencies(project_id: uuid.UUID, session: Db, _principal: Reader) -> list[DependencyOut]:
+async def list_dependencies(
+    project_id: uuid.UUID, session: Db, _principal: Reader
+) -> list[DependencyOut]:
     return await service.list_dependencies(session, project_id)
 
 
-@router.post(
-    "/dependencies", status_code=status.HTTP_201_CREATED, response_model=DependencyOut
-)
+@router.post("/dependencies", status_code=status.HTTP_201_CREATED, response_model=DependencyOut)
 async def create_dependency(
     project_id: uuid.UUID,
     body: DependencyCreate,

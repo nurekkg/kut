@@ -95,6 +95,11 @@ EXTRA_GRANTS = {
     ("owner", "works", "write", None),
     ("technical_director", "works", "write", None),
     ("estimator", "works", "write", None),
+    # Факт работ (S3a, решения PO): подтверждают прораб и техдиректор; факт техдиректора создаётся
+    # сразу согласованным, поэтому ему нужна и запись (в §7.3 у него «R»).
+    ("foreman", "work_actual", "approve", None),
+    ("technical_director", "work_actual", "write", None),
+    ("technical_director", "work_actual", "approve", None),
 }
 
 

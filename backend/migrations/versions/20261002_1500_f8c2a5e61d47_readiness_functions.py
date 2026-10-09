@@ -38,38 +38,24 @@ $$
 """
 
 # p_root ограничивает расчёт поддеревом узла (узел и все его потомки); NULL - весь объект.
+#
+# Планы запросов. Политики RLS добавляют к каждой таблице условие project_id = ANY(<InitPlan>),
+# для которого планировщик не знает длину массива и занижает число строк до единиц. Из-за этого
+# на первых вызовах он выбирал вложенный цикл, в котором агрегат фактов (или агрегат по предкам
+# узла) заново считался на каждую строку внешнего набора: 4,6-19 секунд на объекте из 10 665
+# узлов и 4800 работ вместо 0,1 секунды (замер: wiki/arch/s3a-evidence/perf-readiness-10k.txt).
+# Поэтому здесь нет соединений с агрегатом: строки ГПР и подтверждённый факт идут одним
+# запросом UNION ALL, объём факта суммирует оконная функция по строке ГПР, путь узла приходит
+# вместе со строкой. Стоимость линейна и от оценок числа строк не зависит.
 SCHEDULE_PROGRESS = """
 CREATE FUNCTION app.schedule_progress(p_project uuid, p_as_of date, p_root uuid DEFAULT NULL)
 RETURNS TABLE (
     item_id uuid, node_id uuid, work_id uuid, plan_start date, plan_end date,
     plan_volume numeric, weight numeric, confirmed_volume numeric, fraction numeric,
-    planned_fraction numeric, delay_days numeric, state text, overdue_days integer
-) LANGUAGE sql STABLE SET search_path = pg_catalog AS $$
-    WITH scoped AS (
-        SELECT item.id, item.node_id, item.work_id, item.plan_start, item.plan_end,
-               item.plan_volume, item.weight
-        FROM public.schedule_item item
-        JOIN public.project_node n ON n.id = item.node_id
-        WHERE item.project_id = p_project AND item.deleted_at IS NULL
-          AND (p_root IS NULL OR n.path @> ARRAY[p_root])
-    ),
-    fact AS (
-        SELECT a.schedule_item_id, sum(a.volume) AS volume
-        FROM public.work_actual a
-        JOIN scoped ON scoped.id = a.schedule_item_id
-        WHERE a.status = 'approved' AND a.deleted_at IS NULL
-        GROUP BY a.schedule_item_id
-    ),
-    base AS (
-        SELECT s.id, s.node_id, s.work_id, s.plan_start, s.plan_end, s.plan_volume,
-               app.schedule_item_weight(s.id, s.weight, s.plan_start, s.plan_end) AS weight,
-               COALESCE(f.volume, 0) AS confirmed,
-               s.plan_end - s.plan_start + 1 AS days,
-               LEAST(GREATEST(p_as_of - s.plan_start + 1, 0), s.plan_end - s.plan_start + 1)
-                   AS elapsed
-        FROM scoped s LEFT JOIN fact f ON f.schedule_item_id = s.id
-    )
-    SELECT b.id, b.node_id, b.work_id, b.plan_start, b.plan_end, b.plan_volume, b.weight,
+    planned_fraction numeric, delay_days numeric, state text, overdue_days integer,
+    node_path uuid[]
+) LANGUAGE sql STABLE ROWS 5000 SET search_path = pg_catalog AS $$
+    SELECT b.item_id, b.node_id, b.work_id, b.plan_start, b.plan_end, b.plan_volume, b.weight,
            b.confirmed,
            LEAST(b.confirmed / b.plan_volume, 1),
            b.elapsed::numeric / b.days,
@@ -83,14 +69,43 @@ RETURNS TABLE (
                ELSE 'in_progress'
            END,
            CASE WHEN b.confirmed < b.plan_volume AND p_as_of > b.plan_end
-                THEN p_as_of - b.plan_end ELSE 0 END
-    FROM base b
+                THEN p_as_of - b.plan_end ELSE 0 END,
+           b.node_path
+    FROM (
+        SELECT w.item_id, w.node_id, w.work_id, w.plan_start, w.plan_end, w.plan_volume,
+               w.node_path,
+               app.schedule_item_weight(w.item_id, w.weight, w.plan_start, w.plan_end) AS weight,
+               w.confirmed,
+               w.plan_end - w.plan_start + 1 AS days,
+               LEAST(GREATEST(p_as_of - w.plan_start + 1, 0), w.plan_end - w.plan_start + 1)
+                   AS elapsed
+        FROM (
+            SELECT u.*, COALESCE(sum(u.volume) OVER (PARTITION BY u.item_id), 0) AS confirmed
+            FROM (
+                SELECT item.id AS item_id, true AS is_item, item.node_id, item.work_id,
+                       item.plan_start, item.plan_end, item.plan_volume, item.weight,
+                       n.path AS node_path, NULL::numeric AS volume
+                FROM public.schedule_item item
+                JOIN public.project_node n ON n.id = item.node_id
+                WHERE item.project_id = p_project AND item.deleted_at IS NULL
+                  AND (p_root IS NULL OR n.path @> ARRAY[p_root])
+                UNION ALL
+                SELECT a.schedule_item_id, false, NULL::uuid, NULL::uuid, NULL::date, NULL::date,
+                       NULL::numeric, NULL::numeric, NULL::uuid[], a.volume
+                FROM public.work_actual a
+                WHERE a.project_id = p_project AND a.status = 'approved'
+                  AND a.deleted_at IS NULL AND a.schedule_item_id IS NOT NULL
+            ) u
+        ) w
+        WHERE w.is_item
+    ) b
 $$
 """
 
-# Свои итоги узла (own_*) и итоги поддерева (sub_*, узел и его потомки). Поддерево собирается один
-# раз через путь узла: каждый узел с работами вносит свои суммы во все узлы своего пути, поэтому
-# стоимость не растёт с числом узлов (глубина дерева не больше пяти).
+# Свои итоги узла (own_*) и итоги поддерева (sub_*, узел и его потомки) одним проходом: каждая
+# работа вносит свои суммы во все узлы своего пути (глубина дерева не больше пяти), поэтому
+# стоимость растёт с числом работ, а не с числом узлов. Свои итоги пусты (NULL) у узла без работ.
+# Родитель узла берётся из того же пути (предыдущий элемент), отдельного соединения с деревом нет.
 PROJECT_READINESS = """
 CREATE FUNCTION app.project_readiness(p_project uuid, p_as_of date, p_root uuid DEFAULT NULL)
 RETURNS TABLE (
@@ -99,43 +114,45 @@ RETURNS TABLE (
     own_delay numeric, own_overdue integer, own_overdue_no_fact integer, own_completed integer,
     sub_items integer, sub_weight numeric, sub_done numeric, sub_planned numeric,
     sub_delay numeric, sub_overdue integer, sub_overdue_no_fact integer, sub_completed integer
-) LANGUAGE sql STABLE SET search_path = pg_catalog AS $$
-    WITH progress AS (
-        SELECT * FROM app.schedule_progress(p_project, p_as_of, p_root)
-    ),
-    own AS (
-        SELECT pr.node_id, count(*)::integer AS items, sum(pr.weight) AS weight,
-               sum(pr.weight * pr.fraction) AS done,
-               sum(pr.weight * pr.planned_fraction) AS planned,
-               sum(pr.weight * pr.delay_days) AS delay,
+) LANGUAGE sql STABLE ROWS 2000 SET search_path = pg_catalog AS $$
+    SELECT r.node_id, r.parent_id,
+           NULLIF(r.own_items, 0), r.own_weight, r.own_done, r.own_planned, r.own_delay,
+           CASE WHEN r.own_items > 0 THEN r.own_overdue END,
+           CASE WHEN r.own_items > 0 THEN r.own_overdue_no_fact END,
+           CASE WHEN r.own_items > 0 THEN r.own_completed END,
+           r.sub_items, r.sub_weight, r.sub_done, r.sub_planned, r.sub_delay,
+           r.sub_overdue, r.sub_overdue_no_fact, r.sub_completed
+    FROM (
+        SELECT anc.id AS node_id,
+               pr.node_path[anc.pos - 1] AS parent_id,
+               (count(*) FILTER (WHERE anc.id = pr.node_id))::integer AS own_items,
+               sum(pr.weight) FILTER (WHERE anc.id = pr.node_id) AS own_weight,
+               sum(pr.weight * pr.fraction) FILTER (WHERE anc.id = pr.node_id) AS own_done,
+               sum(pr.weight * pr.planned_fraction) FILTER (WHERE anc.id = pr.node_id)
+                   AS own_planned,
+               sum(pr.weight * pr.delay_days) FILTER (WHERE anc.id = pr.node_id) AS own_delay,
+               (count(*) FILTER (WHERE anc.id = pr.node_id
+                                 AND pr.state IN ('overdue', 'overdue_no_fact')))::integer
+                   AS own_overdue,
+               (count(*) FILTER (WHERE anc.id = pr.node_id AND pr.state = 'overdue_no_fact'))::integer
+                   AS own_overdue_no_fact,
+               (count(*) FILTER (WHERE anc.id = pr.node_id AND pr.state = 'done'))::integer
+                   AS own_completed,
+               count(*)::integer AS sub_items,
+               sum(pr.weight) AS sub_weight,
+               sum(pr.weight * pr.fraction) AS sub_done,
+               sum(pr.weight * pr.planned_fraction) AS sub_planned,
+               sum(pr.weight * pr.delay_days) AS sub_delay,
                (count(*) FILTER (WHERE pr.state IN ('overdue', 'overdue_no_fact')))::integer
-                   AS overdue,
-               (count(*) FILTER (WHERE pr.state = 'overdue_no_fact'))::integer AS overdue_no_fact,
-               (count(*) FILTER (WHERE pr.state = 'done'))::integer AS completed
-        FROM progress pr
-        GROUP BY pr.node_id
-    ),
-    rolled AS (
-        SELECT anc.id AS node_id, sum(o.items)::integer AS items, sum(o.weight) AS weight,
-               sum(o.done) AS done, sum(o.planned) AS planned, sum(o.delay) AS delay,
-               sum(o.overdue)::integer AS overdue,
-               sum(o.overdue_no_fact)::integer AS overdue_no_fact,
-               sum(o.completed)::integer AS completed
-        FROM own o
-        JOIN public.project_node n ON n.id = o.node_id
-        CROSS JOIN LATERAL unnest(n.path) AS anc(id)
-        GROUP BY anc.id
-    )
-    SELECT n.id, n.parent_id,
-           o.items, o.weight, o.done, o.planned, o.delay, o.overdue, o.overdue_no_fact,
-           o.completed,
-           r.items, r.weight, r.done, r.planned, r.delay, r.overdue, r.overdue_no_fact,
-           r.completed
-    FROM public.project_node n
-    JOIN rolled r ON r.node_id = n.id
-    LEFT JOIN own o ON o.node_id = n.id
-    WHERE n.project_id = p_project AND n.deleted_at IS NULL
-      AND (p_root IS NULL OR n.path @> ARRAY[p_root])
+                   AS sub_overdue,
+               (count(*) FILTER (WHERE pr.state = 'overdue_no_fact'))::integer
+                   AS sub_overdue_no_fact,
+               (count(*) FILTER (WHERE pr.state = 'done'))::integer AS sub_completed
+        FROM app.schedule_progress(p_project, p_as_of, p_root) pr
+        CROSS JOIN LATERAL unnest(pr.node_path) WITH ORDINALITY AS anc(id, pos)
+        WHERE p_root IS NULL OR anc.pos >= array_position(pr.node_path, p_root)
+        GROUP BY anc.id, pr.node_path[anc.pos - 1]
+    ) r
 $$
 """
 

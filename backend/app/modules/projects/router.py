@@ -62,7 +62,7 @@ ProjectAdmin = Annotated[Principal, Depends(require_project_admin("project_id"))
 
 
 def finance_visible(principal: Principal) -> bool:
-    """Бюджет, заказчик, адрес и гарантия объекта - только внутренним ролям с правом finance:read."""
+    """Бюджет, заказчик, адрес и гарантия объекта - внутренним ролям с правом finance:read."""
     return principal.is_internal and principal.has(Module.FINANCE, Action.READ)
 
 

@@ -14,10 +14,10 @@ from app.modules.readiness.schemas import NodeReadinessDetail, ProjectReadiness
 router = APIRouter(prefix="/projects/{project_id}", tags=["readiness"])
 
 Db = Annotated[AsyncSession, Depends(get_db)]
-Reader = Annotated[
-    Principal, Depends(require(Module.GPR, Action.READ, project_param="project_id"))
+Reader = Annotated[Principal, Depends(require(Module.GPR, Action.READ, project_param="project_id"))]
+AsOf = Annotated[
+    date | None, Query(description="дата расчёта (по умолчанию сегодня, пояс Бишкека)")
 ]
-AsOf = Annotated[date | None, Query(description="дата расчёта (по умолчанию сегодня, пояс Бишкека)")]
 
 
 @router.get("/readiness", response_model=ProjectReadiness)

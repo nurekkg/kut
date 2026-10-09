@@ -82,7 +82,9 @@ async def refuses(world: AuthWorld, who: str, fact_id: UUID, message: str, **set
 
 
 async def soft_delete(world: AuthWorld, who: str, fact_id: UUID) -> None:
-    await call(ctx(world, who), "UPDATE work_actual SET deleted_at = now() WHERE id = :id", id=fact_id)
+    await call(
+        ctx(world, who), "UPDATE work_actual SET deleted_at = now() WHERE id = :id", id=fact_id
+    )
 
 
 # --- создание -------------------------------------------------------------------------------
@@ -283,10 +285,16 @@ async def test_a_fact_with_live_photos_cannot_be_deleted(
             text(
                 "INSERT INTO work_photo (project_id, legal_entity_id, work_actual_id, s3_key,"
                 " content_type, size_bytes, uploaded_by) VALUES (:p, :le, :fact,"
-                " 'project/' || CAST(CAST(:p AS uuid) AS text) || '/fact/x/' || gen_random_uuid() || '.jpg',"
+                " 'project/' || CAST(CAST(:p AS uuid) AS text) || '/fact/x/'"
+                " || gen_random_uuid() || '.jpg',"
                 " 'image/jpeg', 1000, :u)"
             ),
-            {"p": plan.project, "le": plan.entity, "fact": created, "u": auth_world.users["master"]},
+            {
+                "p": plan.project,
+                "le": plan.entity,
+                "fact": created,
+                "u": auth_world.users["master"],
+            },
         )
     with pytest.raises(IntegrityError, match=r"actual\.has_dependents"):
         await soft_delete(auth_world, "techdir", created)
@@ -368,7 +376,11 @@ async def test_a_foreman_of_one_object_cannot_write_a_fact_into_another(
         p=auth_world.projects["west"],
     )  # fmt: skip
     foreign = Plan(
-        project=auth_world.projects["west"], entity=plan.entity, node=plan.node, work=plan.work, item=None
+        project=auth_world.projects["west"],
+        entity=plan.entity,
+        node=plan.node,
+        work=plan.work,
+        item=None,
     )
     with pytest.raises(DBAPIError):
         await fact(auth_world, "foreman", foreign)

@@ -303,7 +303,7 @@ def seed(
 
 
 def seed_media(connection: Connection, report: SeedReport) -> None:
-    """Фото факта: файлы идут в S3, поэтому отдельно от основного сида (тестам хранилище не нужно)."""
+    """Фото факта: файлы идут в S3, поэтому отдельно от основного сида (тестам S3 не нужен)."""
     project = _find(
         connection, "SELECT id FROM project WHERE name = :name AND deleted_at IS NULL", name=EAST
     )

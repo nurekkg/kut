@@ -377,12 +377,23 @@ async def test_the_path_runs_from_the_root_to_the_node_and_follows_a_move(
     assert await path_of(worker, floor) == [building, section, floor]
 
 
-async def test_the_path_cannot_be_written_by_hand(world: World, worker: AsyncConnection) -> None:
-    node = await add(worker, world, NodeType.BUILDING)
-    await fails(
-        worker, r"node\.path_is_managed", SET_PATH,
-        id=node,
-    )  # fmt: skip
+async def test_the_path_cannot_be_written_by_hand(
+    auth_world: AuthWorld, owner_engine: AsyncEngine
+) -> None:
+    """Колонку path у kut_app и kut_worker отзывает права (S3a, test_finance_visibility); триггер -
+    вторая линия: он не пускает и того, у кого право на колонку осталось (определитель kut_auth)."""
+    east = auth_world.projects["east"]
+    async with owner_engine.connect() as connection:
+        await connection.execute(text("SET LOCAL ROLE kut_auth"))
+        node = await connection.scalar(
+            text(
+                "SELECT id FROM project_node WHERE project_id = :p AND deleted_at IS NULL LIMIT 1"
+            ),
+            {"p": east},
+        )
+        with pytest.raises(IntegrityError, match=r"node\.path_is_managed"):
+            await connection.execute(text(SET_PATH), {"id": node})
+        await connection.rollback()
 
 
 async def test_the_seeded_tree_has_consistent_paths(
@@ -478,30 +489,44 @@ async def test_the_customer_of_an_object_must_be_a_live_customer_counterparty(
     auth_world: AuthWorld, world: World, worker: AsyncConnection
 ) -> None:
     customer = world.customer  # тип customer
+    # Заказчик лежит в коммерческой части карточки (project_finance, S3a); строки у объекта ещё нет.
     await worker.execute(
-        text("UPDATE project SET customer_id = :c WHERE id = :p"), {"c": customer, "p": world.p1}
+        text(
+            "INSERT INTO project_finance (project_id, legal_entity_id, customer_id)"
+            " VALUES (:p, :le, :c)"
+        ),
+        {"p": world.p1, "le": world.le1, "c": customer},
     )
     for wrong in (world.sub_a, world.supplier, uuid4()):
-        async with rule(worker, r"project\.customer_invalid|fk_project_customer"):
+        async with rule(worker, r"project\.customer_invalid|fk_project_finance_customer"):
             await worker.execute(
-                text("UPDATE project SET customer_id = :c WHERE id = :p"),
+                text("UPDATE project_finance SET customer_id = :c WHERE project_id = :p"),
                 {"c": wrong, "p": world.p1},
             )
     await worker.execute(
-        text("UPDATE project SET customer_id = NULL WHERE id = :p"), {"p": world.p1}
+        text("UPDATE project_finance SET customer_id = NULL WHERE project_id = :p"),
+        {"p": world.p1},
     )
 
 
 async def test_the_card_of_an_object_is_checked(world: World, worker: AsyncConnection) -> None:
+    async with rule(worker, "ck_project_lifecycle_stage_valid"):
+        await worker.execute(
+            text("UPDATE project SET lifecycle_stage = 'dreaming' WHERE id = :p"), {"p": world.p1}
+        )
+    # Бюджет, валюта и координаты проверяются в project_finance (коммерческая часть, S3a).
+    await worker.execute(
+        text("INSERT INTO project_finance (project_id, legal_entity_id) VALUES (:p, :le)"),
+        {"p": world.p1, "le": world.le1},
+    )
     for column, value, message in (
-        ("lifecycle_stage", "dreaming", "ck_project_lifecycle_stage_valid"),
-        ("planned_budget", -1, "ck_project_budget_not_negative"),
-        ("budget_currency", "USD", "ck_project_budget_currency_kgs"),
-        ("latitude", 91, "ck_project_coordinates_valid"),
+        ("planned_budget", -1, "ck_project_finance_budget_not_negative"),
+        ("budget_currency", "USD", "ck_project_finance_budget_currency_kgs"),
+        ("latitude", 91, "ck_project_finance_coordinates_valid"),
     ):
         async with rule(worker, message):
             await worker.execute(
-                text(f"UPDATE project SET {column} = :v WHERE id = :p"),  # noqa: S608
+                text(f"UPDATE project_finance SET {column} = :v WHERE project_id = :p"),  # noqa: S608
                 {"v": value, "p": world.p1},
             )
     async with rule(worker, "ck_project_planned_dates_ordered"):

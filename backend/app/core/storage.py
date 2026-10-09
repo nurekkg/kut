@@ -50,8 +50,15 @@ async def check_s3() -> None:
     await asyncio.to_thread(get_s3_client().head_bucket, Bucket=get_settings().s3_bucket)
 
 
+WRITE_ONCE_HEADERS = {"If-None-Match": "*"}
+
+
 def presign_put(key: str, content_type: str, size_bytes: int, ttl_seconds: int) -> str:
-    """Ссылка на загрузку одного файла: тип и длина входят в подпись, другой файл S3 не примет."""
+    """Ссылка на загрузку одного файла: тип и длина входят в подпись, другой файл S3 не примет.
+
+    If-None-Match: * тоже в подписи: ключ записывается один раз. Без него автор мог бы до конца
+    срока ссылки подменить файл, уже подтверждённый и показанный как доказательство факта.
+    """
     return get_s3_signer().generate_presigned_url(
         "put_object",
         Params={
@@ -59,6 +66,7 @@ def presign_put(key: str, content_type: str, size_bytes: int, ttl_seconds: int) 
             "Key": key,
             "ContentType": content_type,
             "ContentLength": size_bytes,
+            "IfNoneMatch": WRITE_ONCE_HEADERS["If-None-Match"],
         },
         ExpiresIn=ttl_seconds,
         HttpMethod="PUT",

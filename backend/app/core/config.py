@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     celery_result_backend: SecretStr
 
     s3_endpoint_url: str
-    # Адрес S3 в подписанных ссылках для браузера (в docker-сети s3_endpoint_url браузеру недоступен);
+    # Адрес S3 в подписанных ссылках для браузера (в docker-сети s3_endpoint_url ему недоступен);
     # не задан - подписи идут с s3_endpoint_url.
     s3_public_endpoint_url: str | None = None
     s3_region: str

@@ -583,7 +583,11 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION app.work_photo_rights(uuid, text)")
     op.execute("DROP FUNCTION app.work_actual_guard()")
     op.execute("SET LOCAL ROLE kut_auth")
-    for sql in (NODE_HAS_DEPENDENTS_PREVIOUS, ITEM_HAS_DEPENDENTS_PREVIOUS, WORK_HAS_DEPENDENTS_PREVIOUS):
+    for sql in (
+        NODE_HAS_DEPENDENTS_PREVIOUS,
+        ITEM_HAS_DEPENDENTS_PREVIOUS,
+        WORK_HAS_DEPENDENTS_PREVIOUS,
+    ):
         op.execute(sql)
     op.execute("DROP FUNCTION app.work_actual_has_dependents(uuid)")
     op.execute("RESET ROLE")

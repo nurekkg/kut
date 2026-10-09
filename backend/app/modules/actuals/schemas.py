@@ -26,14 +26,20 @@ def _quantize(places: Decimal) -> BeforeValidator:
 
 
 Volume = Annotated[Decimal, Field(gt=0, max_digits=18, decimal_places=3)]
-Latitude = Annotated[Decimal, _quantize(SIX_PLACES), Field(ge=-90, le=90, max_digits=9, decimal_places=6)]
+Latitude = Annotated[
+    Decimal, _quantize(SIX_PLACES), Field(ge=-90, le=90, max_digits=9, decimal_places=6)
+]
 Longitude = Annotated[
     Decimal, _quantize(SIX_PLACES), Field(ge=-180, le=180, max_digits=9, decimal_places=6)
 ]
-Accuracy = Annotated[Decimal, _quantize(TWO_PLACES), Field(ge=0, le=100_000, max_digits=8, decimal_places=2)]
+Accuracy = Annotated[
+    Decimal, _quantize(TWO_PLACES), Field(ge=0, le=100_000, max_digits=8, decimal_places=2)
+]
 
 
-def _check_geo(latitude: Decimal | None, longitude: Decimal | None, accuracy: Decimal | None) -> None:
+def _check_geo(
+    latitude: Decimal | None, longitude: Decimal | None, accuracy: Decimal | None
+) -> None:
     if (latitude is None) != (longitude is None):
         raise ValueError("latitude and longitude are set together")
     if accuracy is not None and latitude is None:

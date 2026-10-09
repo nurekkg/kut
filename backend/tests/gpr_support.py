@@ -129,17 +129,17 @@ async def purge(engine: AsyncEngine, world: AuthWorld) -> None:
         nodes = "(SELECT id FROM project_node WHERE project_id = :p AND name LIKE 'S3A-%')"
         works = "(SELECT id FROM work WHERE code LIKE 'S3A-%')"
         for statement in (
-            "UPDATE work_photo SET deleted_at = now() WHERE deleted_at IS NULL AND work_actual_id"
+            "UPDATE work_photo SET deleted_at = now() WHERE deleted_at IS NULL AND work_actual_id"  # noqa: S608
             f" IN (SELECT id FROM work_actual WHERE node_id IN {nodes} OR work_id IN {works})",
-            "UPDATE work_actual SET deleted_at = now() WHERE deleted_at IS NULL"
+            "UPDATE work_actual SET deleted_at = now() WHERE deleted_at IS NULL"  # noqa: S608
             f" AND (node_id IN {nodes} OR work_id IN {works})",
-            "UPDATE schedule_dependency SET deleted_at = now() WHERE deleted_at IS NULL AND"
+            "UPDATE schedule_dependency SET deleted_at = now() WHERE deleted_at IS NULL AND"  # noqa: S608
             f" predecessor_id IN (SELECT id FROM schedule_item WHERE node_id IN {nodes}"
             f" OR work_id IN {works})",
-            "UPDATE schedule_dependency SET deleted_at = now() WHERE deleted_at IS NULL AND"
+            "UPDATE schedule_dependency SET deleted_at = now() WHERE deleted_at IS NULL AND"  # noqa: S608
             f" successor_id IN (SELECT id FROM schedule_item WHERE node_id IN {nodes}"
             f" OR work_id IN {works})",
-            "UPDATE schedule_item SET deleted_at = now() WHERE deleted_at IS NULL"
+            "UPDATE schedule_item SET deleted_at = now() WHERE deleted_at IS NULL"  # noqa: S608
             f" AND (node_id IN {nodes} OR work_id IN {works})",
         ):
             await connection.execute(text(statement), {"p": project})
@@ -152,5 +152,7 @@ async def purge(engine: AsyncEngine, world: AuthWorld) -> None:
                 {"p": project, "t": kind},
             )
         await connection.execute(
-            text("UPDATE work SET deleted_at = now() WHERE deleted_at IS NULL AND code LIKE 'S3A-%'")
+            text(
+                "UPDATE work SET deleted_at = now() WHERE deleted_at IS NULL AND code LIKE 'S3A-%'"
+            )
         )

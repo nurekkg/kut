@@ -242,11 +242,15 @@ def upgrade() -> None:
     op.execute(f"REVOKE UPDATE ON project_node FROM {WRITERS}")
     op.execute(f"GRANT UPDATE ({NODE_UPDATABLE_LIST}) ON project_node TO {WRITERS}")
     op.execute("GRANT UPDATE (path) ON project_node TO kut_auth")
+    # Переписывая путь потомков, kut_auth обновляет строки project_node, а CHECK полигона вызывает эту
+    # функцию от его имени: без права выполнения перенос поддерева падает на «permission denied».
+    op.execute("GRANT EXECUTE ON FUNCTION app.is_valid_polygon(jsonb) TO kut_auth")
     _create_repath(NODE_REPATH_DEFINER, definer=True)
 
 
 def downgrade() -> None:
     _create_repath(NODE_REPATH_INVOKER, definer=False)
+    op.execute("REVOKE EXECUTE ON FUNCTION app.is_valid_polygon(jsonb) FROM kut_auth")
     op.execute("REVOKE UPDATE (path) ON project_node FROM kut_auth")
     op.execute(f"REVOKE UPDATE ({NODE_UPDATABLE_LIST}) ON project_node FROM {WRITERS}")
     op.execute(f"GRANT UPDATE ON project_node TO {WRITERS}")
@@ -267,7 +271,7 @@ def downgrade() -> None:
     op.execute("SET LOCAL ROLE kut_auth")
     assignments = ", ".join(f"{column} = f.{column}" for column in FINANCE_COLUMNS)
     op.execute(
-        f"UPDATE public.project SET {assignments} FROM public.project_finance f"  # noqa: S608
+        f"UPDATE public.project SET {assignments} FROM public.project_finance f"
         " WHERE f.project_id = project.id"
     )
     op.execute("RESET ROLE")

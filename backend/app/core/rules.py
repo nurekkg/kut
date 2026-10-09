@@ -60,6 +60,8 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "ck_work_actual_accuracy_valid": (422, "coordinates_invalid"),
     "ck_work_photo_coordinates_valid": (422, "coordinates_invalid"),
     "uq_work_photo_s3_key": (409, "photo_already_confirmed"),
+    # Факт указывает на строку ГПР другого узла или другого вида работ (составной внешний ключ).
+    "fk_work_actual_project_id_schedule_item": (422, "actual_item_invalid"),
 }
 
 

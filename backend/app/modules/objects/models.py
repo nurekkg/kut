@@ -128,7 +128,9 @@ class ProjectFinance(BusinessBase):
             name="fk_project_finance_project_id_project",
         ),
         UniqueConstraint("project_id", name="uq_project_finance_project_id"),
-        CheckConstraint("planned_budget IS NULL OR planned_budget >= 0", name="budget_not_negative"),
+        CheckConstraint(
+            "planned_budget IS NULL OR planned_budget >= 0", name="budget_not_negative"
+        ),
         CheckConstraint(f"budget_currency = '{CURRENCY}'", name="budget_currency_kgs"),
         CheckConstraint(
             "(latitude IS NULL) = (longitude IS NULL)"

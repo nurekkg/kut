@@ -23,7 +23,9 @@ router = APIRouter(prefix="/projects/{project_id}/photos", tags=["photos"])
 Db = Annotated[AsyncSession, Depends(get_db)]
 
 
-def _internal_only(base: Callable[..., Awaitable[Principal]]) -> Callable[..., Awaitable[Principal]]:
+def _internal_only(
+    base: Callable[..., Awaitable[Principal]],
+) -> Callable[..., Awaitable[Principal]]:
     """Фото в MVP видят только внутренние роли: заказчику и субподрядчику они не отдаются
     (на снимках люди, техника и состояние площадки; открыть их внешним - отдельное решение PO)."""
 
@@ -37,15 +39,11 @@ def _internal_only(base: Callable[..., Awaitable[Principal]]) -> Callable[..., A
 
 Reader = Annotated[
     Principal,
-    Depends(
-        _internal_only(require(Module.WORK_ACTUAL, Action.READ, project_param="project_id"))
-    ),
+    Depends(_internal_only(require(Module.WORK_ACTUAL, Action.READ, project_param="project_id"))),
 ]
 Writer = Annotated[
     Principal,
-    Depends(
-        _internal_only(require(Module.WORK_ACTUAL, Action.WRITE, project_param="project_id"))
-    ),
+    Depends(_internal_only(require(Module.WORK_ACTUAL, Action.WRITE, project_param="project_id"))),
 ]
 
 
@@ -89,7 +87,9 @@ async def list_photos(
     session: Db,
     _principal: Reader,
     work_actual_id: uuid.UUID | None = None,
-    with_urls: Annotated[bool, Query(description="добавить короткоживущие ссылки на скачивание")] = False,
+    with_urls: Annotated[
+        bool, Query(description="добавить короткоживущие ссылки на скачивание")
+    ] = False,
 ) -> list[PhotoOut]:
     return await service.list_photos(
         session, project_id, actual_id=work_actual_id, with_urls=with_urls

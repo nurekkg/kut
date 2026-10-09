@@ -40,7 +40,10 @@ async def worker(worker_engine: AsyncEngine) -> AsyncIterator[AsyncConnection]:
 async def new_item(connection: AsyncConnection, plan: Plan, node: UUID | None = None) -> UUID:
     """Ещё одна строка ГПР на узле плана с новым видом работ."""
     work = await connection.scalar(
-        text("INSERT INTO work (code, name, unit, category) VALUES (:c, 'x', 'м3', 'S3A') RETURNING id"),
+        text(
+            "INSERT INTO work (code, name, unit, category)"
+            " VALUES (:c, 'x', 'м3', 'S3A') RETURNING id"
+        ),
         {"c": unique()},
     )
     return await add_item(
@@ -85,13 +88,18 @@ async def test_the_node_and_the_work_of_a_row_must_be_alive(
     worker: AsyncConnection, plan: Plan
 ) -> None:
     other = await worker.scalar(
-        text("INSERT INTO work (code, name, unit, category) VALUES (:c, 'x', 'м3', 'S3A') RETURNING id"),
+        text(
+            "INSERT INTO work (code, name, unit, category)"
+            " VALUES (:c, 'x', 'м3', 'S3A') RETURNING id"
+        ),
         {"c": unique()},
     )
     await worker.execute(
         text("UPDATE schedule_item SET deleted_at = now() WHERE id = :id"), {"id": plan.item}
     )
-    await worker.execute(text("UPDATE project_node SET deleted_at = now() WHERE id = :id"), {"id": plan.node})
+    await worker.execute(
+        text("UPDATE project_node SET deleted_at = now() WHERE id = :id"), {"id": plan.node}
+    )
     with pytest.raises(IntegrityError, match=r"schedule\.node_invalid"):
         async with worker.begin_nested():
             await add_item(worker, plan.project, plan.entity, plan.node, other, "5", START, END)
@@ -99,7 +107,10 @@ async def test_the_node_and_the_work_of_a_row_must_be_alive(
 
 async def test_a_deleted_work_cannot_be_planned(worker: AsyncConnection, plan: Plan) -> None:
     other = await worker.scalar(
-        text("INSERT INTO work (code, name, unit, category) VALUES (:c, 'x', 'м3', 'S3A') RETURNING id"),
+        text(
+            "INSERT INTO work (code, name, unit, category)"
+            " VALUES (:c, 'x', 'м3', 'S3A') RETURNING id"
+        ),
         {"c": unique()},
     )
     await worker.execute(text("UPDATE work SET deleted_at = now() WHERE id = :id"), {"id": other})
@@ -212,7 +223,7 @@ async def test_a_dependency_needs_two_live_rows_of_the_same_project(
             await edge(worker, plan, plan.item, deleted)
 
 
-async def test_a_pair_has_one_live_dependency_and_a_deleted_one_can_be_restored_only_without_a_cycle(
+async def test_a_pair_has_one_live_dependency_and_a_deleted_one_returns_only_without_a_cycle(
     worker: AsyncConnection, plan: Plan
 ) -> None:
     a, b = plan.item, await new_item(worker, plan)
@@ -255,9 +266,13 @@ async def test_two_transactions_cannot_close_a_cycle_together(
     first = await worker_engine.connect()
     second = await worker_engine.connect()
     try:
-        await first.execute(text(DEPENDENCY), {"p": plan.project, "le": plan.entity, "a": plan.item, "b": b})
+        await first.execute(
+            text(DEPENDENCY), {"p": plan.project, "le": plan.entity, "a": plan.item, "b": b}
+        )
         racing = asyncio.create_task(
-            second.execute(text(DEPENDENCY), {"p": plan.project, "le": plan.entity, "a": b, "b": plan.item})
+            second.execute(
+                text(DEPENDENCY), {"p": plan.project, "le": plan.entity, "a": b, "b": plan.item}
+            )
         )
         await asyncio.sleep(0.5)
         assert not racing.done()  # вторая ждёт блокировку объекта
@@ -321,7 +336,9 @@ async def test_a_work_with_rows_cannot_be_deleted_or_change_its_unit(
     await rule(
         worker, r"work\.unit_locked", "UPDATE work SET unit = 'м2' WHERE id = :id", id=plan.work
     )
-    await worker.execute(text("UPDATE work SET name = 'Новое имя' WHERE id = :id"), {"id": plan.work})
+    await worker.execute(
+        text("UPDATE work SET name = 'Новое имя' WHERE id = :id"), {"id": plan.work}
+    )
 
 
 # --- права в БД -----------------------------------------------------------------------------------
@@ -334,7 +351,9 @@ INSERT_ITEM = (
 
 
 @pytest.mark.parametrize("who", ["foreman", "techdir", "estimator"])
-async def test_roles_with_gpr_write_may_plan(auth_world: AuthWorld, plan: Plan, who: str, worker_engine: AsyncEngine) -> None:
+async def test_roles_with_gpr_write_may_plan(
+    auth_world: AuthWorld, plan: Plan, who: str, worker_engine: AsyncEngine
+) -> None:
     other = await make_plan(worker_engine, auth_world, with_item=False)
     await call(
         ctx(auth_world, who), INSERT_ITEM,
