@@ -17,15 +17,18 @@ import { api } from "@/lib/api";
 import { APPROVAL_LIMIT, useApprovalQueue } from "@/lib/approvals";
 import { ApiError } from "@/lib/auth/api";
 import type { Actual, Photo } from "@/lib/field/types";
+import { collectPages } from "@/lib/paging";
 import { API } from "@/lib/projects/keys";
 import { useNodeLabels } from "@/lib/projects/labels";
 import { photosKey } from "@/lib/schedule/keys";
 import { invalidateProgress } from "@/lib/schedule/queries";
 
 const PHOTO_CHUNK = 100;
+// Сервер отдаёт снимки не больше чем по 500 за запрос: дальше читаем страницами.
+const PHOTO_PAGE = 500;
 const PARALLEL = 3;
 
-function combinePhotos(results: UseQueryResult<Photo[], Error>[]): Map<string, Photo[]> {
+function combinePhotos(results: UseQueryResult<Photo[], Error>[]) {
   const byFact = new Map<string, Photo[]>();
   for (const result of results) {
     for (const photo of result.data ?? []) {
@@ -34,7 +37,7 @@ function combinePhotos(results: UseQueryResult<Photo[], Error>[]): Map<string, P
       else byFact.set(photo.work_actual_id, [photo]);
     }
   }
-  return byFact;
+  return { byFact, loading: results.some((result) => result.isPending) };
 }
 
 type Batch = { running: boolean; total: number; done: number; failed: Record<string, string> };
@@ -75,14 +78,20 @@ export function ApprovalsView() {
     }
     return requests;
   }, [queue.facts]);
-  const photos = useQueries({
+  const { byFact: photos, loading: photosLoading } = useQueries({
     queries: photoRequests.map((request) => ({
       queryKey: photosKey(request.projectId, `queue:${request.ids.join(",")}`),
       queryFn: () =>
-        api.get<Photo[]>(`${API}/projects/${request.projectId}/photos`, {
-          work_actual_id: request.ids,
-          with_urls: true,
-        }),
+        collectPages(
+          (offset) =>
+            api.get<Photo[]>(`${API}/projects/${request.projectId}/photos`, {
+              work_actual_id: request.ids,
+              with_urls: true,
+              limit: PHOTO_PAGE,
+              offset,
+            }),
+          PHOTO_PAGE,
+        ),
       staleTime: 0,
       refetchInterval: 90_000,
       enabled: canApprove,
@@ -219,6 +228,7 @@ export function ApprovalsView() {
                     fact={fact}
                     label={labels.get(fact.node_id) ?? "…"}
                     photos={photos.get(fact.id) ?? []}
+                    photosLoading={photosLoading}
                     selected={selected.has(fact.id)}
                     busy={approve.isPending && approve.variables?.id === fact.id}
                     error={errors[fact.id] ?? null}

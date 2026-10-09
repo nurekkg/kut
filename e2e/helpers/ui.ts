@@ -20,12 +20,18 @@ export function watchErrors(page: Page): string[] {
   return errors;
 }
 
-export async function signIn(page: Page, user: string): Promise<void> {
-  await page.goto("/login");
+// Форма входа на открытой странице входа: страница не перезагружается, поэтому состояние приложения
+// (сессия, очередь отправки) переживает смену человека на устройстве, как на общем телефоне.
+export async function signInHere(page: Page, user: string): Promise<void> {
   await page.locator("#identifier").fill(`${user}@kut.test`);
   await page.locator("#password").fill(PASSWORD);
   await page.getByRole("button", { name: "Войти" }).click();
   await page.waitForURL(/\/projects/);
+}
+
+export async function signIn(page: Page, user: string): Promise<void> {
+  await page.goto("/login");
+  await signInHere(page, user);
 }
 
 // Телефон мастера: 375 px, касание, геолокация замокана (разрешение выдано заранее).

@@ -19,6 +19,7 @@ export function ApprovalCard({
   fact,
   label,
   photos,
+  photosLoading,
   selected,
   busy,
   error,
@@ -30,6 +31,7 @@ export function ApprovalCard({
   fact: Actual;
   label: string;
   photos: Photo[];
+  photosLoading: boolean;
   selected: boolean;
   busy: boolean;
   error: string | null;
@@ -47,6 +49,10 @@ export function ApprovalCard({
   const pctConfirmed = plan ? clampPercent((confirmed / plan) * 100) : 0;
   const pctThis = plan ? Math.min(clampPercent((volume / plan) * 100), 100 - pctConfirmed) : 0;
   const over = plan !== null && after > plan;
+  // Прораб не должен подтверждать, не увидев доказательств: если снимков пришло меньше, чем есть у
+  // записи (сбой запроса, обрезанный ответ), карточка говорит об этом, а не молчит.
+  const expected = fact.photo_count ?? 0;
+  const photosMissing = !photosLoading && photos.length < expected;
 
   return (
     <li
@@ -131,6 +137,17 @@ export function ApprovalCard({
         )}
         <span>{t("photos", { count: fact.photo_count ?? 0 })}</span>
       </div>
+
+      {photosMissing ? (
+        <p
+          role="status"
+          data-testid="photos-missing"
+          className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400"
+        >
+          <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
+          {t("photosMissing", { shown: photos.length, total: expected })}
+        </p>
+      ) : null}
 
       {photos.length > 0 ? (
         <ul className="flex gap-2" data-testid="approval-photos">

@@ -35,11 +35,19 @@ export function newIdempotencyKey(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export const api = {
-  get: <T>(path: string, params?: Query) => apiFetch<T>(withQuery(path, params)),
-  post: <T>(path: string, body?: unknown, key?: string) =>
-    apiFetch<T>(path, jsonInit("POST", body, key)),
-  put: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PUT", body)),
-  patch: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PATCH", body)),
-  delete: (path: string) => apiFetch<void>(path, { method: "DELETE" }),
-};
+function client(owner?: string) {
+  return {
+    get: <T>(path: string, params?: Query) => apiFetch<T>(withQuery(path, params), {}, owner),
+    post: <T>(path: string, body?: unknown, key?: string) =>
+      apiFetch<T>(path, jsonInit("POST", body, key), owner),
+    put: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PUT", body), owner),
+    patch: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PATCH", body), owner),
+    delete: (path: string) => apiFetch<void>(path, { method: "DELETE" }, owner),
+  };
+}
+
+export const api = client();
+
+// Запросы от имени владельца записи очереди: если на устройстве сменился человек, чужим токеном
+// они не уходят (ответ - 401 session_changed, запись ждёт возвращения владельца).
+export const apiAs = client;

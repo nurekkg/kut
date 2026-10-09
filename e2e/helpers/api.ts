@@ -1,7 +1,8 @@
 import { expect, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 
-import { EAST, PASSWORD, today } from "./env";
+import { EAST, GEO, PASSWORD, today } from "./env";
 
 // Обрыв соединения и ответы 5xx на слабой машине бывают, пока PostgreSQL восстанавливается после
 // сбоя: запрос повторяется несколько раз (создающие запросы несут один и тот же Idempotency-Key).
@@ -33,6 +34,13 @@ export async function apiLogin(request: APIRequestContext, user: string): Promis
   const body = (await response.json()) as { status: string; access_token?: string };
   expect(body.status, `у ${user} включена 2FA`).toBe("ok");
   return { token: body.access_token ?? "" };
+}
+
+// Чей это токен: поле sub в JWT (подпись не проверяем, это сверка в тестах, а не защита).
+export function jwtSubject(token: string): string {
+  const payload = (token.split(".")[1] ?? "").replace(/-/g, "+").replace(/_/g, "/");
+  const body = JSON.parse(Buffer.from(payload, "base64").toString("utf8")) as { sub?: string };
+  return body.sub ?? "";
 }
 
 function headers(session: Session, key?: string): Record<string, string> {
@@ -158,4 +166,60 @@ export async function factsOfNode(
   return get<Fact[]>(request, session, `/api/v1/projects/${project}/work-actuals`, {
     node_id: nodeId,
   });
+}
+
+export async function remove(
+  request: APIRequestContext,
+  session: Session,
+  path: string,
+): Promise<void> {
+  const response = await resilient(`DELETE ${path}`, () =>
+    request.delete(path, { headers: headers(session) }),
+  );
+  expect(response.status(), `DELETE ${path}: ${await response.text()}`).toBe(204);
+}
+
+// Отправленный факт с одним снимком целиком через API: черновик, ссылка на загрузку, PUT в S3,
+// подтверждение снимка, отправка на проверку. Возвращает id факта.
+export async function submitFactWithPhoto(
+  request: APIRequestContext,
+  session: Session,
+  plan: Plan,
+  photoPath: string,
+  volume = "10",
+): Promise<string> {
+  const base = `/api/v1/projects/${plan.projectId}`;
+  const fact = await post<{ id: string }>(request, session, `${base}/work-actuals`, {
+    node_id: plan.nodeId,
+    work_id: plan.workId,
+    volume,
+    work_date: today(),
+    latitude: GEO.latitude.toFixed(6),
+    longitude: GEO.longitude.toFixed(6),
+    accuracy_m: String(GEO.accuracy),
+    submit: false,
+  });
+  const bytes = fs.readFileSync(photoPath);
+  const issued = await post<{
+    items: { key: string; upload_url: string; headers: Record<string, string> }[];
+  }>(request, session, `${base}/photos/presign`, {
+    work_actual_id: fact.id,
+    files: [{ content_type: "image/jpeg", size_bytes: bytes.length }],
+  });
+  const upload = issued.items[0];
+  const stored = await request.put(upload.upload_url, { headers: upload.headers, data: bytes });
+  expect(stored.ok(), `PUT в S3: ${stored.status()} ${await stored.text()}`).toBeTruthy();
+  await post(request, session, `${base}/photos/confirm`, {
+    work_actual_id: fact.id,
+    items: [
+      {
+        key: upload.key,
+        latitude: GEO.latitude.toFixed(6),
+        longitude: GEO.longitude.toFixed(6),
+        taken_at: new Date().toISOString(),
+      },
+    ],
+  });
+  await post(request, session, `${base}/work-actuals/${fact.id}/submit`, undefined);
+  return fact.id;
 }

@@ -7,37 +7,54 @@ export type GanttScale = (typeof GANTT_SCALES)[number];
 // Ширина суток в пикселях: на шкале «неделя» неделя занимает 70 px, на шкале «месяц» - около 90 px.
 export const PX_PER_DAY: Record<GanttScale, number> = { week: 10, month: 3 };
 
-export type Domain = { startDay: number; endDay: number; days: number };
+// `clamped`: у части работ даты не поместились в окно шкалы и прижаты к его краю.
+export type Domain = { startDay: number; endDay: number; days: number; clamped: boolean };
 
 type Span = { start: string; end: string };
 
-// Границы шкалы: самая ранняя и самая поздняя дата плана и факта, запас по краям и «сегодня».
+// Окно шкалы вокруг «сегодня». Сервер принимает любые даты ГПР (до 9999-12-31), а строка с датой из
+// другого века растянула бы шкалу на миллионы суток и подвесила Гант у всех, кто его откроет.
+export const WINDOW_YEARS = 10;
+const WINDOW_DAYS = WINDOW_YEARS * 366;
+
+// Границы шкалы: самая ранняя и самая поздняя дата плана и факта, запас по краям и «сегодня»; даты
+// за окном вокруг «сегодня» прижимаются к его краю.
 export function computeDomain(spans: Span[], today: string, before = 7, after = 21): Domain {
   const todayDay = dayNumber(today);
+  const earliest = todayDay - WINDOW_DAYS;
+  const latest = todayDay + WINDOW_DAYS;
   let first = todayDay;
   let last = todayDay;
+  let clamped = false;
   for (const span of spans) {
     const start = dayNumber(span.start);
     const end = dayNumber(span.end);
-    if (start < first) first = start;
-    if (end > last) last = end;
+    if (start < earliest || start > latest || end < earliest || end > latest) clamped = true;
+    first = Math.min(first, Math.max(start, earliest));
+    last = Math.max(last, Math.min(end, latest));
   }
   const startDay = first - before;
   const endDay = last + after;
-  return { startDay, endDay, days: endDay - startDay + 1 };
+  return { startDay, endDay, days: endDay - startDay + 1, clamped };
+}
+
+// Сутки за пределами шкалы упираются в её край (с запасом в одни сутки): полоса строки с датой из
+// другого века доходит до края и не уходит за него на миллионы пикселей.
+function clampDay(domain: Domain, day: number): number {
+  return Math.min(Math.max(day, domain.startDay - 1), domain.endDay + 1);
 }
 
 export function xStart(domain: Domain, scale: GanttScale, iso: string): number {
-  return (dayNumber(iso) - domain.startDay) * PX_PER_DAY[scale];
+  return (clampDay(domain, dayNumber(iso)) - domain.startDay) * PX_PER_DAY[scale];
 }
 
 // Правый край полосы: окончание включает последний день целиком.
 export function xEnd(domain: Domain, scale: GanttScale, iso: string): number {
-  return (dayNumber(iso) + 1 - domain.startDay) * PX_PER_DAY[scale];
+  return (clampDay(domain, dayNumber(iso) + 1) - domain.startDay) * PX_PER_DAY[scale];
 }
 
 export function xOfDay(domain: Domain, scale: GanttScale, day: number): number {
-  return (day - domain.startDay) * PX_PER_DAY[scale];
+  return (clampDay(domain, day) - domain.startDay) * PX_PER_DAY[scale];
 }
 
 export type Tick = { x: number; label: string };

@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import { api, newIdempotencyKey } from "@/lib/api";
+import { apiAs, newIdempotencyKey } from "@/lib/api";
 import { ApiError } from "@/lib/auth/api";
 import { API } from "@/lib/projects/keys";
 
@@ -124,6 +124,7 @@ function reportProgress(entry: OutboxEntry, index: number, loaded: number, total
 }
 
 async function uploadPhotos(entry: OutboxEntry): Promise<void> {
+  const api = apiAs(entry.userId);
   const base = `${API}/projects/${entry.projectId}`;
   for (let index = 0; index < entry.photos.length; index += 1) {
     const photo = entry.photos[index];
@@ -156,8 +157,10 @@ async function uploadPhotos(entry: OutboxEntry): Promise<void> {
   }
 }
 
-async function runEntry(source: OutboxEntry): Promise<void> {
-  const entry = copy(source);
+// Работает с переданной рабочей копией и обновляет её на месте: что бы ни случилось, копия хранит все
+// сделанные шаги. Запросы идут от имени владельца записи, а не того, кто сейчас вошёл на устройстве.
+async function runEntry(entry: OutboxEntry): Promise<void> {
+  const api = apiAs(entry.userId);
   const base = `${API}/projects/${entry.projectId}`;
 
   if (entry.mode === "resubmit" && entry.patch && !entry.patched) {
@@ -241,8 +244,9 @@ async function loop(): Promise<void> {
       return;
     }
     publish({ busy: next.id });
+    const working = copy(next);
     try {
-      await runEntry(next);
+      await runEntry(working);
       await outboxDb.remove(next.id);
       const progress = { ...state.progress };
       delete progress[next.id];
@@ -254,9 +258,9 @@ async function loop(): Promise<void> {
       });
       delay = BASE_DELAY;
     } catch (error) {
-      // Запись в состоянии могла продвинуться (id факта, загруженные снимки): берём актуальную.
-      const latest = state.entries.find((entry) => entry.id === next.id) ?? next;
-      const failed = copy(latest);
+      // Рабочая копия всегда свежее состояния экрана: после выхода пользователя оно очищено, а запись
+      // должна сохранить всё, что успели сделать (id факта, загруженные снимки).
+      const failed = copy(working);
       failed.attempts += 1;
       if (classify(error) === "permanent") {
         failed.stage = "failed";

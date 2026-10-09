@@ -67,6 +67,7 @@ test("мастер вносит факт, прораб подтверждает,
   await expect(card.getByTestId("approval-volume")).toContainText("40");
   await expect(card.getByTestId("approval-plan")).toContainText("План 100");
   await expect(card.getByTestId("approval-photos").locator("img")).toHaveCount(1);
+  await expect(card.getByTestId("photos-missing")).toHaveCount(0); // снимков столько, сколько заявлено
   await expect(card.getByRole("link", { name: /карте/ })).toContainText("42.8746");
   await expect(boss.getByTestId("approvals-count").first()).toBeVisible();
   await shot(boss, "foreman-1-queue");
