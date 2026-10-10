@@ -3,40 +3,21 @@ import { expect, test } from "../helpers/test";
 import type { APIRequestContext } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 
-import { apiLogin, get, post, projectId, remove, type Session } from "../helpers/api";
-import { WEST, today } from "../helpers/env";
+import { apiLogin, get, post, remove, type Session } from "../helpers/api";
+import { emptyProject } from "../helpers/dashboards";
+import { today } from "../helpers/env";
 import { desktopContext, shot, signIn, watchErrors } from "../helpers/ui";
 
 const PREFIX = "E2E Гант";
 
-// Остатки прерванных прогонов (после тайм-аута до `finally` дело не доходит) убираем перед началом:
-// «Запад» должен быть пуст, иначе в графике окажутся чужие строки.
-async function removeLeftovers(
-  request: APIRequestContext,
-  session: Session,
-  base: string,
-): Promise<void> {
-  const tree = await get<{ id: string; name: string }[]>(request, session, `${base}/tree`);
-  const stale = tree.filter((node) => node.name.startsWith(PREFIX));
-  if (stale.length === 0) return;
-  const nodes = new Set(stale.map((node) => node.id));
-  const items = await get<{ id: string; node_id: string }[]>(request, session, `${base}/schedule`, {
-    limit: 10_000,
-  });
-  for (const item of items.filter((row) => nodes.has(row.node_id))) {
-    await remove(request, session, `${base}/schedule/${item.id}`);
-  }
-  for (const node of stale) await remove(request, session, `${base}/nodes/${node.id}`);
-}
-
 // Даты ГПР держит БД (ревизия a1efb2b3d84b): вне 2000-2100 и длиннее 10 лет сервер не принимает.
 // Клиентская защита Ганта остаётся на случай данных, которые придут в обход (старый сервер, ошибка):
 // шкала ограничена окном вокруг «сегодня», полоса упирается в край, над диаграммой предупреждение.
-// «Запад» в демо-данных пуст: строки заводятся тут же и удаляются в конце.
-async function westNode(request: APIRequestContext, techdir: Session) {
-  const west = await projectId(request, techdir, WEST);
+// Свой пустой объект на каждый прогон: на «Западе» теперь демо-ГПР и факт (сиды S4), график должен
+// видеть только свои строки. Объект остаётся в тестовой базе, как и прочие данные сценариев.
+async function ownNode(request: APIRequestContext, techdir: Session) {
+  const west = await emptyProject(request, techdir, `${PREFIX} ${Date.now()}`);
   const base = `/api/v1/projects/${west}`;
-  await removeLeftovers(request, techdir, base);
   const node = await post<{ id: string }>(request, techdir, `${base}/nodes`, {
     type: "building",
     name: `${PREFIX} ${Date.now()}`,
@@ -47,7 +28,7 @@ async function westNode(request: APIRequestContext, techdir: Session) {
 
 test("сервер не принимает даты ГПР вне границ и отвечает понятным кодом", async ({ request }) => {
   const techdir = await apiLogin(request, "techdir");
-  const { base, node, works } = await westNode(request, techdir);
+  const { base, node, works } = await ownNode(request, techdir);
   try {
     for (const dates of [
       { plan_start: "1900-01-01", plan_end: "9999-12-31" },
@@ -72,7 +53,7 @@ test("Гант с датой из другого века в ответе: шк�
   request,
 }) => {
   const techdir = await apiLogin(request, "techdir");
-  const { west, base, node, works } = await westNode(request, techdir);
+  const { west, base, node, works } = await ownNode(request, techdir);
   const created: string[] = [];
   try {
     for (const [index, dates] of [

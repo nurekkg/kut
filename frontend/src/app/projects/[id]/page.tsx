@@ -4,7 +4,7 @@ import { getTranslations } from "next-intl/server";
 import { Suspense } from "react";
 
 import { AuthGate, FullPageSpinner } from "@/components/auth/auth-gate";
-import { ProjectWorkspace } from "@/components/projects/project-workspace";
+import { ProjectEntry } from "@/components/projects/project-entry";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -22,7 +22,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     <AuthGate>
       {/* useSearchParams (выбранный узел) требует Suspense */}
       <Suspense fallback={<FullPageSpinner />}>
-        <ProjectWorkspace projectId={id} />
+        <ProjectEntry projectId={id} />
       </Suspense>
     </AuthGate>
   );

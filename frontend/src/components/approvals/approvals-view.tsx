@@ -15,6 +15,7 @@ import { QueryState, useCodeMessage, useErrorMessage } from "@/components/settin
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { APPROVAL_LIMIT, useApprovalQueue } from "@/lib/approvals";
+import { approvalTotal } from "@/lib/approvals-count";
 import { ApiError } from "@/lib/auth/api";
 import type { Actual, Photo } from "@/lib/field/types";
 import { collectPages } from "@/lib/paging";
@@ -51,6 +52,7 @@ export function ApprovalsView() {
   const queryClient = useQueryClient();
   const canApprove = user?.permissions.includes("work_actual:approve") ?? false;
   const queue = useApprovalQueue(canApprove);
+  const tally = approvalTotal(queue.perProject, APPROVAL_LIMIT);
   const message = useErrorMessage();
   const codeMessage = useCodeMessage();
   const labels = useNodeLabels(queue.ids);
@@ -186,12 +188,16 @@ export function ApprovalsView() {
                   />
                   {t("selectAll")}
                 </label>
-                <p className="text-sm text-muted-foreground" data-testid="approvals-total">
-                  {t("total", {
-                    count: queue.facts.length,
-                    limit: queue.facts.length >= APPROVAL_LIMIT ? `${APPROVAL_LIMIT}+` : String(queue.facts.length),
-                  })}
-                </p>
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground" data-testid="approvals-total">
+                    {t("total", { count: tally.total })}
+                  </p>
+                  {tally.capped ? (
+                    <p className="text-sm text-muted-foreground">
+                      {t("cappedNote", { limit: APPROVAL_LIMIT })}
+                    </p>
+                  ) : null}
+                </div>
                 <Button
                   type="button"
                   size="lg"

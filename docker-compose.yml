@@ -135,7 +135,7 @@ services:
     build: *backend-build
     image: kut-backend:dev
     command:
-      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app", "--timeout-keep-alive", "65"]
     environment:
       <<: [*backend-env, *auth-env]
       DATABASE_URL: postgresql+psycopg://kut_app:${KUT_APP_PASSWORD:-kut_app_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
@@ -213,7 +213,7 @@ services:
     command:
       - sh
       - -c
-      - 'if [ "$$APP_ENV" = development ]; then python -m app.modules.auth.devseed; else echo "dev seed skipped: APP_ENV is $$APP_ENV"; fi'
+      - 'if [ "$$APP_ENV" = development ]; then python -m app.modules.auth.devseed && python -m app.modules.dashboards.devseed; else echo "dev seed skipped: APP_ENV is $$APP_ENV"; fi'
     environment:
       <<: *backend-env
       DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}

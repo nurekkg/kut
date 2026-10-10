@@ -1,4 +1,5 @@
 import { ApiError, authApi, toApiError } from "./api";
+import { withRetry } from "./refresh-retry";
 import type { Me, TokenResponse } from "./types";
 
 // Access-токен живёт только в памяти страницы: ни localStorage, ни cookie, доступной скриптам.
@@ -53,7 +54,7 @@ let refreshing: Promise<Session | null> | null = null;
 export function refreshSession(): Promise<Session | null> {
   refreshing ??= withRefreshLock(async () => {
     try {
-      startSession(await authApi.refresh());
+      startSession(await withRetry(() => authApi.refresh()));
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         clearSession();
