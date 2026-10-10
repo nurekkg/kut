@@ -19,6 +19,7 @@ import {
   startSession,
 } from "@/lib/auth/session";
 import type { Me, TokenResponse } from "@/lib/auth/types";
+import { purgeOutbox } from "@/lib/field/outbox";
 
 type AuthContextValue = {
   status: "loading" | "authenticated" | "anonymous";
@@ -44,6 +45,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshSession();
   }, []);
+
+  // Очередь отправки на устройстве: чужие записи (вошёл другой человек) и записи старше срока хранения
+  // стираются при входе и при запуске приложения, не дожидаясь экрана мастера.
+  const userId = state.session?.user.id;
+  useEffect(() => {
+    if (userId) void purgeOutbox(userId);
+  }, [userId]);
 
   const expiresAt = state.session?.expiresAt;
   useEffect(() => {

@@ -12,6 +12,7 @@ from app.modules.objects.models import ProjectNode
 from app.modules.readiness.schemas import (
     Aggregate,
     ItemProgress,
+    ItemProgressBrief,
     NodeReadiness,
     NodeReadinessDetail,
     ProjectReadiness,
@@ -33,6 +34,19 @@ _ITEMS = text(
     " FROM app.schedule_progress(:project, :as_of, :node) pr"
     " LEFT JOIN work w ON w.id = pr.work_id WHERE pr.node_id = :node"
     " ORDER BY pr.plan_start, w.code, pr.item_id"
+)
+_PROGRESS = text(
+    "SELECT pr.item_id, pr.weight, pr.confirmed_volume, pr.fraction, pr.planned_fraction,"
+    " pr.delay_days, pr.state, pr.overdue_days"
+    " FROM app.schedule_progress(:project, :as_of, CAST(:root AS uuid)) pr"
+)
+# Календарь подтверждённого факта по строкам ГПР: отдельный запрос без соединений с функцией
+# расчёта (агрегат в соединении под RLS даёт плохие планы, см. миграцию f8c2a5e61d47).
+_FACT_DATES = text(
+    "SELECT a.schedule_item_id AS item_id, min(a.work_date) AS first_fact_date,"
+    " max(a.work_date) AS last_fact_date FROM work_actual a"
+    " WHERE a.project_id = :project AND a.status = 'approved' AND a.deleted_at IS NULL"
+    " AND a.schedule_item_id IS NOT NULL GROUP BY a.schedule_item_id"
 )
 _UNPLANNED = text(
     "SELECT a.work_id, w.name AS work_name, w.unit, sum(a.volume) AS volume, count(*)::int AS facts"
@@ -132,6 +146,36 @@ def _object_total(rows: Sequence[Any]) -> Aggregate | None:
 
 async def _as_of(session: AsyncSession, as_of: date | None) -> date:
     return as_of if as_of is not None else await session.scalar(_TODAY)
+
+
+async def items_progress(
+    session: AsyncSession, project_id: uuid.UUID, as_of: date | None, root: uuid.UUID | None
+) -> dict[uuid.UUID, ItemProgressBrief]:
+    """Готовность всех строк ГПР объекта (или поддерева узла root) для списка ГПР. Расчёт - в БД
+    (app.schedule_progress), внешняя роль получает числа по подтверждённому факту своего объекта."""
+    day = await _as_of(session, as_of)
+    rows = (
+        await session.execute(_PROGRESS, {"project": project_id, "as_of": day, "root": root})
+    ).all()
+    spans = {
+        row.item_id: row
+        for row in (await session.execute(_FACT_DATES, {"project": project_id})).all()
+    }
+    result: dict[uuid.UUID, ItemProgressBrief] = {}
+    for row in rows:
+        span = spans.get(row.item_id)
+        result[row.item_id] = ItemProgressBrief(
+            weight=row.weight,
+            confirmed_volume=row.confirmed_volume,
+            percent=_q(row.fraction * HUNDRED, TWO),
+            planned_percent=_q(row.planned_fraction * HUNDRED, TWO),
+            delay_days=_q(row.delay_days, ONE),
+            state=row.state,
+            overdue_days=row.overdue_days,
+            first_fact_date=span.first_fact_date if span else None,
+            last_fact_date=span.last_fact_date if span else None,
+        )
+    return result
 
 
 async def project_readiness(

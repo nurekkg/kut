@@ -8,11 +8,12 @@ from app.core.config import get_settings
 @lru_cache
 def get_redis() -> Redis:
     """Общий клиент для кэша, denylist и лимитов; check_redis ниже ходит отдельным соединением."""
+    settings = get_settings()
     client: Redis = Redis.from_url(
-        get_settings().redis_url.get_secret_value(),
+        settings.redis_url.get_secret_value(),
         decode_responses=True,
         socket_connect_timeout=2,
-        socket_timeout=2,
+        socket_timeout=settings.redis_socket_timeout_seconds,
     )
     return client
 

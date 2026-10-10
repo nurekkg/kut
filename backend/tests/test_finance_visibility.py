@@ -352,6 +352,92 @@ async def test_without_a_user_in_the_context_there_is_no_permission(auth_world: 
     assert rows[0].f is False
 
 
+# --- запись коммерческой части: только scope=group с objects:write (решение PO, OPEN S3a №4) ----
+
+# Прораб читает финансы (R) и пишет объекты (R/W свой), но его область - объекты из доступа, а не
+# вся группа; финансовый директор - вся группа, но в строке «Объекты» у него только R.
+CARD_WRITERS = ["owner", "techdir"]
+CARD_READERS_ONLY = ["foreman", "finance", "lawyer"]
+UPDATE_BUDGET = "UPDATE project_finance SET planned_budget = planned_budget WHERE project_id = :p"
+
+
+@pytest.mark.parametrize(
+    ("who", "expected"),
+    [
+        ("owner", True),
+        ("finance", True),
+        ("techdir", True),
+        ("foreman", False),
+        ("master", False),
+        ("estimator", False),
+        ("customer", False),
+        ("sub_a", False),
+    ],
+)
+async def test_is_group_role_reads_the_scope_of_the_role_of_the_request_user(
+    auth_world: AuthWorld, who: str, expected: bool
+) -> None:
+    rows = await call(ctx(auth_world, who), "SELECT app.is_group_role() AS g")
+    assert rows[0].g is expected
+
+
+async def test_without_a_user_in_the_context_there_is_no_group_role(auth_world: AuthWorld) -> None:
+    rows = await call(None, "SELECT app.is_group_role() AS g")
+    assert rows[0].g is False
+
+
+@pytest.mark.parametrize("who", CARD_WRITERS)
+async def test_group_roles_with_objects_write_can_update_the_finance_row(
+    auth_world: AuthWorld, who: str
+) -> None:
+    changed = await call(
+        ctx(auth_world, who), UPDATE_BUDGET + " RETURNING id", p=auth_world.projects["east"]
+    )
+    assert len(changed) == 1
+
+
+@pytest.mark.parametrize("who", CARD_READERS_ONLY)
+async def test_roles_that_only_read_the_card_cannot_update_the_finance_row_even_in_sql(
+    auth_world: AuthWorld, who: str
+) -> None:
+    east = auth_world.projects["east"]
+    seen = await call(
+        ctx(auth_world, who), "SELECT id FROM project_finance WHERE project_id = :p", p=east
+    )
+    assert len(seen) == 1  # читать они могут: ограничена только запись
+
+    changed = await call(ctx(auth_world, who), UPDATE_BUDGET + " RETURNING id", p=east)
+    assert changed == []
+
+
+@pytest.mark.parametrize("who", CARD_READERS_ONLY)
+async def test_roles_that_only_read_the_card_cannot_insert_a_finance_row_even_in_sql(
+    auth_world: AuthWorld, who: str
+) -> None:
+    with pytest.raises(DBAPIError, match="row-level security"):
+        await call(
+            ctx(auth_world, who),
+            "INSERT INTO project_finance (project_id, legal_entity_id, planned_budget)"
+            " SELECT id, legal_entity_id, 1 FROM project WHERE id = :p",
+            p=auth_world.projects["east"],
+        )
+
+
+async def test_the_budget_of_the_object_is_unchanged_after_the_refused_writes(
+    auth_world: AuthWorld,
+) -> None:
+    east = auth_world.projects["east"]
+    overwrite = "UPDATE project_finance SET planned_budget = 1 WHERE project_id = :p"
+    for who in CARD_READERS_ONLY:
+        await call(ctx(auth_world, who), overwrite, p=east)
+    rows = await call(
+        ctx(auth_world, "owner"),
+        "SELECT planned_budget FROM project_finance WHERE project_id = :p",
+        p=east,
+    )
+    assert rows[0].planned_budget == Decimal("2400000000.00")
+
+
 # --- путь узла закрыт для логинов приложения ----------------------------------------------------
 
 

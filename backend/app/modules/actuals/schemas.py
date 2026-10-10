@@ -98,7 +98,11 @@ class ActualReject(StrictModel):
 
 class ActualOut(BaseModel):
     """Внешним ролям отдаётся только подтверждённый факт и без людей: автор, подтвердивший, причина
-    отклонения, геометка и число фото закрыты для пула kut_portal (None)."""
+    отклонения, геометка и число фото закрыты для пула kut_portal (None).
+
+    item_plan_volume и item_confirmed_volume (внутренним ролям, S3b) - плановый объём строки ГПР
+    факта и подтверждённый по ней объём (факты approved, включая этот, если он подтверждён):
+    очередь согласования показывает «объём против плана». У факта без строки ГПР - None."""
 
     id: uuid.UUID
     project_id: uuid.UUID
@@ -122,6 +126,8 @@ class ActualOut(BaseModel):
     longitude: Decimal | None = None
     accuracy_m: Decimal | None = None
     photo_count: int | None = None
+    item_plan_volume: Decimal | None = None
+    item_confirmed_volume: Decimal | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

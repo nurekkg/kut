@@ -1,9 +1,11 @@
 import uuid
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.responses import json_list
 from app.modules.auth.deps import get_db, require
 from app.modules.auth.principal import Principal
 from app.modules.idempotency.service import IdempotencyKeyHeader, idempotent_create
@@ -35,8 +37,9 @@ async def list_dependencies(
     _principal: Reader,
     limit: Annotated[int, Query(ge=1, le=20_000)] = 10_000,
     offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
-) -> list[DependencyOut]:
-    return await service.list_dependencies(session, project_id, limit=limit, offset=offset)
+) -> Response:
+    items = await service.list_dependencies(session, project_id, limit=limit, offset=offset)
+    return json_list(items, DependencyOut)
 
 
 @router.post("/dependencies", status_code=status.HTTP_201_CREATED, response_model=DependencyOut)
@@ -76,8 +79,14 @@ async def list_items(
     work_id: uuid.UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=10_000)] = 1000,
     offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
-) -> list[ScheduleItemOut]:
-    return await service.list_items(
+    with_progress: Annotated[
+        bool, Query(description="добавить готовность каждой строки (поле progress)")
+    ] = False,
+    as_of: Annotated[
+        date | None, Query(description="дата расчёта готовности (по умолчанию сегодня, Бишкек)")
+    ] = None,
+) -> Response:
+    items = await service.list_items(
         session,
         project_id,
         internal=principal.is_internal,
@@ -86,7 +95,10 @@ async def list_items(
         work_id=work_id,
         limit=limit,
         offset=offset,
+        with_progress=with_progress,
+        as_of=as_of,
     )
+    return json_list(items, ScheduleItemOut)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ScheduleItemOut)

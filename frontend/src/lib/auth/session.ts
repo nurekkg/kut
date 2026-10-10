@@ -77,8 +77,16 @@ export async function endSession(): Promise<void> {
   }
 }
 
-// Запрос с токеном: при 401 один раз обновляет сессию и повторяет запрос.
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export const SESSION_CHANGED = "session_changed";
+
+// Запрос с токеном: при 401 один раз обновляет сессию и повторяет запрос. `owner` - пользователь,
+// от чьего имени запрос задуман (запись очереди отправки): под токеном другого человека он не уходит
+// ни сразу, ни после обновления сессии (общий телефон; cookie обновления общая для вкладок).
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInit = {},
+  owner?: string,
+): Promise<T> {
   const send = (token: string | undefined) =>
     fetch(path, {
       ...init,
@@ -86,10 +94,14 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       credentials: "same-origin",
       cache: "no-store",
     });
+  const foreign = (session: Session | null) =>
+    owner !== undefined && session?.user.id !== owner;
 
+  if (foreign(state.session)) throw new ApiError(401, SESSION_CHANGED);
   let response = await send(state.session?.token);
   if (response.status === 401) {
     const renewed = await refreshSession();
+    if (foreign(renewed)) throw new ApiError(401, SESSION_CHANGED);
     if (renewed) response = await send(renewed.token);
   }
   if (!response.ok) throw await toApiError(response);

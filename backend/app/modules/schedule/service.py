@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -10,6 +11,7 @@ from app.core.rules import db_rules
 from app.modules.identity.models import User, UserProjectAccess
 from app.modules.objects.models import Project, ProjectNode
 from app.modules.rbac.models import Role
+from app.modules.readiness.service import items_progress
 from app.modules.schedule.models import ScheduleDependency, ScheduleItem
 from app.modules.schedule.schemas import (
     DependencyCreate,
@@ -63,6 +65,8 @@ async def list_items(
     work_id: uuid.UUID | None,
     limit: int,
     offset: int,
+    with_progress: bool = False,
+    as_of: date | None = None,
 ) -> list[ScheduleItemOut]:
     statement = _item_select(internal=internal).where(ScheduleItem.project_id == project_id)
     if node_id is not None:
@@ -79,7 +83,13 @@ async def list_items(
         .limit(min(limit, MAX_LIST))
         .offset(offset)
     )
-    return [ScheduleItemOut.model_validate(row, from_attributes=True) for row in rows]
+    items = [ScheduleItemOut.model_validate(row, from_attributes=True) for row in rows]
+    if with_progress and items:
+        # Расчёт ведёт БД; с узлом в запросе он ограничен поддеревом, строки сопоставляются по id.
+        progress = await items_progress(session, project_id, as_of, node_id)
+        for item in items:
+            item.progress = progress.get(item.id)
+    return items
 
 
 async def get_item(

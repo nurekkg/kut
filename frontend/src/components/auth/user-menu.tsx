@@ -3,10 +3,9 @@
 import { LogOut, Settings } from "lucide-react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { useLogout } from "@/components/auth/logout-guard";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { isRole } from "@/lib/roles";
 
@@ -14,23 +13,14 @@ export function UserMenu() {
   const t = useTranslations("Auth");
   const roles = useTranslations("Roles");
   const settings = useTranslations("Settings");
-  const { user, signOut } = useAuth();
-  const router = useRouter();
-  const [pending, setPending] = useState(false);
+  const { user } = useAuth();
+  const { request: logout, leaving: pending, dialog: logoutDialog } = useLogout();
 
   if (!user) return null;
 
-  async function logout() {
-    setPending(true);
-    try {
-      await signOut();
-    } finally {
-      router.replace("/login");
-    }
-  }
-
   return (
     <div className="flex items-center justify-between gap-3">
+      {logoutDialog}
       <div className="min-w-0">
         <p className="truncate text-sm font-medium" data-testid="user-name">
           {user.full_name}

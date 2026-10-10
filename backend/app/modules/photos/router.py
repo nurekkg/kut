@@ -86,18 +86,37 @@ async def confirm(
     return result.to_response()
 
 
+MAX_OFFSET = 1_000_000  # выше значения БД даёт ошибку 500, а не пустой список
+
+
 @router.get("", response_model=list[PhotoOut], dependencies=[Depends(_no_store)])
 async def list_photos(
     project_id: uuid.UUID,
     session: Db,
     _principal: Reader,
-    work_actual_id: uuid.UUID | None = None,
+    work_actual_id: Annotated[
+        list[uuid.UUID] | None,
+        Query(max_length=100, description="один или несколько фактов (параметр повторяется)"),
+    ] = None,
+    node_id: uuid.UUID | None = None,
+    subtree: Annotated[bool, Query(description="узел и все его потомки")] = False,
+    newest_first: Annotated[bool, Query(description="сначала новые")] = False,
+    limit: Annotated[int, Query(ge=1, le=500)] = 500,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
     with_urls: Annotated[
         bool, Query(description="добавить короткоживущие ссылки на скачивание")
     ] = False,
 ) -> list[PhotoOut]:
     return await service.list_photos(
-        session, project_id, actual_id=work_actual_id, with_urls=with_urls
+        session,
+        project_id,
+        actual_ids=work_actual_id,
+        node_id=node_id,
+        subtree=subtree,
+        newest_first=newest_first,
+        limit=limit,
+        offset=offset,
+        with_urls=with_urls,
     )
 
 

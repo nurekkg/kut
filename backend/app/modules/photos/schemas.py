@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -54,6 +54,9 @@ class PhotoConfirm(StrictModel):
 
 
 class PhotoOut(BaseModel):
+    """В списке (S3b) к фото добавлены автор по имени, узел, вид работ и дата факта: галерея узла
+    подписывает снимки без запроса на каждый факт."""
+
     id: uuid.UUID
     work_actual_id: uuid.UUID
     content_type: str
@@ -65,6 +68,10 @@ class PhotoOut(BaseModel):
     created_at: datetime
     url: str | None = None
     url_expires_in: int | None = None
+    uploaded_by_name: str | None = None
+    node_id: uuid.UUID | None = None
+    work_name: str | None = None
+    work_date: date | None = None
 
 
 class DownloadUrl(BaseModel):

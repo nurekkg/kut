@@ -22,23 +22,34 @@ import {
 } from "@/components/ui/table";
 import { ApiError } from "@/lib/auth/api";
 import { OBJECTS_ERRORS } from "@/lib/projects/types";
+import { FIELD_ERRORS } from "@/lib/schedule/types";
 import { KNOWN_ERRORS } from "@/lib/settings/types";
 
 const KNOWN = new Set<string>(KNOWN_ERRORS);
 const OBJECTS_KNOWN = new Set<string>(OBJECTS_ERRORS);
+const FIELD_KNOWN = new Set<string>(FIELD_ERRORS);
 type KnownError = (typeof KNOWN_ERRORS)[number];
 type ObjectsError = (typeof OBJECTS_ERRORS)[number];
+type FieldError = (typeof FIELD_ERRORS)[number];
 
 // Текст ошибки API для пользователя: код из ответа, а не сообщение сервера. Общие коды (нет прав,
-// неверные данные, повтор запроса) берутся из настроек, правила объектов и дерева - из своего раздела.
-export function useErrorMessage(): (error: unknown) => string {
+// неверные данные, повтор запроса) берутся из настроек, правила объектов и дерева - из своего раздела,
+// правила ГПР, факта и фото - из раздела работ на объекте.
+export function useCodeMessage(): (code: string) => string {
   const t = useTranslations("Settings.errors");
   const objects = useTranslations("ObjectsErrors");
-  return (error) => {
-    if (!(error instanceof ApiError)) return t("network");
-    if (OBJECTS_KNOWN.has(error.code)) return objects(error.code as ObjectsError);
-    return KNOWN.has(error.code) ? t(error.code as KnownError) : t("unknown");
+  const field = useTranslations("FieldErrors");
+  return (code) => {
+    if (OBJECTS_KNOWN.has(code)) return objects(code as ObjectsError);
+    if (FIELD_KNOWN.has(code)) return field(code as FieldError);
+    return KNOWN.has(code) ? t(code as KnownError) : t("unknown");
   };
+}
+
+export function useErrorMessage(): (error: unknown) => string {
+  const t = useTranslations("Settings.errors");
+  const message = useCodeMessage();
+  return (error) => (error instanceof ApiError ? message(error.code) : t("network"));
 }
 
 export function useDebounced<T>(value: T, delayMs = 300): T {

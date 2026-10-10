@@ -51,6 +51,19 @@ async def new_item(connection: AsyncConnection, plan: Plan, node: UUID | None = 
     )
 
 
+async def new_item_with_dates(
+    connection: AsyncConnection, plan: Plan, start: date, end: date
+) -> UUID:
+    work = await connection.scalar(
+        text(
+            "INSERT INTO work (code, name, unit, category)"
+            " VALUES (:c, 'x', 'м3', 'S3A') RETURNING id"
+        ),
+        {"c": unique()},
+    )
+    return await add_item(connection, plan.project, plan.entity, plan.node, work, "10", start, end)
+
+
 async def edge(connection: AsyncConnection, plan: Plan, a: UUID, b: UUID) -> Any:
     return await connection.scalar(
         text(DEPENDENCY), {"p": plan.project, "le": plan.entity, "a": a, "b": b}
@@ -156,6 +169,55 @@ async def test_the_end_cannot_precede_the_start(worker: AsyncConnection, plan: P
         worker, "ck_schedule_item_dates_ordered",
         "UPDATE schedule_item SET plan_end = DATE '2026-08-01' WHERE id = :id", id=plan.item,
     )  # fmt: skip
+
+
+SET_DATES = "UPDATE schedule_item SET plan_start = :s, plan_end = :e WHERE id = :id"
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "constraint"),
+    [
+        (date(1999, 12, 31), date(2000, 1, 5), "ck_schedule_item_dates_in_range"),
+        (date(2026, 9, 1), date(2101, 1, 1), "ck_schedule_item_dates_in_range"),
+        (date(1900, 1, 1), date(9999, 12, 31), "ck_schedule_item_dates_in_range"),
+        (date(2026, 9, 1), date(2036, 9, 2), "ck_schedule_item_duration_max"),
+        (date(2024, 2, 29), date(2034, 3, 1), "ck_schedule_item_duration_max"),
+        (date(2000, 1, 1), date(2010, 1, 2), "ck_schedule_item_duration_max"),
+    ],
+)
+async def test_dates_outside_the_limits_are_refused(
+    worker: AsyncConnection, plan: Plan, start: date, end: date, constraint: str
+) -> None:
+    await rule(worker, constraint, SET_DATES, s=start, e=end, id=plan.item)
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (date(2000, 1, 1), date(2000, 1, 1)),
+        (date(2100, 12, 1), date(2100, 12, 31)),
+        (date(2026, 9, 1), date(2036, 9, 1)),
+        (date(2024, 2, 29), date(2034, 2, 28)),
+        (date(2000, 1, 1), date(2010, 1, 1)),
+    ],
+)
+async def test_the_edges_of_the_limits_are_accepted(
+    worker: AsyncConnection, plan: Plan, start: date, end: date
+) -> None:
+    await worker.execute(text(SET_DATES), {"s": start, "e": end, "id": plan.item})
+
+    got = await worker.execute(
+        text("SELECT plan_start, plan_end FROM schedule_item WHERE id = :id"), {"id": plan.item}
+    )
+    assert got.one() == (start, end)
+
+
+async def test_a_new_row_outside_the_limits_is_refused_too(
+    worker: AsyncConnection, plan: Plan
+) -> None:
+    with pytest.raises(IntegrityError, match="ck_schedule_item_dates_in_range"):
+        async with worker.begin_nested():
+            await new_item_with_dates(worker, plan, date(2026, 9, 1), date(9999, 12, 31))
 
 
 @pytest.mark.parametrize("column", ["node_id", "work_id", "project_id", "legal_entity_id"])

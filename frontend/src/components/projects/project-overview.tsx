@@ -4,9 +4,12 @@ import { Map as MapIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import type { ReactNode } from "react";
 
+import { AggregateCard } from "@/components/projects/node-readiness";
 import { Badge } from "@/components/ui/badge";
+import { useAuth } from "@/components/auth/auth-provider";
 import { formatAmount, formatDate } from "@/lib/format";
 import { isStage, isStatus, type Project } from "@/lib/projects/types";
+import { useProjectReadiness } from "@/lib/schedule/queries";
 
 function Item({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -61,11 +64,23 @@ export function MapPlaceholder() {
   );
 }
 
+// Готовность объекта в целом: итог по всем работам ГПР (скрыт, если ГПР пуст или нет права на него).
+function ProjectReadinessCard({ projectId }: { projectId: string }) {
+  const t = useTranslations("Workspace");
+  const readiness = useProjectReadiness(projectId);
+  const total = readiness.data?.project ?? null;
+  if (!total) return null;
+  return <AggregateCard aggregate={total} title={t("readiness")} />;
+}
+
 export function ProjectOverview({ project }: { project: Project }) {
   const t = useTranslations("Workspace");
+  const { user } = useAuth();
+  const canSeeSchedule = user?.permissions.includes("gpr:read") ?? false;
   return (
     <div className="space-y-5">
       <h2 className="text-lg font-semibold tracking-tight">{t("overview")}</h2>
+      {canSeeSchedule ? <ProjectReadinessCard projectId={project.id} /> : null}
       <ProjectSummary project={project} />
       <MapPlaceholder />
     </div>

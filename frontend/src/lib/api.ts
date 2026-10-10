@@ -1,12 +1,16 @@
 import { apiFetch } from "@/lib/auth/session";
 
-type Query = Record<string, string | number | boolean | null | undefined>;
+type QueryValue = string | number | boolean | null | undefined;
+// Массив повторяет параметр (?id=a&id=b): так сервер принимает несколько значений одного фильтра.
+type Query = Record<string, QueryValue | QueryValue[]>;
 
 function withQuery(path: string, params?: Query): string {
   if (!params) return path;
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") search.set(key, String(value));
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (item !== undefined && item !== null && item !== "") search.append(key, String(item));
+    }
   }
   const text = search.toString();
   return text ? `${path}?${text}` : path;
@@ -31,11 +35,19 @@ export function newIdempotencyKey(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export const api = {
-  get: <T>(path: string, params?: Query) => apiFetch<T>(withQuery(path, params)),
-  post: <T>(path: string, body?: unknown, key?: string) =>
-    apiFetch<T>(path, jsonInit("POST", body, key)),
-  put: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PUT", body)),
-  patch: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PATCH", body)),
-  delete: (path: string) => apiFetch<void>(path, { method: "DELETE" }),
-};
+function client(owner?: string) {
+  return {
+    get: <T>(path: string, params?: Query) => apiFetch<T>(withQuery(path, params), {}, owner),
+    post: <T>(path: string, body?: unknown, key?: string) =>
+      apiFetch<T>(path, jsonInit("POST", body, key), owner),
+    put: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PUT", body), owner),
+    patch: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PATCH", body), owner),
+    delete: (path: string) => apiFetch<void>(path, { method: "DELETE" }, owner),
+  };
+}
+
+export const api = client();
+
+// Запросы от имени владельца записи очереди: если на устройстве сменился человек, чужим токеном
+// они не уходят (ответ - 401 session_changed, запись ждёт возвращения владельца).
+export const apiAs = client;

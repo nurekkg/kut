@@ -6,6 +6,7 @@ from typing import Annotated, Self
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 from app.core.schemas import StrictModel
+from app.modules.readiness.schemas import ItemProgressBrief
 
 Volume = Annotated[Decimal, Field(gt=0, max_digits=18, decimal_places=3)]
 Weight = Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=3)]
@@ -52,7 +53,9 @@ class ScheduleItemPatch(StrictModel):
 
 
 class ScheduleItemOut(BaseModel):
-    """Ответственный внешним ролям не отдаётся: его колонки закрыты для пула kut_portal."""
+    """Ответственный внешним ролям не отдаётся: его колонки закрыты для пула kut_portal.
+
+    progress заполняется только по запросу (with_progress=true): готовность строки на дату as_of."""
 
     id: uuid.UUID
     project_id: uuid.UUID
@@ -67,6 +70,7 @@ class ScheduleItemOut(BaseModel):
     weight: Decimal | None
     responsible_user_id: uuid.UUID | None = None
     responsible_name: str | None = None
+    progress: ItemProgressBrief | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

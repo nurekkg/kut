@@ -3,7 +3,7 @@ from datetime import date
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -13,6 +13,7 @@ from app.modules.actuals.schemas import ActualCreate, ActualOut, ActualPatch
 from app.modules.identity.models import User
 from app.modules.objects.models import Project, ProjectNode
 from app.modules.photos.models import WorkPhoto
+from app.modules.schedule.models import ScheduleItem
 from app.modules.works.models import Work
 
 MAX_LIST = 5000
@@ -45,10 +46,22 @@ def _actual_select(*, internal: bool) -> Select[Any]:
     statement = select(*_ACTUAL_PUBLIC).outerjoin(Work, Work.id == WorkActual.work_id)
     if not internal:
         return statement
-    author, approver = aliased(User), aliased(User)
+    author, approver, plan = aliased(User), aliased(User), aliased(ScheduleItem)
+    same_item = aliased(WorkActual)
     live_photos = (
         select(func.count(WorkPhoto.id))
         .where(WorkPhoto.work_actual_id == WorkActual.id, WorkPhoto.deleted_at.is_(None))
+        .correlate(WorkActual)
+        .scalar_subquery()
+    )
+    # Подтверждённый по строке ГПР объём: индекс по schedule_item_id, на странице до 5000 строк.
+    confirmed = (
+        select(func.coalesce(func.sum(same_item.volume), 0))
+        .where(
+            same_item.schedule_item_id == WorkActual.schedule_item_id,
+            same_item.status == ActualStatus.APPROVED.value,
+            same_item.deleted_at.is_(None),
+        )
         .correlate(WorkActual)
         .scalar_subquery()
     )
@@ -63,9 +76,14 @@ def _actual_select(*, internal: bool) -> Select[Any]:
             WorkActual.longitude,
             WorkActual.accuracy_m,
             live_photos.label("photo_count"),
+            plan.plan_volume.label("item_plan_volume"),
+            case((WorkActual.schedule_item_id.is_(None), None), else_=confirmed).label(
+                "item_confirmed_volume"
+            ),
         )
         .outerjoin(author, author.id == WorkActual.author_id)
         .outerjoin(approver, approver.id == WorkActual.approved_by)
+        .outerjoin(plan, plan.id == WorkActual.schedule_item_id)
     )
 
 
