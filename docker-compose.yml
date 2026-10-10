@@ -213,7 +213,7 @@ services:
     command:
       - sh
       - -c
-      - 'if [ "$$APP_ENV" = development ]; then python -m app.modules.auth.devseed; else echo "dev seed skipped: APP_ENV is $$APP_ENV"; fi'
+      - 'if [ "$$APP_ENV" = development ]; then python -m app.modules.auth.devseed && python -m app.modules.dashboards.devseed; else echo "dev seed skipped: APP_ENV is $$APP_ENV"; fi'
     environment:
       <<: *backend-env
       DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
