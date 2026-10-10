@@ -50,12 +50,23 @@ async def set_dates(engine: AsyncEngine, item: object, start: date, end: date) -
         )
 
 
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (date(1900, 1, 1), date(9999, 12, 31)),  # вне 2000-2100
+        (date(2026, 9, 1), date(2036, 9, 2)),  # в границах, но длиннее 10 лет
+    ],
+)
 async def test_the_upgrade_refuses_rows_outside_the_limits_and_changes_nothing(
-    alembic: Config, worker_engine: AsyncEngine, auth_world: AuthWorld
+    alembic: Config,
+    worker_engine: AsyncEngine,
+    auth_world: AuthWorld,
+    start: date,
+    end: date,
 ) -> None:
     plan = await make_plan(worker_engine, auth_world)
     command.downgrade(alembic, BEFORE)
-    await set_dates(worker_engine, plan.item, date(1900, 1, 1), date(9999, 12, 31))
+    await set_dates(worker_engine, plan.item, start, end)
     async with worker_engine.begin() as connection:  # удалена мягко: на проверку это не влияет
         await connection.execute(
             text("UPDATE schedule_item SET deleted_at = now() WHERE id = :id"), {"id": plan.item}
@@ -81,7 +92,7 @@ async def test_the_upgrade_refuses_rows_outside_the_limits_and_changes_nothing(
                 " 'ck_schedule_item_duration_max')"
             )
         )
-    assert row == (date(1900, 1, 1), date(9999, 12, 31))  # строку миграция не тронула
+    assert row == (start, end)  # строку миграция не тронула
     assert constraints == 0  # и ограничений не добавила
 
     await set_dates(worker_engine, plan.item, date(2026, 9, 1), date(2026, 9, 10))
