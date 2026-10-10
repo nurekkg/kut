@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.core.config import get_settings
+from app.modules.dashboards import service
 from tests.auth_support import AuthWorld, bearer, token_for
 from tests.gpr_support import unique
 from tests.test_readiness import build_reference, cleanup  # noqa: F401  (фикстура эталона S3a)
@@ -341,6 +342,9 @@ async def test_the_object_dashboard_is_hidden_from_a_foreign_object_and_from_cou
 ) -> None:
     foreman = await token_for(api, "foreman")
     assert (await call(api, foreman, f"{D}/object/{example['project']}")).status_code == 404
+    # мастер тоже не назначен на пример: чужой объект для него - 404, не 403
+    master = await token_for(api, "master")
+    assert (await call(api, master, f"{D}/object/{example['project']}")).status_code == 404
     customer = await token_for(api, "customer")
     east_object = await call(api, customer, f"{D}/object/{auth_world.projects['east']}")
     assert east_object.status_code == 403
@@ -390,3 +394,38 @@ async def test_the_customer_view_has_percent_and_series_and_no_money_weights_or_
     foreman = await token_for(api, "foreman")
     other = await call(api, foreman, f"{D}/portal/{example['project']}")
     assert other.status_code == 404
+
+
+async def test_the_budget_is_not_read_without_the_finance_right(
+    api: AsyncClient, auth_world: AuthWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Право проверяется до запроса: без finance:read сервис к бюджету не обращается вовсе.
+    RLS по project_finance - второй слой, его проверяет test_finance_visibility."""
+    reads: list[Any] = []
+    real_budget = service._budget
+
+    def spy(row: Any) -> Any:
+        reads.append(row)
+        return real_budget(row)
+
+    monkeypatch.setattr(service, "_budget", spy)
+    east = auth_world.projects["east"]
+    master = await token_for(api, "master")
+    view = await ok(api, master, f"{D}/object/{east}")
+    assert view["budget"] is None
+    assert reads == []
+    owner = await token_for(api, "owner")
+    await ok(api, owner, f"{D}/object/{east}")
+    assert len(reads) == 1  # контроль: при праве запрос к бюджету выполняется
+
+
+async def test_the_matrix_gives_the_finance_director_percent_and_money_only(
+    api: AsyncClient, example: dict[str, Any]
+) -> None:
+    """Матрица: у финдиректора есть ГПР (R) и finance:read, а work_actual нет ("—"), поэтому в
+    дашборде есть процент и бюджет, но нет фактов и фото."""
+    finance = await token_for(api, "finance")
+    view = await ok(api, finance, f"{D}/object/{example['project']}")
+    assert view["progress"] is not None
+    assert view["facts"] is None and view["photos"] is None
+    assert view["budget"] == {"planned_budget": "1500000.00", "currency": "KGS"}
