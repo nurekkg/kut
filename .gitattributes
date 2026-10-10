@@ -1,8 +1,2 @@
-* text=auto eol=lf
-
-*.png binary
-*.jpg binary
-*.jpeg binary
-*.ico binary
-*.woff binary
-*.woff2 binary
+# хуки git должны быть с LF: при checkout на Windows (autocrlf) shebang иначе ломается
+scripts/git-hooks/* text eol=lf
