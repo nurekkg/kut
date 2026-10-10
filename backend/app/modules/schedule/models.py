@@ -58,6 +58,15 @@ class ScheduleItem(BusinessBase):
             name="uq_schedule_item_project_id_id_node_id_work_id",
         ),
         CheckConstraint("plan_end >= plan_start", name="dates_ordered"),
+        # Границы дат ГПР (решение PO): даты в 2000-2100 и не длиннее 10 лет; без них одна строка
+        # с датой из другого века растягивала шкалу диаграммы на миллионы суток.
+        CheckConstraint(
+            "plan_start >= DATE '2000-01-01' AND plan_end <= DATE '2100-12-31'",
+            name="dates_in_range",
+        ),
+        CheckConstraint(
+            "plan_end <= (plan_start + INTERVAL '10 years')::date", name="duration_max"
+        ),
         CheckConstraint("plan_volume > 0", name="volume_positive"),
         CheckConstraint("weight IS NULL OR weight > 0", name="weight_positive"),
         Index(

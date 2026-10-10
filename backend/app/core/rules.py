@@ -56,6 +56,8 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "uq_schedule_item_node_id_work_id": (409, "schedule_item_exists"),
     "uq_schedule_dependency_predecessor_id_successor_id": (409, "dependency_exists"),
     "ck_schedule_item_dates_ordered": (422, "dates_invalid"),
+    "ck_schedule_item_dates_in_range": (422, "schedule_dates_out_of_range"),
+    "ck_schedule_item_duration_max": (422, "schedule_dates_out_of_range"),
     "ck_work_actual_coordinates_valid": (422, "coordinates_invalid"),
     "ck_work_actual_accuracy_valid": (422, "coordinates_invalid"),
     "ck_work_photo_coordinates_valid": (422, "coordinates_invalid"),

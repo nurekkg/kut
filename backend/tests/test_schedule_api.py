@@ -165,6 +165,63 @@ async def test_a_wrong_row_is_refused(
         assert response.json()["detail"] == detail
 
 
+# --- границы дат (решение PO): 2000-2100 и не длиннее 10 лет, код ответа понятен клиенту ----------
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"plan_start": "1999-12-31"},
+        {"plan_end": "2101-01-01"},
+        {"plan_start": "1900-01-01", "plan_end": "9999-12-31"},
+        {"plan_end": "2036-09-02"},
+    ],
+)
+async def test_dates_outside_the_limits_get_a_clear_code(
+    api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine, overrides: dict[str, Any]
+) -> None:
+    plan = await make_plan(worker_engine, auth_world, with_item=False)
+
+    response = await plan_row(api, auth_world, plan, **overrides)
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "schedule_dates_out_of_range"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [{"plan_end": "9999-12-31"}, {"plan_start": "1999-12-31"}, {"plan_end": "2036-09-02"}],
+)
+async def test_a_patch_cannot_push_the_dates_outside_the_limits(
+    api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine, patch: dict[str, Any]
+) -> None:
+    plan = await make_plan(worker_engine, auth_world, with_item=False)
+    row = (await plan_row(api, auth_world, plan)).json()
+
+    response = await send(api, "PATCH", url(auth_world, row["id"]), "foreman", json=patch)
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == "schedule_dates_out_of_range"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"plan_start": "2000-01-01", "plan_end": "2000-01-31"},
+        {"plan_start": "2100-12-01", "plan_end": "2100-12-31"},
+        {"plan_start": "2026-09-01", "plan_end": "2036-09-01"},
+    ],
+)
+async def test_dates_at_the_edges_of_the_limits_are_accepted(
+    api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine, overrides: dict[str, Any]
+) -> None:
+    plan = await make_plan(worker_engine, auth_world, with_item=False)
+
+    response = await plan_row(api, auth_world, plan, **overrides)
+
+    assert response.status_code == 201, response.text
+
+
 async def test_the_node_must_belong_to_the_object_of_the_path(
     api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine
 ) -> None:
