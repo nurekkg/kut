@@ -120,6 +120,7 @@ export const FIELD_ERRORS = [
   "schedule_work_invalid",
   "schedule_item_has_dependents",
   "schedule_item_exists",
+  "schedule_dates_out_of_range",
   "dependency_cycle",
   "dependency_item_invalid",
   "dependency_exists",

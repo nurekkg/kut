@@ -5,7 +5,8 @@
   "description": "Сквозные проверки интерфейса S3: мастер, прораб, ГПР, права (Playwright)",
   "scripts": {
     "test": "playwright test",
-    "report": "playwright show-report"
+    "report": "playwright show-report",
+    "test:unit": "playwright test -c playwright.unit.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.60.0"

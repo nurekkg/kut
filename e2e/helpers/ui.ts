@@ -126,3 +126,61 @@ export async function enterFact(
   await expect(page.getByTestId("geo-card")).toHaveAttribute("data-state", "ready");
   if (screens) await shot(page, `${screens}-5-evidence`);
 }
+
+// Очередь отправки лежит в IndexedDB `kut-field`, хранилище `outbox` (frontend/src/lib/field/idb.ts):
+// сколько записей на устройстве, и копии записей другого возраста для проверки срока хранения.
+export async function outboxCount(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      new Promise<number>((resolve, reject) => {
+        const open = indexedDB.open("kut-field");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          if (!db.objectStoreNames.contains("outbox")) {
+            db.close();
+            resolve(0);
+            return;
+          }
+          const count = db.transaction("outbox").objectStore("outbox").count();
+          count.onsuccess = () => {
+            db.close();
+            resolve(count.result);
+          };
+          count.onerror = () => reject(count.error);
+        };
+      }),
+  );
+}
+
+// Копии первой записи очереди с другим возрастом (в сутках) и новым id; возвращает id копий.
+export async function cloneOutboxEntry(page: Page, ageDays: number[]): Promise<string[]> {
+  return page.evaluate(
+    (ages) =>
+      new Promise<string[]>((resolve, reject) => {
+        const open = indexedDB.open("kut-field");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction("outbox", "readwrite");
+          const store = tx.objectStore("outbox");
+          const all = store.getAll();
+          const ids: string[] = [];
+          all.onsuccess = () => {
+            const source = all.result[0] as Record<string, unknown>;
+            for (const age of ages) {
+              const id = crypto.randomUUID();
+              ids.push(id);
+              store.put({ ...source, id, createdAt: Date.now() - age * 86_400_000 });
+            }
+          };
+          tx.oncomplete = () => {
+            db.close();
+            resolve(ids);
+          };
+          tx.onerror = () => reject(tx.error);
+        };
+      }),
+    ageDays,
+  );
+}

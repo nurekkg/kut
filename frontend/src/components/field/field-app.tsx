@@ -4,10 +4,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ClipboardList, LogOut, PlusCircle } from "lucide-react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { useLogout } from "@/components/auth/logout-guard";
 import { OutboxQueue } from "@/components/field/queue";
 import { Records } from "@/components/field/records";
 import { Wizard } from "@/components/field/wizard";
@@ -22,12 +22,11 @@ type Tab = "new" | "records";
 // отправки живёт на устройстве: пока сервер не подтвердил запись, она не теряется.
 export function FieldApp() {
   const t = useTranslations("Field");
-  const { user, signOut } = useAuth();
-  const router = useRouter();
+  const { user } = useAuth();
+  const { request: logout, leaving, dialog: logoutDialog } = useLogout();
   const queryClient = useQueryClient();
   const outbox = useOutbox();
   const [tab, setTab] = useState<Tab>("new");
-  const [leaving, setLeaving] = useState(false);
 
   const userId = user?.id ?? null;
   useEffect(() => {
@@ -42,15 +41,6 @@ export function FieldApp() {
     if (delivered > 0) void invalidateAllProgress(queryClient);
   }, [delivered, queryClient]);
 
-  async function logout() {
-    setLeaving(true);
-    try {
-      await signOut();
-    } finally {
-      router.replace("/login");
-    }
-  }
-
   if (!user) return null;
   const allowed = user.permissions.includes("work_actual:write");
   const tabs: { id: Tab; label: string; icon: typeof PlusCircle }[] = [
@@ -60,6 +50,7 @@ export function FieldApp() {
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-xl flex-col">
+      {logoutDialog}
       <header className="flex items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium" data-testid="user-name">

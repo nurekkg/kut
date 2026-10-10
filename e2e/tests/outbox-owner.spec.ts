@@ -2,14 +2,16 @@ import { expect, test } from "../helpers/test";
 
 import { apiLogin, createPlan, factsOfNode, jwtSubject } from "../helpers/api";
 import { PHOTO } from "../helpers/env";
-import { enterFact, phoneContext, shot, signIn, signInHere } from "../helpers/ui";
+import { enterFact, outboxCount, phoneContext, shot, signIn, signInHere } from "../helpers/ui";
 
-// Общий телефон: мастер отправляет запись и выходит, пока снимок ещё грузится; в той же вкладке
-// входит другой человек. Оставшиеся шаги записи мастера (подтвердить снимки, отправить на проверку)
-// не должны уйти с токеном второго: иначе снимки и отправка записались бы от его имени, а авторство
-// доказательств исказилось бы. Запись мастера остаётся в очереди устройства и доходит, когда он
-// возвращается.
-test("запись очереди не уходит под сессией другого человека", async ({ browser, request }) => {
+// Общий телефон: мастер отправляет запись и выходит, пока снимок ещё грузится (диалог «Удалить и
+// выйти»); в той же вкладке входит другой человек. Оставшиеся шаги записи мастера (подтвердить
+// снимки, отправить на проверку) не должны уйти ни под чьим токеном: отправка прервана на ходу,
+// очередь стёрта (решение PO), а запросы записи в любом случае идут от имени её владельца.
+test("выход с отправкой на ходу: запись прервана, чужой вход ничего не отправляет", async ({
+  browser,
+  request,
+}) => {
   const foreman = await apiLogin(request, "foreman");
   const plan = await createPlan(request, foreman);
   const masterToken = (await apiLogin(request, "master")).token;
@@ -52,7 +54,7 @@ test("запись очереди не уходит под сессией дру
       if (route.request().method() !== "PUT") return route.continue();
       reached();
       await gate;
-      await route.continue();
+      await route.continue().catch(() => undefined); // загрузка уже прервана выходом
     },
   );
 
@@ -65,19 +67,17 @@ test("запись очереди не уходит под сессией дру
   await page.getByTestId("send").click();
   await held; // черновик факта создан, снимок уходит в S3 и стоит на воротах
 
-  // Мастер выходит, в той же вкладке (без перезагрузки страницы) входит технический директор.
-  await page.getByRole("button", { name: "Выйти" }).click();
+  // Мастер выходит (запись ещё уходит: диалог), удаляет её и выходит; в той же вкладке (без
+  // перезагрузки страницы) входит технический директор.
+  await page.getByRole("button", { name: "Выйти", exact: true }).click();
+  await page.getByTestId("logout-discard").click();
   await page.waitForURL(/\/login/);
   await signInHere(page, "techdir");
   await shot(page, "owner-1-other-user");
 
-  // Снимок дозагружен; все шаги, которые запись успела бы сделать, уже сделаны.
-  const stored = page.waitForResponse(
-    (response) => response.request().method() === "PUT" && new URL(response.url()).port === "9000",
-  );
-  open();
-  await stored;
+  open(); // снимок «дозагружается»: запись уже стёрта, продолжать нечему
   await page.waitForTimeout(4000);
+  expect(await outboxCount(page), "очередь мастера осталась на устройстве").toBe(0);
 
   expect(
     steps.filter((item) => item.subject === stranger),
@@ -88,23 +88,7 @@ test("запись очереди не уходит под сессией дру
   expect(draft[0].status).toBe("draft");
   expect(draft[0].photo_count ?? 0).toBe(0);
 
-  // Мастер возвращается: запись цела и доводится до проверки уже под его токеном.
-  await phone.clearCookies();
-  await signIn(page, "master");
-  await page.goto("/m");
-  await expect
-    .poll(
-      async () => {
-        const facts = await factsOfNode(request, foreman, plan.projectId, plan.nodeId);
-        return `${facts.length}:${facts[0]?.status}:${facts[0]?.photo_count}`;
-      },
-      { timeout: 120_000, intervals: [2000] },
-    )
-    .toBe("1:submitted:1");
-  // Повтор шага при сбое сервера допустим, поэтому порядок и состав, а не точное число запросов.
-  const mine = steps.filter((item) => item.subject === owner).map((item) => item.step);
-  expect(mine[0]).toBe("confirm");
-  expect(mine).toContain("submit");
-  await shot(page, "owner-2-owner-back");
+  // Подтверждений и отправки от имени мастера нет: запись прервана и стёрта.
+  expect(steps.filter((item) => item.subject === owner)).toEqual([]);
   await phone.close();
 });

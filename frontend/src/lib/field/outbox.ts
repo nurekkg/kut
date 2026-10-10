@@ -6,6 +6,7 @@ import { API } from "@/lib/projects/keys";
 
 import { outboxDb } from "./idb";
 import type { OutboxEntry, OutboxPhoto, UploadProgress } from "./outbox-types";
+import { selectRemovable } from "./retention";
 import type { Actual, PresignedUpload } from "./types";
 
 export type OutboxState = {
@@ -44,6 +45,16 @@ export function useOutbox(): OutboxState {
 
 class TransientError extends Error {}
 
+// Запись удалена человеком или очисткой (выход, смена пользователя, срок хранения): шаги, идущие в этот
+// момент, прекращаются и ничего не записывают обратно в IndexedDB.
+class CancelledError extends Error {}
+const cancelled = new Set<string>();
+const uploads = new Map<string, XMLHttpRequest>();
+
+function ensureLive(entry: OutboxEntry): void {
+  if (cancelled.has(entry.id)) throw new CancelledError();
+}
+
 type Kind = "transient" | "permanent";
 
 // Обрыв связи, таймаут и ответы 5xx лечатся повтором; отказ сервера по существу (4xx) повтор не
@@ -65,11 +76,15 @@ function classify(error: unknown): Kind {
 type Put = "ok" | "exists" | "expired";
 
 function putFile(
+  entryId: string,
   photo: OutboxPhoto,
   onProgress: (loaded: number, total: number) => void,
 ): Promise<Put> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
+    uploads.set(entryId, request);
+    request.onloadend = () => uploads.delete(entryId);
+    request.onabort = () => reject(new CancelledError());
     request.open("PUT", photo.uploadUrl ?? "");
     for (const [name, value] of Object.entries(photo.headers ?? {})) {
       request.setRequestHeader(name, value);
@@ -108,6 +123,7 @@ function copy(entry: OutboxEntry): OutboxEntry {
 }
 
 async function persist(entry: OutboxEntry): Promise<void> {
+  ensureLive(entry);
   await outboxDb.put(entry);
   publish({
     entries: state.entries.map((item) => (item.id === entry.id ? copy(entry) : item)),
@@ -129,6 +145,7 @@ async function uploadPhotos(entry: OutboxEntry): Promise<void> {
   for (let index = 0; index < entry.photos.length; index += 1) {
     const photo = entry.photos[index];
     for (let attempt = 0; attempt < 2 && !photo.uploaded; attempt += 1) {
+      ensureLive(entry);
       if (!presignIsValid(photo)) {
         const issued = await api.post<{ items: PresignedUpload[] }>(`${base}/photos/presign`, {
           work_actual_id: entry.factId,
@@ -142,7 +159,7 @@ async function uploadPhotos(entry: OutboxEntry): Promise<void> {
         photo.expiresIn = item.expires_in;
         await persist(entry);
       }
-      const result = await putFile(photo, (loaded, total) =>
+      const result = await putFile(entry.id, photo, (loaded, total) =>
         reportProgress(entry, index, loaded, total),
       );
       if (result === "expired") {
@@ -164,6 +181,7 @@ async function runEntry(entry: OutboxEntry): Promise<void> {
   const base = `${API}/projects/${entry.projectId}`;
 
   if (entry.mode === "resubmit" && entry.patch && !entry.patched) {
+    ensureLive(entry);
     const patched = await api.patch<Actual>(`${base}/work-actuals/${entry.factId}`, entry.patch);
     entry.patched = true;
     entry.factStatus = patched.status;
@@ -171,6 +189,7 @@ async function runEntry(entry: OutboxEntry): Promise<void> {
   }
   if (entry.factId === null) {
     // Черновик: фото добавляются к факту, пока он не отправлен на проверку.
+    ensureLive(entry);
     const created = await api.post<Actual>(
       `${base}/work-actuals`,
       { ...entry.payload, submit: false },
@@ -184,6 +203,7 @@ async function runEntry(entry: OutboxEntry): Promise<void> {
     await uploadPhotos(entry);
   }
   if (!entry.confirmed && entry.photos.length > 0) {
+    ensureLive(entry);
     // Ключ повтора привязан к составу ключей хранилища: другой состав - другой ключ.
     const fingerprint = entry.photos.map((photo) => photo.key).join(",");
     if (entry.confirmFingerprint !== fingerprint) {
@@ -209,6 +229,7 @@ async function runEntry(entry: OutboxEntry): Promise<void> {
   }
   // Факт прораба и техдиректора база согласует сразу: отправлять на проверку нечего.
   if (!entry.submitted && entry.factStatus !== "approved" && entry.factStatus !== "submitted") {
+    ensureLive(entry);
     await api.post<Actual>(`${base}/work-actuals/${entry.factId}/submit`);
     entry.submitted = true;
     await persist(entry);
@@ -258,6 +279,10 @@ async function loop(): Promise<void> {
       });
       delay = BASE_DELAY;
     } catch (error) {
+      if (error instanceof CancelledError) {
+        publish({ busy: null }); // запись удалена на ходу: обратно в IndexedDB её не кладём
+        continue;
+      }
       // Рабочая копия всегда свежее состояния экрана: после выхода пользователя оно очищено, а запись
       // должна сохранить всё, что успели сделать (id факта, загруженные снимки).
       const failed = copy(working);
@@ -311,6 +336,7 @@ function onOnline(): void {
 export async function attach(userId: string): Promise<void> {
   currentUser = userId;
   window.addEventListener("online", onOnline);
+  await purgeOutbox(userId);
   try {
     const stored = await outboxDb.all();
     publish({
@@ -351,9 +377,73 @@ export async function retryEntry(id: string): Promise<void> {
   void drain();
 }
 
+async function storedEntries(): Promise<OutboxEntry[]> {
+  try {
+    return await outboxDb.all();
+  } catch {
+    return []; // IndexedDB недоступна (приватный режим): очереди нет
+  }
+}
+
+async function removeEntries(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    cancelled.add(id);
+    uploads.get(id)?.abort();
+    try {
+      await outboxDb.remove(id);
+    } catch {
+      // нечего удалять: IndexedDB недоступна
+    }
+  }
+  if (ids.length > 0) {
+    const gone = new Set(ids);
+    publish({ entries: state.entries.filter((entry) => !gone.has(entry.id)) });
+  }
+}
+
 export async function discardEntry(id: string): Promise<void> {
-  await outboxDb.remove(id);
-  publish({ entries: state.entries.filter((entry) => entry.id !== id) });
+  await removeEntries([id]);
+}
+
+// Удалить всё неотправленное этого пользователя (выход: «удалить»).
+export async function discardAll(userId: string): Promise<void> {
+  const ids = new Set(
+    [...(await storedEntries()), ...state.entries]
+      .filter((entry) => entry.userId === userId)
+      .map((entry) => entry.id),
+  );
+  await removeEntries([...ids]);
+}
+
+// Очистка очереди при запуске приложения и входе: записи другого пользователя и записи старше срока
+// хранения стираются, в том числе те, что отправляются прямо сейчас.
+export async function purgeOutbox(userId: string, now: number = Date.now()): Promise<number> {
+  const removable = selectRemovable(await storedEntries(), userId, now);
+  await removeEntries(removable.map((entry) => entry.id));
+  return removable.length;
+}
+
+// Сколько записей пользователя ещё не дошло до сервера (в том числе отклонённых сервером).
+export async function countUnsent(userId: string): Promise<number> {
+  return (await storedEntries()).filter((entry) => entry.userId === userId).length;
+}
+
+const FLUSH_TIMEOUT_MS = 10 * 60 * 1000;
+
+// «Отправить сейчас» при выходе: прогнать очередь пользователя (в том числе отклонённые записи) и
+// дождаться конца разбора. Возвращает, сколько записей осталось (связи нет, сервер отказал).
+export async function flush(userId: string): Promise<number> {
+  if (currentUser !== userId) await attach(userId);
+  for (const entry of state.entries.filter((item) => item.stage === "failed")) {
+    await retryEntry(entry.id);
+  }
+  delay = BASE_DELAY;
+  void drain();
+  const deadline = Date.now() + FLUSH_TIMEOUT_MS;
+  while ((draining || state.busy !== null) && Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+  }
+  return countUnsent(userId);
 }
 
 export function retryAll(): void {
