@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, phase-0, phase-1]
+    branches: [main, 'phase-*']
   pull_request:
 
 permissions:
