@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -120,6 +121,20 @@ def require(
             if project_id not in principal.project_ids:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
         if not principal.has(module, action, qualifier):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+        return principal
+
+    return dependency
+
+
+def internal_only(
+    base: Callable[..., Awaitable[Principal]],
+) -> Callable[..., Awaitable[Principal]]:
+    """Ресурс только для внутренних ролей: внешние (заказчик, субподрядчик, поставщик) получают 403
+    даже при праве по матрице; проверка прав базы идёт раньше."""
+
+    async def dependency(principal: Annotated[Principal, Depends(base)]) -> Principal:
+        if not principal.is_internal:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
         return principal
 

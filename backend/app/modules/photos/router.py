@@ -1,11 +1,10 @@
 import uuid
-from collections.abc import Awaitable, Callable
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.deps import get_db, require
+from app.modules.auth.deps import get_db, internal_only, require
 from app.modules.auth.principal import Principal
 from app.modules.idempotency.service import IdempotencyKeyHeader, fingerprint, run_idempotent
 from app.modules.photos import service
@@ -28,27 +27,15 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
-def _internal_only(
-    base: Callable[..., Awaitable[Principal]],
-) -> Callable[..., Awaitable[Principal]]:
-    """Фото в MVP видят только внутренние роли: заказчику и субподрядчику они не отдаются
-    (на снимках люди, техника и состояние площадки; открыть их внешним - отдельное решение PO)."""
-
-    async def dependency(principal: Annotated[Principal, Depends(base)]) -> Principal:
-        if not principal.is_internal:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
-        return principal
-
-    return dependency
-
-
+# Фото в MVP видят только внутренние роли: заказчику и субподрядчику они не отдаются
+# (на снимках люди, техника и состояние площадки; открыть их внешним - отдельное решение PO).
 Reader = Annotated[
     Principal,
-    Depends(_internal_only(require(Module.WORK_ACTUAL, Action.READ, project_param="project_id"))),
+    Depends(internal_only(require(Module.WORK_ACTUAL, Action.READ, project_param="project_id"))),
 ]
 Writer = Annotated[
     Principal,
-    Depends(_internal_only(require(Module.WORK_ACTUAL, Action.WRITE, project_param="project_id"))),
+    Depends(internal_only(require(Module.WORK_ACTUAL, Action.WRITE, project_param="project_id"))),
 ]
 
 

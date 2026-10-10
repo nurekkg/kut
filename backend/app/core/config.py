@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     gzip_minimum_bytes: int = 1024
     gzip_compresslevel: int = 5
 
+    # Дашборды (S4): пороги «проблем» и размеры списков - настройки, а не литералы в расчёте.
+    dashboard_problem_lag_days: int = (
+        3  # работа проблемна, если отстаёт на столько дней или просрочена
+    )
+    dashboard_approval_stale_days: int = 2  # факт на подтверждении дольше этого - «зависший»
+    dashboard_recent_days: int = 7  # окно «фактов за последние дни»
+    dashboard_top_n: int = 10  # проблемные работы и зоны на экране
+    dashboard_series_window_weeks: int = 52  # ряд по неделям: окно в обе стороны от сегодня
+    dashboard_photos_limit: int = 6  # последние фото в ленте
+
     # --- аутентификация (ADR-001 §2). Ключи только из окружения; API без них не стартует. ---
     # «kid:<base64url 32-байтного seed Ed25519>[,kid:...]»; подписывает ключ jwt_active_kid,
     # проверяются все перечисленные (так ротируют ключи).

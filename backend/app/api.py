@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.modules.actuals.router import router as actuals_router
 from app.modules.auth.router import router as auth_router
+from app.modules.dashboards.router import router as dashboards_router
 from app.modules.photos.router import router as photos_router
 from app.modules.projects.router import router as projects_router
 from app.modules.readiness.router import router as readiness_router
@@ -18,5 +19,6 @@ api_v1_router.include_router(schedule_router)
 api_v1_router.include_router(actuals_router)
 api_v1_router.include_router(photos_router)
 api_v1_router.include_router(readiness_router)
+api_v1_router.include_router(dashboards_router)
 api_v1_router.include_router(settings_router)
 api_v1_router.include_router(works_router)
