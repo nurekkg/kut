@@ -9,6 +9,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
+import { ObjectDashboard } from "@/components/dashboards/object-dashboard";
+import { ObjectViewSwitch } from "@/components/dashboards/view-switch";
 import { AppNav } from "@/components/projects/app-nav";
 import { NodeCard } from "@/components/projects/node-card";
 import { DeleteNodeModal, MoveNodeModal, NodeFormModal } from "@/components/projects/node-dialogs";
@@ -22,6 +24,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { api } from "@/lib/api";
 import { ApiError } from "@/lib/auth/api";
+import { DASHBOARDS_ROOT, dashboardProjectKey } from "@/lib/dashboards/keys";
 import { API, PROJECTS_KEY, projectKey, treeKey } from "@/lib/projects/keys";
 import { buildIndex, siblingsOf } from "@/lib/projects/tree";
 import { isStatus, type NodeDetail, type Project, type TreeNode } from "@/lib/projects/types";
@@ -44,7 +47,9 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const queryClient = useQueryClient();
-  const selectedParam = useSearchParams().get("node");
+  const searchParams = useSearchParams();
+  const selectedParam = searchParams.get("node");
+  const cardView = searchParams.get("view") === "card";
   const [dialog, setDialog] = useState<Dialog>(null);
 
   const internal = user?.is_internal ?? false;
@@ -202,7 +207,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 </QueryState>
               </aside>
 
-              <section className={`min-w-0 ${selected ? "block" : "hidden lg:block"}`}>
+              <section className="order-first min-w-0 lg:order-none">
                 {selected ? (
                   <NodeCard
                     key={selected.id}
@@ -221,6 +226,15 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                       onReorder: (direction) => reorder.mutate({ node: selected, direction }),
                     }}
                   />
+                ) : internal ? (
+                  <div className="space-y-5">
+                    <ObjectViewSwitch view={cardView ? "card" : "dashboard"} />
+                    {cardView ? (
+                      <ProjectOverview project={project.data} />
+                    ) : (
+                      <ObjectDashboard projectId={projectId} />
+                    )}
+                  </div>
                 ) : (
                   <ProjectOverview project={project.data} />
                 )}
@@ -275,7 +289,15 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         />
       ) : null}
       {dialog?.kind === "project-edit" && project.data ? (
-        <ProjectFormModal project={project.data} onClose={close} onSaved={close} />
+        <ProjectFormModal
+          project={project.data}
+          onClose={close}
+          onSaved={() => {
+            close();
+            void queryClient.invalidateQueries({ queryKey: dashboardProjectKey(projectId) });
+            void queryClient.invalidateQueries({ queryKey: DASHBOARDS_ROOT });
+          }}
+        />
       ) : null}
       {dialog?.kind === "project-delete" && project.data ? (
         <ConfirmModal

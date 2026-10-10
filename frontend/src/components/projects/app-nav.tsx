@@ -29,11 +29,13 @@ function ApprovalsCount() {
 // (со счётчиком), экран мастера - work_actual:write.
 export function AppNav() {
   const t = useTranslations("AppNav");
+  const dash = useTranslations("Dashboard");
   const pathname = usePathname();
   const { user } = useAuth();
   const can = (permission: string) => user?.permissions.includes(permission) ?? false;
   const items = [
     { href: "/projects", label: t("projects"), show: true, counter: false },
+    { href: "/dashboard", label: dash("nav"), show: user?.scope === "group", counter: false },
     { href: "/works", label: t("works"), show: can("works:read"), counter: false },
     {
       href: "/approvals",

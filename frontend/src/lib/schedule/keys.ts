@@ -19,4 +19,5 @@ export const PROGRESS_PREFIXES = [
   "node-schedule",
   "actuals",
   "photos",
+  "dashboard",
 ] as const;

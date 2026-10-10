@@ -1,6 +1,7 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { DASHBOARDS_ROOT } from "@/lib/dashboards/keys";
 import { API } from "@/lib/projects/keys";
 
 import {
@@ -74,15 +75,18 @@ export function useNodeSchedule(projectId: string, nodeId: string) {
   });
 }
 
-// Подтверждение, правка факта или ГПР меняют проценты на нескольких экранах сразу.
-export function invalidateProgress(queryClient: QueryClient, projectId?: string): Promise<void> {
+// Подтверждение, правка факта или ГПР меняют проценты на нескольких экранах сразу (сводки - тоже).
+export async function invalidateProgress(queryClient: QueryClient, projectId?: string): Promise<void> {
   const prefixes: readonly unknown[] = PROGRESS_PREFIXES;
-  return queryClient.invalidateQueries({
-    predicate: (query) =>
-      query.queryKey[0] === "projects" &&
-      (projectId === undefined || query.queryKey[1] === projectId) &&
-      prefixes.includes(query.queryKey[2]),
-  });
+  await Promise.all([
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        query.queryKey[0] === "projects" &&
+        (projectId === undefined || query.queryKey[1] === projectId) &&
+        prefixes.includes(query.queryKey[2]),
+    }),
+    queryClient.invalidateQueries({ queryKey: DASHBOARDS_ROOT }),
+  ]);
 }
 
 // Без объекта: все объекты сразу (очередь устройства не знает, какие экраны открыты).
