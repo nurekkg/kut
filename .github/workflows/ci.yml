@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, phase-0, phase-1]
+    branches: [main, 'phase-*']
   pull_request:
 
 permissions:
@@ -55,11 +55,12 @@ jobs:
       DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:ci_portal_password@localhost:5432/kut_test
       TEST_DATABASE_OWNER_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut_test
       TEST_DATABASE_WORKER_URL: postgresql+psycopg://kut_worker:ci_worker_password@localhost:5432/kut_test
-      # Одноразовые ключи job-а (kid без префикса «dev»): подпись JWT и шифрование секретов TOTP.
-      JWT_PRIVATE_KEYS: ci-1:Vq3N1kQ0y1m4GmQe4Cj0Hj0oQ7yq8t5cVx2sB9pRz1Y
-      JWT_ACTIVE_KID: ci-1
-      TOTP_ENCRYPTION_KEYS: ci-1:Zm9yLWNpLW9ubHktbm90LWEtcmVhbC1rZXktMDAwMDA
-      TOTP_ACTIVE_KEY_ID: ci-1
+      # Ключи JWT и TOTP: dev-плейсхолдеры из .env.example (kid dev-1), как у сервиса test в compose.
+      # Тесты ждут kid dev-1 и проверяют, что production отказывается от dev-ключей.
+      JWT_PRIVATE_KEYS: dev-1:GLp4ipa8ygJMpz5w-usHPDsFMC-QZyMJLNMKBU33drQ
+      JWT_ACTIVE_KID: dev-1
+      TOTP_ENCRYPTION_KEYS: dev-1:J4WKMm-ZdEWech8b3xRh2jNaRBI8NTBQQE46PaqMRGc
+      TOTP_ACTIVE_KEY_ID: dev-1
       REDIS_URL: redis://localhost:6379/0
       CELERY_BROKER_URL: redis://localhost:6379/1
       CELERY_RESULT_BACKEND: redis://localhost:6379/2

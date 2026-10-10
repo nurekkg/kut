@@ -1,3 +1,4 @@
+import secrets
 from collections.abc import Iterator
 
 import pytest
@@ -12,8 +13,9 @@ from app.modules.auth.keys import get_jwt_keys, get_totp_keys
 DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
 
 
-# Не секреты: ключи без префикса «dev», чтобы API стартовал с APP_ENV=production.
-PRODUCTION_LIKE_KEY = "Zm9yLXRlc3RzLW9ubHktbm90LWEtcmVhbC1rZXktMDA"
+# Ключ без префикса «dev», чтобы API стартовал с APP_ENV=production. Случайный при каждом запуске:
+# в репозитории ключа нет.
+PRODUCTION_LIKE_KEY = secrets.token_urlsafe(32)
 
 
 def clear_auth_caches() -> None:

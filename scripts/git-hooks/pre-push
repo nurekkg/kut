@@ -1,0 +1,57 @@
+#!/bin/sh
+# pre-push: локальная защита веток. GitHub Free не даёт правила на приватных репозиториях,
+# поэтому защита здесь.
+#
+# Блокирует на remote: удаление ref и обновление без fast-forward (force push).
+# Разрешить конкретный ref вручную, на одну команду:
+#   KUT_HOOK_ALLOW=refs/heads/<ветка> git push origin --delete <ветка>
+# Несколько ref - через запятую. Каждое разрешение печатается в вывод.
+#
+# Это защита от случайного, а не от намеренного обхода: `git push --no-verify` хук не запускает.
+# Серверная защита (правила ветки, rulesets) на текущем тарифе недоступна.
+
+zero=0000000000000000000000000000000000000000
+remote="$1"
+
+allowed() {
+    case ",${KUT_HOOK_ALLOW:-}," in
+        *",$1,"*) return 0 ;;
+    esac
+    return 1
+}
+
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "$remote_ref" ] || continue
+
+    if [ "$local_sha" = "$zero" ]; then
+        if allowed "$remote_ref"; then
+            echo "pre-push: разрешено вручную (KUT_HOOK_ALLOW): удаление $remote_ref на $remote" >&2
+        else
+            echo "pre-push: ОТКАЗ: удаление $remote_ref на $remote запрещено локальной защитой." >&2
+            status=1
+        fi
+        continue
+    fi
+
+    [ "$remote_sha" = "$zero" ] && continue # новая ветка или тег
+
+    if ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+        echo "pre-push: ОТКАЗ: $remote_ref на $remote: коммит $remote_sha не найден локально, сделайте git fetch." >&2
+        status=1
+        continue
+    fi
+
+    if git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
+        continue # fast-forward
+    fi
+
+    if allowed "$remote_ref"; then
+        echo "pre-push: разрешено вручную (KUT_HOOK_ALLOW): обновление $remote_ref без fast-forward" >&2
+    else
+        echo "pre-push: ОТКАЗ: $remote_ref на $remote: обновление без fast-forward (force push) запрещено." >&2
+        status=1
+    fi
+done
+
+exit $status

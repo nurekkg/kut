@@ -1,0 +1,8 @@
+# Решения PO (2026-10-10): историю tools/kut не переписываем; обе находки gitleaks разобраны.
+
+# 1. Ложное срабатывание: в сигнатуре функции sign() тестов есть слово «key» и тип Ed25519PrivateKey, секрета нет.
+2d53a70383805fa019603444647d9578ed65de84:backend/tests/test_auth_units.py:generic-api-key:217
+
+# 2. Тестовая фикстура из коммита 2d53a70: текст «for-tests-only-not-a-real-key», не ключ.
+#    В HEAD заменена генерацией ключа в тесте (коммит b67ebe7).
+2d53a70383805fa019603444647d9578ed65de84:backend/tests/test_app.py:generic-api-key:16
