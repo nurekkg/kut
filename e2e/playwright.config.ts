@@ -28,8 +28,11 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3100",
     locale: "ru-RU",
     timezoneId: "Asia/Bishkek",
-    trace: "on",
-    screenshot: "on",
+    // Трассы и снимки при каждом тесте - десятки мегабайт на диск хоста, а диск общий с виртуальной
+    // машиной Docker: на слабой машине это добавляло зависаний. По умолчанию - только при падении;
+    // для доказательств: E2E_TRACE=on E2E_SCREENSHOT=on (`--trace=on` в командной строке тоже работает).
+    trace: (process.env.E2E_TRACE as "on" | "off" | "retain-on-failure" | undefined) ?? "retain-on-failure",
+    screenshot: (process.env.E2E_SCREENSHOT as "on" | "off" | "only-on-failure" | undefined) ?? "only-on-failure",
     launchOptions: { executablePath },
     channel,
   },
