@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     s3_secret_key: SecretStr
 
     health_check_timeout_seconds: float = 2.0
+    # Ответ Redis ждём дольше проверки здоровья: пока цикл событий API занят (большой список ГПР в
+    # одном потоке), ожидающий чтения запрос иначе падал с TimeoutError через 2 с и отвечал 500.
+    redis_socket_timeout_seconds: float = 10.0
 
     # Фото факта: ссылка на загрузку живёт 15 минут (медленная мобильная связь), на скачивание - 2.
     photo_upload_ttl_seconds: int = 900
