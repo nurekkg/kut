@@ -1,6 +1,7 @@
 import { expect, test } from "../helpers/test";
 
 import { apiLogin, createPlan, factsOfNode, get, readiness } from "../helpers/api";
+import { groupRows, objectDashboard, percentOf } from "../helpers/dashboards";
 import { PHOTO } from "../helpers/env";
 import {
   desktopContext,
@@ -23,6 +24,17 @@ test("мастер вносит факт, прораб подтверждает,
   const plan = await createPlan(request, foreman);
   const before = await readiness(request, foreman, plan.projectId);
   expect(before.node(plan.nodeId)).toBe(0);
+  // Процент объекта на дашборде и в сводке группы (техдиректор видит все объекты группы).
+  const techdir = await apiLogin(request, "techdir");
+  const groupPercent = async () =>
+    percentOf(
+      (await groupRows(request, techdir)).find((row) => row.project_id === plan.projectId)
+        ?.progress,
+    );
+  const objectBefore = percentOf((await objectDashboard(request, foreman, plan.projectId)).progress);
+  const groupBefore = await groupPercent();
+  expect(objectBefore).not.toBeNull();
+  expect(groupBefore).not.toBeNull();
 
   // --- мастер: вся цепочка на телефоне ---
   const phone = await phoneContext(browser);
@@ -79,6 +91,10 @@ test("мастер вносит факт, прораб подтверждает,
   const after = await readiness(request, foreman, plan.projectId);
   expect(after.node(plan.nodeId)).toBe(40);
   expect(after.project).toBeGreaterThan(before.project);
+  // Дашборд объекта и сводка группы выросли вместе с /readiness.
+  const objectAfter = percentOf((await objectDashboard(request, foreman, plan.projectId)).progress);
+  expect(objectAfter).toBeGreaterThan(objectBefore as number);
+  expect(await groupPercent()).toBeGreaterThan(groupBefore as number);
 
   // Видно в карточке узла: процент обзора, вкладки «Этапы работ» и «Фото».
   await boss.goto(`/projects/${plan.projectId}?node=${plan.nodeId}`);
