@@ -1,7 +1,7 @@
 import { expect, test } from "../helpers/test";
 
 import { apiLogin, createPlan, factsOfNode, get, readiness } from "../helpers/api";
-import { groupRows, objectDashboard, percentOf } from "../helpers/dashboards";
+import { approvalsTotal, groupRows, objectDashboard, percentOf } from "../helpers/dashboards";
 import { PHOTO } from "../helpers/env";
 import {
   desktopContext,
@@ -81,7 +81,15 @@ test("мастер вносит факт, прораб подтверждает,
   await expect(card.getByTestId("approval-photos").locator("img")).toHaveCount(1);
   await expect(card.getByTestId("photos-missing")).toHaveCount(0); // снимков столько, сколько заявлено
   await expect(card.getByRole("link", { name: /карте/ })).toContainText("42.8746");
-  await expect(boss.getByTestId("approvals-count").first()).toBeVisible();
+  // Счётчик = сумма очередей по всем видимым прорабу объектам (тот же лимит выборки, «N+» при упоре).
+  const expected = await approvalsTotal(request, foreman);
+  if (expected.total === 0) {
+    await expect(boss.getByTestId("approvals-count")).toHaveCount(0);
+  } else {
+    await expect(boss.getByTestId("approvals-count").first()).toHaveText(
+      expected.capped ? `${expected.total}+` : String(expected.total),
+    );
+  }
   await shot(boss, "foreman-1-queue");
 
   await card.getByTestId("approve").click();

@@ -13,7 +13,8 @@ export type Progress = {
   delay_days: string;
 };
 
-export type PortalProgress = Omit<Progress, "delay_days">;
+// Вид заказчика: только факт. Плана, отклонения и отставания в ответе нет, и тип их не содержит.
+export type PortalProgress = { percent: string };
 
 export type Counts = {
   works: number;
@@ -34,6 +35,9 @@ export type SeriesPoint = {
   plan_percent: string;
   fact_percent: string | null;
 };
+
+// Ряд заказчика: только факт, без плановых значений и без будущих дат.
+export type FactPoint = { date: string; fact_percent: string };
 
 export type NodeTile = {
   node_id: string;
@@ -117,10 +121,8 @@ export type PortalDashboardData = {
   project_id: string;
   name: string;
   status: string;
-  planned_start: string | null;
-  planned_end: string | null;
   progress: PortalProgress | null;
-  series: SeriesPoint[];
+  series: FactPoint[];
 };
 
 export type GroupRow = {

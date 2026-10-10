@@ -54,7 +54,7 @@ export function ObjectDashboard({ projectId }: { projectId: string }) {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <Section testId="s-curve" title={t("series.title")}>
           {data.series.length > 0 ? (
-            <SCurve series={data.series} asOf={data.as_of} />
+            <SCurve series={data.series} asOf={data.as_of} showPlan />
           ) : (
             <EmptyNote>{t("series.empty")}</EmptyNote>
           )}

@@ -21,7 +21,7 @@ import {
   formatDayMonth,
   formatPercent,
 } from "@/lib/dashboards/format";
-import type { SeriesPoint } from "@/lib/dashboards/types";
+import type { FactPoint, SeriesPoint } from "@/lib/dashboards/types";
 import { dayNumber, isoFromDay } from "@/lib/schedule/dates";
 
 const TICK_LIMIT = 12;
@@ -34,14 +34,23 @@ const TOOLTIP_STYLE = {
   fontSize: 12,
 };
 
-type Row = { day: number; date: string; plan: number; fact: number | null };
+type Row = { day: number; date: string; plan: number | null; fact: number | null };
 
-export function SCurve({ series, asOf }: { series: SeriesPoint[]; asOf: string }) {
+// showPlan=false - вид заказчика: плановой линии и колонки плана нет, в данных их тоже нет.
+export function SCurve({
+  series,
+  asOf,
+  showPlan,
+}: {
+  series: Array<SeriesPoint | FactPoint>;
+  asOf: string;
+  showPlan: boolean;
+}) {
   const t = useTranslations("Dashboard");
   const rows: Row[] = series.map((point) => ({
     day: dayNumber(point.date),
     date: point.date,
-    plan: Number(point.plan_percent),
+    plan: "plan_percent" in point ? Number(point.plan_percent) : null,
     fact: point.fact_percent === null ? null : Number(point.fact_percent),
   }));
   const step = Math.max(1, Math.ceil(rows.length / TICK_LIMIT));
@@ -95,17 +104,19 @@ export function SCurve({ series, asOf }: { series: SeriesPoint[]; asOf: string }
                 fontSize: 12,
               }}
             />
-            <Line
-              type="linear"
-              dataKey="plan"
-              name={t("series.plan")}
-              stroke="var(--muted-foreground)"
-              strokeWidth={2}
-              strokeDasharray="6 4"
-              strokeLinecap="round"
-              dot={false}
-              isAnimationActive={false}
-            />
+            {showPlan ? (
+              <Line
+                type="linear"
+                dataKey="plan"
+                name={t("series.plan")}
+                stroke="var(--muted-foreground)"
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                strokeLinecap="round"
+                dot={false}
+                isAnimationActive={false}
+              />
+            ) : null}
             <Line
               type="linear"
               dataKey="fact"
@@ -139,15 +150,19 @@ export function SCurve({ series, asOf }: { series: SeriesPoint[]; asOf: string }
       </div>
       <ChartDetails>
         <table className="w-full text-sm">
-          <caption className="sr-only">{t("series.title")}</caption>
+          <caption className="sr-only">
+            {showPlan ? t("series.title") : t("series.factTitle")}
+          </caption>
           <thead>
             <tr className="border-b text-left">
               <th scope="col" className="py-2 font-medium">
                 {t("series.date")}
               </th>
-              <th scope="col" className="py-2 text-right font-medium">
-                {t("series.planPercent")}
-              </th>
+              {showPlan ? (
+                <th scope="col" className="py-2 text-right font-medium">
+                  {t("series.planPercent")}
+                </th>
+              ) : null}
               <th scope="col" className="py-2 text-right font-medium">
                 {t("series.factPercent")}
               </th>
@@ -157,7 +172,9 @@ export function SCurve({ series, asOf }: { series: SeriesPoint[]; asOf: string }
             {rows.map((row) => (
               <tr key={row.date} className="border-b last:border-0">
                 <td className="py-2">{formatDay(row.date)}</td>
-                <td className="py-2 text-right tabular-nums">{formatPercent(row.plan)}</td>
+                {showPlan ? (
+                  <td className="py-2 text-right tabular-nums">{formatPercent(row.plan)}</td>
+                ) : null}
                 <td className="py-2 text-right tabular-nums">{formatPercent(row.fact)}</td>
               </tr>
             ))}

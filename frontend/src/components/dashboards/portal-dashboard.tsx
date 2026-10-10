@@ -3,7 +3,7 @@
 import { useTranslations } from "next-intl";
 
 import { DashboardStatus } from "@/components/dashboards/dashboard-status";
-import { DeviationTile, KpiTile } from "@/components/dashboards/kpi-tiles";
+import { KpiTile } from "@/components/dashboards/kpi-tiles";
 import { SCurve } from "@/components/dashboards/s-curve";
 import { EmptyNote, Section } from "@/components/dashboards/section";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +11,8 @@ import { formatDay, formatPercent } from "@/lib/dashboards/format";
 import { usePortalDashboard } from "@/lib/dashboards/queries";
 import { isStatus } from "@/lib/projects/types";
 
-// Вид заказчика и субподрядчика: только процент, план, отклонение и кривая. Деньги, фото, работы,
-// узлы и имена сотрудников здесь не выводятся: сервер их и не отдаёт.
+// Вид заказчика и субподрядчика: процент факта и кривая факта. Плана, отклонения, сроков, денег,
+// узлов, проблем и фото сервер не отдаёт, а типы данных этих полей не содержат.
 export function PortalDashboard({ projectId }: { projectId: string }) {
   const t = useTranslations("Dashboard");
   const projects = useTranslations("Projects");
@@ -29,7 +29,6 @@ export function PortalDashboard({ projectId }: { projectId: string }) {
     );
   }
 
-  const progress = data.progress;
   return (
     <div data-testid="portal-dashboard" className="space-y-6">
       <header className="space-y-2">
@@ -39,32 +38,21 @@ export function PortalDashboard({ projectId }: { projectId: string }) {
             {isStatus(data.status) ? projects(`status.${data.status}`) : data.status}
           </Badge>
         </div>
-        <p className="text-sm text-muted-foreground">
-          {t("plannedPeriod")}: {formatDay(data.planned_start)} — {formatDay(data.planned_end)} ·{" "}
-          {t("asOf", { date: formatDay(data.as_of) })}
-        </p>
+        <p className="text-sm text-muted-foreground">{t("asOf", { date: formatDay(data.as_of) })}</p>
       </header>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-        <KpiTile
-          testId="kpi-fact"
-          label={t("kpi.fact")}
-          value={formatPercent(progress?.percent ?? null)}
-          hero
-        />
-        <KpiTile
-          testId="kpi-plan"
-          label={t("kpi.plan")}
-          value={formatPercent(progress?.planned_percent ?? null)}
-        />
-        <DeviationTile testId="kpi-deviation" deviation={progress?.deviation ?? null} />
-      </div>
+      <KpiTile
+        testId="kpi-fact"
+        label={t("kpi.fact")}
+        value={formatPercent(data.progress?.percent ?? null)}
+        hero
+      />
 
-      <Section testId="s-curve" title={t("series.title")} level="h2">
+      <Section testId="s-curve" title={t("series.factTitle")} level="h2">
         {data.series.length > 0 ? (
-          <SCurve series={data.series} asOf={data.as_of} />
+          <SCurve series={data.series} asOf={data.as_of} showPlan={false} />
         ) : (
-          <EmptyNote>{t("series.empty")}</EmptyNote>
+          <EmptyNote>{t("series.factEmpty")}</EmptyNote>
         )}
       </Section>
     </div>

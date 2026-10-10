@@ -2,20 +2,22 @@ import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query
 import { useMemo } from "react";
 
 import { api } from "@/lib/api";
+import { APPROVAL_LIMIT } from "@/lib/approvals-count";
 import type { Actual } from "@/lib/field/types";
 import { API, PROJECTS_KEY } from "@/lib/projects/keys";
 import type { Project } from "@/lib/projects/types";
 import { actualsKey } from "@/lib/schedule/keys";
 
-// На проверку по одному объекту берём до 200 записей: больше за раз прораб не разберёт, счётчик
-// в навигации тогда показывает «200+».
-export const APPROVAL_LIMIT = 200;
+// Лимит выборки на один объект (200) задан в approvals-count: счётчик и строка «всего» показывают
+// «N+», если хотя бы один объект упёрся в него.
+export { APPROVAL_LIMIT };
 
 function combineQueues(results: UseQueryResult<Actual[], Error>[]) {
   return {
     facts: results
       .flatMap((result) => result.data ?? [])
       .sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    perProject: results.map((result) => result.data?.length ?? 0),
     pending: results.some((result) => result.isPending),
     error: results.find((result) => result.error)?.error ?? null,
   };
@@ -48,6 +50,7 @@ export function useApprovalQueue(enabled: boolean) {
     projects,
     ids,
     facts: queue.facts,
+    perProject: queue.perProject,
     pending: enabled && (projects.isPending || queue.pending),
     error: projects.error ?? queue.error,
   };
