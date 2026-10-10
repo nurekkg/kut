@@ -58,37 +58,43 @@ test("выход с отправкой на ходу: запись прерва�
     },
   );
 
-  await enterFact(page, {
-    nodeName: plan.nodeName,
-    workName: plan.workName,
-    volume: "15",
-    photo: PHOTO,
-  });
-  await page.getByTestId("send").click();
-  await held; // черновик факта создан, снимок уходит в S3 и стоит на воротах
+  // Если сценарий упал раньше, ворота всё равно открываются: иначе закрытие контекста ждёт
+  // зависший обработчик загрузки и вся прогонка встаёт.
+  try {
+    await enterFact(page, {
+      nodeName: plan.nodeName,
+      workName: plan.workName,
+      volume: "15",
+      photo: PHOTO,
+    });
+    await page.getByTestId("send").click();
+    await held; // черновик факта создан, снимок уходит в S3 и стоит на воротах
 
-  // Мастер выходит (запись ещё уходит: диалог), удаляет её и выходит; в той же вкладке (без
-  // перезагрузки страницы) входит технический директор.
-  await page.getByRole("button", { name: "Выйти", exact: true }).click();
-  await page.getByTestId("logout-discard").click();
-  await page.waitForURL(/\/login/);
-  await signInHere(page, "techdir");
-  await shot(page, "owner-1-other-user");
+    // Мастер выходит (запись ещё уходит: диалог), удаляет её и выходит; в той же вкладке (без
+    // перезагрузки страницы) входит технический директор.
+    await page.getByRole("button", { name: "Выйти", exact: true }).click();
+    await page.getByTestId("logout-discard").click();
+    await page.waitForURL(/\/login/);
+    await signInHere(page, "techdir");
+    await shot(page, "owner-1-other-user");
 
-  open(); // снимок «дозагружается»: запись уже стёрта, продолжать нечему
-  await page.waitForTimeout(4000);
-  expect(await outboxCount(page), "очередь мастера осталась на устройстве").toBe(0);
+    open(); // снимок «дозагружается»: запись уже стёрта, продолжать нечему
+    await page.waitForTimeout(4000);
+    expect(await outboxCount(page), "очередь мастера осталась на устройстве").toBe(0);
 
-  expect(
-    steps.filter((item) => item.subject === stranger),
-    "шаги чужой записи ушли с токеном другого человека",
-  ).toEqual([]);
-  const draft = await factsOfNode(request, foreman, plan.projectId, plan.nodeId);
-  expect(draft, "факт создан один раз").toHaveLength(1);
-  expect(draft[0].status).toBe("draft");
-  expect(draft[0].photo_count ?? 0).toBe(0);
+    expect(
+      steps.filter((item) => item.subject === stranger),
+      "шаги чужой записи ушли с токеном другого человека",
+    ).toEqual([]);
+    const draft = await factsOfNode(request, foreman, plan.projectId, plan.nodeId);
+    expect(draft, "факт создан один раз").toHaveLength(1);
+    expect(draft[0].status).toBe("draft");
+    expect(draft[0].photo_count ?? 0).toBe(0);
 
-  // Подтверждений и отправки от имени мастера нет: запись прервана и стёрта.
-  expect(steps.filter((item) => item.subject === owner)).toEqual([]);
-  await phone.close();
+    // Подтверждений и отправки от имени мастера нет: запись прервана и стёрта.
+    expect(steps.filter((item) => item.subject === owner)).toEqual([]);
+  } finally {
+    open();
+    await phone.close();
+  }
 });

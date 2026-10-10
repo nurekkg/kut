@@ -258,7 +258,8 @@ function schedule(): void {
 async function loop(): Promise<void> {
   for (;;) {
     const next = state.entries.find(
-      (entry) => entry.userId === currentUser && entry.stage === "pending",
+      (entry) =>
+        entry.userId === currentUser && entry.stage === "pending" && !cancelled.has(entry.id),
     );
     if (!next) {
       delay = BASE_DELAY;
@@ -280,7 +281,8 @@ async function loop(): Promise<void> {
       delay = BASE_DELAY;
     } catch (error) {
       if (error instanceof CancelledError) {
-        publish({ busy: null }); // запись удалена на ходу: обратно в IndexedDB её не кладём
+        // Запись удалена на ходу: обратно в IndexedDB её не кладём и в очереди больше не берём.
+        publish({ entries: state.entries.filter((entry) => entry.id !== next.id), busy: null });
         continue;
       }
       // Рабочая копия всегда свежее состояния экрана: после выхода пользователя оно очищено, а запись

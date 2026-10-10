@@ -1,7 +1,9 @@
 import { expect, test } from "../helpers/test";
 
-import { apiLogin, get, post, projectId, remove, type Session } from "../helpers/api";
 import type { APIRequestContext } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+
+import { apiLogin, get, post, projectId, remove, type Session } from "../helpers/api";
 import { WEST, today } from "../helpers/env";
 import { desktopContext, shot, signIn, watchErrors } from "../helpers/ui";
 
@@ -27,15 +29,11 @@ async function removeLeftovers(
   for (const node of stale) await remove(request, session, `${base}/nodes/${node.id}`);
 }
 
-// Сервер принимает любые даты ГПР (до 9999-12-31). Одна такая строка не должна растягивать шкалу
-// Ганта на миллионы суток и подвешивать вкладку у всех, кто откроет диаграмму: шкала ограничена
-// окном вокруг «сегодня», полоса упирается в край, над диаграммой стоит предупреждение.
+// Даты ГПР держит БД (ревизия a1efb2b3d84b): вне 2000-2100 и длиннее 10 лет сервер не принимает.
+// Клиентская защита Ганта остаётся на случай данных, которые придут в обход (старый сервер, ошибка):
+// шкала ограничена окном вокруг «сегодня», полоса упирается в край, над диаграммой предупреждение.
 // «Запад» в демо-данных пуст: строки заводятся тут же и удаляются в конце.
-test("Гант с датой из другого века: шкала ограничена, вкладка не виснет", async ({
-  browser,
-  request,
-}) => {
-  const techdir = await apiLogin(request, "techdir");
+async function westNode(request: APIRequestContext, techdir: Session) {
   const west = await projectId(request, techdir, WEST);
   const base = `/api/v1/projects/${west}`;
   await removeLeftovers(request, techdir, base);
@@ -44,11 +42,42 @@ test("Гант с датой из другого века: шкала огран
     name: `${PREFIX} ${Date.now()}`,
   });
   const works = await get<{ id: string }[]>(request, techdir, "/api/v1/works", { limit: 2 });
+  return { west, base, node, works };
+}
+
+test("сервер не принимает даты ГПР вне границ и отвечает понятным кодом", async ({ request }) => {
+  const techdir = await apiLogin(request, "techdir");
+  const { base, node, works } = await westNode(request, techdir);
+  try {
+    for (const dates of [
+      { plan_start: "1900-01-01", plan_end: "9999-12-31" },
+      { plan_start: "1999-12-31", plan_end: "2000-01-31" },
+      { plan_start: today(), plan_end: "2101-01-01" },
+      { plan_start: "2026-09-01", plan_end: "2036-09-02" },
+    ]) {
+      const response = await request.post(`${base}/schedule`, {
+        headers: { Authorization: `Bearer ${techdir.token}`, "Idempotency-Key": randomUUID() },
+        data: { node_id: node.id, work_id: works[0].id, plan_volume: "10", ...dates },
+      });
+      expect(response.status(), JSON.stringify(dates)).toBe(422);
+      expect((await response.json()).detail).toBe("schedule_dates_out_of_range");
+    }
+  } finally {
+    await remove(request, techdir, `${base}/nodes/${node.id}`);
+  }
+});
+
+test("Гант с датой из другого века в ответе: шкала ограничена, вкладка не виснет", async ({
+  browser,
+  request,
+}) => {
+  const techdir = await apiLogin(request, "techdir");
+  const { west, base, node, works } = await westNode(request, techdir);
   const created: string[] = [];
   try {
     for (const [index, dates] of [
       { plan_start: today(-5), plan_end: today(20) },
-      { plan_start: "1900-01-01", plan_end: "9999-12-31" },
+      { plan_start: today(-3), plan_end: today(30) },
     ].entries()) {
       const item = await post<{ id: string }>(request, techdir, `${base}/schedule`, {
         node_id: node.id,
@@ -63,6 +92,18 @@ test("Гант с датой из другого века: шкала огран
     const page = await desk.newPage();
     const errors = watchErrors(page);
     await signIn(page, "techdir");
+    // Ответ сервера «портим»: у второй строки даты 1900 и 9999 (такие строки БД уже не пустит).
+    await page.route(/\/schedule\?/, async (route) => {
+      const response = await route.fetch();
+      const rows = (await response.json()) as { id: string; plan_start: string; plan_end: string }[];
+      for (const row of rows) {
+        if (row.id === created[1]) {
+          row.plan_start = "1900-01-01";
+          row.plan_end = "9999-12-31";
+        }
+      }
+      await route.fulfill({ response, json: rows });
+    });
     await page.goto(`/projects/${west}/schedule`);
     await expect(page.getByTestId("schedule-row")).toHaveCount(2, { timeout: 60_000 });
     const started = Date.now();
