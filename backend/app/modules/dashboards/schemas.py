@@ -119,20 +119,25 @@ class GroupDashboard(BaseModel):
 
 
 class PortalProgress(BaseModel):
+    """Вид заказчика: только факт. Плана, отклонения и отставания в схеме нет."""
+
     percent: Decimal
-    planned_percent: Decimal
-    deviation: Decimal
+
+
+class FactPoint(BaseModel):
+    """Точка ряда факта по дате. Будущих дат в ответе нет: ряд обрывается на сегодня."""
+
+    date: date
+    fact_percent: Decimal
 
 
 class PortalDashboard(BaseModel):
-    """Вид заказчика и субподрядчика: % и ряд по неделям своего объекта. Без денег, весов, фото и
-    имён сотрудников: этих полей в схеме нет."""
+    """Вид заказчика и субподрядчика: факт % и ряд факта по неделям. Без плана, отклонения, сроков,
+    денег, весов, фото и имён сотрудников: этих полей в схеме нет."""
 
     as_of: date
     project_id: uuid.UUID
     name: str
     status: str
-    planned_start: date | None
-    planned_end: date | None
     progress: PortalProgress | None
-    series: list[SeriesPoint]
+    series: list[FactPoint]

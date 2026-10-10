@@ -61,6 +61,6 @@ async def group_dashboard(session: Db, _principal: GroupReader) -> GroupDashboar
 async def portal_dashboard(
     project_id: uuid.UUID, session: Db, _principal: PortalReader
 ) -> PortalDashboard:
-    """Вид заказчика и субподрядчика: % и ряд по неделям своего объекта. Деньги, веса, фото и имена
-    сотрудников в ответе не передаются."""
+    """Вид заказчика и субподрядчика: факт % и ряд факта по неделям своего объекта. План,
+    отклонение, сроки, деньги, веса, фото и имена сотрудников в ответе не передаются."""
     return await service.portal_dashboard(session, project_id)

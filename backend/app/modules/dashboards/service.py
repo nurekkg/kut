@@ -13,6 +13,7 @@ from app.modules.auth.principal import Principal
 from app.modules.dashboards.schemas import (
     Budget,
     Counts,
+    FactPoint,
     FactsSummary,
     GroupDashboard,
     GroupRow,
@@ -320,31 +321,33 @@ async def group_dashboard(session: AsyncSession) -> GroupDashboard:
     return GroupDashboard(as_of=today, thresholds=_thresholds(), rows=rows)
 
 
+def portal_points(today: date, weeks: int) -> list[date]:
+    """Точки ряда факта для заказчика: сегодня и недельная сетка назад на weeks недель. Сетка не
+    зависит от плана: сроки и окно плана в ответе не видны даже косвенно."""
+    return sorted({today - timedelta(weeks=step) for step in range(weeks + 1)})
+
+
+async def _fact_series(
+    session: AsyncSession, project_id: uuid.UUID, points: Sequence[date]
+) -> list[FactPoint]:
+    rows = (await session.execute(_SERIES, {"project": project_id, "points": list(points)})).all()
+    return [FactPoint(date=row.point_date, fact_percent=_q(row.fact_percent, TWO)) for row in rows]
+
+
 async def portal_dashboard(session: AsyncSession, project_id: uuid.UUID) -> PortalDashboard:
     settings = get_settings()
     today: date = await session.scalar(_TODAY)
     project = (await session.execute(_PORTAL_PROJECT, {"project": project_id})).one()
-    span = (await session.execute(_PLAN_RANGE, {"project": project_id})).one()
-    ready = await readiness.project_readiness(session, project_id, today)
-    total = ready.project
-    progress = None
-    if total is not None:
-        progress = PortalProgress(
-            percent=total.percent,
-            planned_percent=total.planned_percent,
-            deviation=total.deviation,
-        )
-    series: list[SeriesPoint] = []
-    if span.first is not None:
-        points = series_points(today, span.first, span.last, settings.dashboard_series_window_weeks)
-        series = await _series(session, project_id, points, today)
+    total = (await readiness.project_readiness(session, project_id, today)).project
+    progress = None if total is None else PortalProgress(percent=total.percent)
+    series = await _fact_series(
+        session, project_id, portal_points(today, settings.dashboard_series_window_weeks)
+    )
     return PortalDashboard(
         as_of=today,
         project_id=project_id,
         name=project.name,
         status=project.status,
-        planned_start=span.first,
-        planned_end=span.last,
         progress=progress,
         series=series,
     )

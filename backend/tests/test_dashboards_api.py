@@ -366,24 +366,25 @@ async def test_the_group_dashboard_is_for_the_group_scope_only(
     assert row["budget"] == {"planned_budget": "1500000.00", "currency": "KGS"}
 
 
-async def test_the_customer_view_has_percent_and_series_and_no_money_weights_or_people(
+async def test_the_customer_view_is_fact_only_no_money_weights_or_people(
     api: AsyncClient, auth_world: AuthWorld, example: dict[str, Any]
 ) -> None:
     owner = await token_for(api, "owner")
     view = await ok(api, owner, f"{D}/portal/{example['project']}")
     object_view = await ok(api, owner, f"{D}/object/{example['project']}")
-    assert set(view) == {"as_of", "project_id", "name", "status", "planned_start", "planned_end",
-                         "progress", "series"}  # fmt: skip
+    today = view["as_of"]
+    assert set(view) == {"as_of", "project_id", "name", "status", "progress", "series"}
     assert _keys(view).isdisjoint(FORBIDDEN_FOR_PORTAL)
-    assert set(view["progress"]) == {"percent", "planned_percent", "deviation"}
-    assert set(view["series"][0]) == {"date", "plan_percent", "fact_percent"}
-    # заказчику отдаётся то же, что внутреннему ряду, без денег и людей
-    assert view["progress"] == {k: object_view["progress"][k] for k in view["progress"]}
-    assert view["series"] == [
-        {"date": row["date"], "plan_percent": row["plan_percent"],
-         "fact_percent": row["fact_percent"]}
-        for row in object_view["series"]
-    ]  # fmt: skip
+    assert set(view["progress"]) == {"percent"}
+    assert set(view["series"][0]) == {"date", "fact_percent"}
+    # факт тот же, что у внутреннего дашборда: процент и значения ряда на общих датах
+    assert view["progress"]["percent"] == object_view["progress"]["percent"]
+    object_facts = {row["date"]: row["fact_percent"] for row in object_view["series"]}
+    assert view["series"][-1]["date"] == today
+    assert all(row["date"] <= today for row in view["series"])
+    for row in view["series"]:
+        if row["date"] in object_facts:
+            assert row["fact_percent"] == object_facts[row["date"]]
 
     customer = await token_for(api, "customer")
     east = await call(api, customer, f"{D}/portal/{auth_world.projects['east']}")
@@ -394,6 +395,19 @@ async def test_the_customer_view_has_percent_and_series_and_no_money_weights_or_
     foreman = await token_for(api, "foreman")
     other = await call(api, foreman, f"{D}/portal/{example['project']}")
     assert other.status_code == 404
+
+
+PLAN_KEY_MARKERS = ("plan", "deviation", "delay", "lag", "overdue", "weight", "budget", "problem")
+
+
+async def test_the_customer_json_has_no_plan_keys(api: AsyncClient, auth_world: AuthWorld) -> None:
+    """Ключей плана нет в JSON заказчика на любой глубине: ни план %, ни ряд плана, ни отклонение,
+    ни отставание, ни сроки, ни веса, ни бюджет. Проверка по подстрокам имён ключей."""
+    customer = await token_for(api, "customer")
+    view = await ok(api, customer, f"{D}/portal/{auth_world.projects['east']}")
+    leaked = {key for key in _keys(view) if any(marker in key for marker in PLAN_KEY_MARKERS)}
+    assert leaked == set()
+    assert all(set(point) == {"date", "fact_percent"} for point in view["series"])
 
 
 async def test_the_budget_is_not_read_without_the_finance_right(
