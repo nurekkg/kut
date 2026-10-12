@@ -25,7 +25,7 @@ test("суточный лимит: вторая заявка на ту же ед
 
   const headContext = await desktopContext(browser);
   const boss = await headContext.newPage();
-  const headErrors = watchErrors(boss);
+  const headErrors = watchErrors(boss, { allowAssignmentRefusals: true });
   await signIn(boss, "equipment_head");
   await boss.goto("/equipment/requests");
   await boss.locator(`[data-request-id="${first}"]`).getByTestId("assign-request").click();

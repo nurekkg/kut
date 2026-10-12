@@ -28,7 +28,7 @@ test("истёкшая страховка блокирует назначени�
 
   const headContext = await desktopContext(browser);
   const boss = await headContext.newPage();
-  const headErrors = watchErrors(boss);
+  const headErrors = watchErrors(boss, { allowAssignmentRefusals: true });
   await signIn(boss, "equipment_head");
   await boss.goto("/equipment/requests");
   await boss.locator(`[data-request-id="${requestId}"]`).getByTestId("assign-request").click();

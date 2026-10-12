@@ -7,16 +7,21 @@ import { waitForStack } from "./health";
 
 // Ошибки страницы и консоли браузера (в том числе «нет текста» next-intl и сбои гидратации):
 // сценарии без заведомых отказов сервера в конце проверяют, что список пуст.
-export function watchErrors(page: Page): string[] {
+// allowAssignmentRefusals - только для сценариев техники, которые сами ждут отказ назначения (409:
+// суточный лимит, просроченный документ) и проверяют его текст; в остальных сценариях 409 - ошибка.
+export function watchErrors(page: Page, options: { allowAssignmentRefusals?: boolean } = {}): string[] {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
     if (message.type() !== "error") return;
+    const url = message.location().url;
     // Анонимный заход: страница просит обновить сеанс, и сервер честно отвечает 401 - это работа
     // входа, а не ошибка приложения.
-    const refresh = message.location().url.endsWith("/api/v1/auth/refresh");
+    const refresh = url.endsWith("/api/v1/auth/refresh");
     if (refresh && message.text().includes("401")) return;
-    errors.push(`console: ${message.text()}`);
+    const refusal = /\/api\/v1\/equipment\/assignments(\/check)?$/.test(url) && message.text().includes("409");
+    if (options.allowAssignmentRefusals && refusal) return;
+    errors.push(`console: ${message.text()} ${url}`);
   });
   return errors;
 }
