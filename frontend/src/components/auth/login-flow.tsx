@@ -10,7 +10,7 @@ import { CredentialsForm } from "@/components/auth/credentials-form";
 import { EnrollForm } from "@/components/auth/enroll-form";
 import { RecoveryCodes } from "@/components/auth/recovery-codes";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { safeNext } from "@/lib/auth/next-path";
+import { landingPath, safeNext } from "@/lib/auth/next-path";
 import type { LoginResult, MfaConfirmResult, TokenResponse } from "@/lib/auth/types";
 
 type Step =
@@ -22,8 +22,9 @@ type Step =
 export function LoginFlow() {
   const t = useTranslations("Auth");
   const router = useRouter();
-  const next = safeNext(useSearchParams().get("next"));
-  const { status, signIn } = useAuth();
+  const requested = useSearchParams().get("next");
+  const { status, signIn, user } = useAuth();
+  const next = requested === null ? landingPath(user) : safeNext(requested);
   const [step, setStep] = useState<Step>({ kind: "credentials" });
 
   // Вошедшего пользователя форма не задерживает. Сеанс после настройки 2FA в память не кладём,

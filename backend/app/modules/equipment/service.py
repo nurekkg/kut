@@ -1,10 +1,13 @@
 import re
 import uuid
+from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, exists, func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
@@ -25,6 +28,7 @@ from app.modules.equipment.schemas import (
     TypeOut,
     UnitCard,
     UnitCreate,
+    UnitListOut,
     UnitOut,
     UnitPatch,
 )
@@ -165,15 +169,16 @@ async def list_units(
     type_id: uuid.UUID | None,
     ownership: str | None,
     query: str | None,
+    status_filter: str | None,
+    project_id: uuid.UUID | None,
     limit: int,
     offset: int,
-) -> list[UnitOut]:
+) -> list[UnitListOut]:
+    today = bishkek_today()
     statement = (
         _units_with_type()
         .where(EquipmentUnit.deleted_at.is_(None))
         .order_by(EquipmentType.code, EquipmentUnit.registry_number, EquipmentUnit.id)
-        .limit(limit)
-        .offset(offset)
     )
     if type_id is not None:
         statement = statement.where(EquipmentUnit.equipment_type_id == type_id)
@@ -186,21 +191,17 @@ async def list_units(
                 EquipmentUnit.registry_number.ilike(like_pattern(query), escape="\\"),
             )
         )
+    if project_id is not None:
+        statement = statement.where(EquipmentUnit.id.in_(assigned_today(project_id, today)))
+    if status_filter is None:
+        statement = statement.limit(limit).offset(offset)
     rows = (await session.execute(statement)).all()
-    return [
-        UnitOut(
-            id=unit.id,
-            legal_entity_id=unit.legal_entity_id,
-            equipment_type_id=unit.equipment_type_id,
-            type_code=code,
-            ownership=unit.ownership,
-            registry_number=unit.registry_number,
-            contract_id=unit.contract_id,
-            model=unit.model,
-            year=unit.year,
-        )
-        for unit, code in rows
-    ]
+    statuses = await unit_statuses(session, [unit.id for unit, _code in rows], today)
+    listed = [unit_list_out(unit, code, statuses[unit.id]) for unit, code in rows]
+    if status_filter is None:
+        return listed
+    matching = [item for item in listed if item.status == status_filter]
+    return matching[offset : offset + limit]
 
 
 async def create_unit(session: AsyncSession, data: UnitCreate) -> UnitOut:
@@ -232,13 +233,20 @@ async def update_unit(session: AsyncSession, unit_id: uuid.UUID, patch: UnitPatc
     return await unit_out(session, row)
 
 
-async def unit_status(session: AsyncSession, unit_id: uuid.UUID, today: date) -> str:
-    """Статус на сегодня (ADR-014 часть 1, раздел 3). Считается по видимым строкам: прораб видит
-    часы своих объектов, поэтому чужая загрузка в его ответе не появляется."""
-    repair = await session.scalar(
-        select(
-            exists().where(
-                EquipmentMaintenance.equipment_unit_id == unit_id,
+async def unit_statuses(
+    session: AsyncSession, unit_ids: Sequence[uuid.UUID], today: date
+) -> dict[uuid.UUID, str]:
+    """Статус на сегодня (ADR-014 часть 1, раздел 3) пачкой: три запроса на всю выборку.
+
+    Видимость - RLS: прораб видит часы своих объектов, поэтому чужая загрузка в ответе не
+    появляется. Порядок признаков тот же, что у одной единицы: ремонт, документ, часы.
+    """
+    if not unit_ids:
+        return {}
+    repairs = set(
+        await session.scalars(
+            select(EquipmentMaintenance.equipment_unit_id).where(
+                EquipmentMaintenance.equipment_unit_id.in_(unit_ids),
                 EquipmentMaintenance.kind == "repair",
                 EquipmentMaintenance.status.in_(OPEN_REPAIR),
                 EquipmentMaintenance.planned_from <= today,
@@ -250,28 +258,51 @@ async def unit_status(session: AsyncSession, unit_id: uuid.UUID, today: date) ->
             )
         )
     )
-    if repair:
-        return "in_repair"
-    documents = (await session.execute(latest_documents_statement(unit_id))).all()
-    if any(kind in BLOCKING_KINDS and until < today for kind, until, _version in documents):
-        return "doc_expired"
-    if any(until <= today + timedelta(days=SOON_DAYS) for _kind, until, _version in documents):
-        return "doc_warning"
-    total = await session.scalar(
-        select(func.coalesce(func.sum(EquipmentAssignment.planned_hours_per_day), 0)).where(
-            EquipmentAssignment.equipment_unit_id == unit_id,
+    documents: dict[uuid.UUID, list[tuple[str, date]]] = defaultdict(list)
+    for unit_id, kind, until in (await session.execute(latest_documents_bulk(unit_ids))).all():
+        documents[unit_id].append((kind, until))
+    hours_rows = await session.execute(
+        select(
+            EquipmentAssignment.equipment_unit_id,
+            func.sum(EquipmentAssignment.planned_hours_per_day),
+        )
+        .where(
+            EquipmentAssignment.equipment_unit_id.in_(unit_ids),
             EquipmentAssignment.status == "planned",
             EquipmentAssignment.deleted_at.is_(None),
             EquipmentAssignment.date_from <= today,
             EquipmentAssignment.date_to >= today,
         )
+        .group_by(EquipmentAssignment.equipment_unit_id)
     )
-    hours = total or 0
-    if hours >= 24:
+    hours = {unit_id: total for unit_id, total in hours_rows.all()}
+    return {unit_id: _status_of(unit_id, today, repairs, documents, hours) for unit_id in unit_ids}
+
+
+def _status_of(
+    unit_id: uuid.UUID,
+    today: date,
+    repairs: set[uuid.UUID],
+    documents: dict[uuid.UUID, list[tuple[str, date]]],
+    hours: dict[uuid.UUID, Decimal],
+) -> str:
+    if unit_id in repairs:
+        return "in_repair"
+    found = documents.get(unit_id, [])
+    if any(kind in BLOCKING_KINDS and until < today for kind, until in found):
+        return "doc_expired"
+    if any(until <= today + timedelta(days=SOON_DAYS) for _kind, until in found):
+        return "doc_warning"
+    total = hours.get(unit_id, Decimal(0))
+    if total >= 24:
         return "day_full"
-    if hours > 0:
+    if total > 0:
         return "assigned"
     return "available"
+
+
+async def unit_status(session: AsyncSession, unit_id: uuid.UUID, today: date) -> str:
+    return (await unit_statuses(session, [unit_id], today))[unit_id]
 
 
 async def unit_card(session: AsyncSession, unit_id: uuid.UUID) -> UnitCard:
@@ -407,4 +438,51 @@ def latest_documents_statement(unit_id: uuid.UUID) -> Select[tuple[str, date, in
         )
         .distinct(EquipmentDocument.kind)
         .order_by(EquipmentDocument.kind, EquipmentDocument.version.desc())
+    )
+
+
+def latest_documents_bulk(unit_ids: Sequence[uuid.UUID]) -> Select[tuple[uuid.UUID, str, date]]:
+    """Последняя версия каждого вида документа по всей выборке единиц, одним запросом."""
+    return (
+        select(
+            EquipmentDocument.equipment_unit_id,
+            EquipmentDocument.kind,
+            EquipmentDocument.valid_until,
+        )
+        .where(
+            EquipmentDocument.equipment_unit_id.in_(unit_ids),
+            EquipmentDocument.deleted_at.is_(None),
+        )
+        .distinct(EquipmentDocument.equipment_unit_id, EquipmentDocument.kind)
+        .order_by(
+            EquipmentDocument.equipment_unit_id,
+            EquipmentDocument.kind,
+            EquipmentDocument.version.desc(),
+        )
+    )
+
+
+def assigned_today(project_id: uuid.UUID, today: date) -> Select[tuple[uuid.UUID]]:
+    """Единицы, которые объект занимает сегодня: назначения в статусе planned."""
+    return select(EquipmentAssignment.equipment_unit_id).where(
+        EquipmentAssignment.project_id == project_id,
+        EquipmentAssignment.status == "planned",
+        EquipmentAssignment.deleted_at.is_(None),
+        EquipmentAssignment.date_from <= today,
+        EquipmentAssignment.date_to >= today,
+    )
+
+
+def unit_list_out(unit: EquipmentUnit, type_code: str, status_value: str) -> UnitListOut:
+    return UnitListOut(
+        id=unit.id,
+        legal_entity_id=unit.legal_entity_id,
+        equipment_type_id=unit.equipment_type_id,
+        type_code=type_code,
+        ownership=unit.ownership,
+        registry_number=unit.registry_number,
+        contract_id=unit.contract_id,
+        model=unit.model,
+        year=unit.year,
+        status=status_value,
     )

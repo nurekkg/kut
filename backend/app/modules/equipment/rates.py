@@ -15,6 +15,7 @@ from app.modules.equipment.schemas import (
     ContractCreate,
     ContractOut,
     ContractPatch,
+    CounterpartyRef,
     OperatorCreate,
     OperatorOut,
     OwnRateCreate,
@@ -23,6 +24,7 @@ from app.modules.equipment.schemas import (
     RateOut,
 )
 from app.modules.equipment.service import not_found, transition_forbidden
+from app.modules.org.models import Counterparty
 
 CONTRACT_NEXT = {
     "draft": frozenset({"active", "terminated"}),
@@ -215,3 +217,13 @@ async def create_operator(session: AsyncSession, data: OperatorCreate) -> Operat
         session.add(row)
         await session.flush()
     return operator_out(row)
+
+
+async def list_counterparties(session: AsyncSession) -> list[CounterpartyRef]:
+    """Контрагенты для формы договора: имя и идентификатор, без реквизитов."""
+    rows = await session.execute(
+        select(Counterparty.id, Counterparty.name)
+        .where(Counterparty.deleted_at.is_(None))
+        .order_by(Counterparty.name)
+    )
+    return [CounterpartyRef(id=row.id, name=row.name) for row in rows.all()]

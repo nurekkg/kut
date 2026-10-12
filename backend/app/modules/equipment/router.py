@@ -12,6 +12,7 @@ from app.modules.auth.principal import Principal
 from app.modules.equipment import imports, planning, rates, service
 from app.modules.equipment.models import EquipmentImportBatch
 from app.modules.equipment.schemas import (
+    AssignmentCheck,
     AssignmentCreate,
     AssignmentCreated,
     AssignmentOut,
@@ -21,6 +22,7 @@ from app.modules.equipment.schemas import (
     ContractCreate,
     ContractOut,
     ContractPatch,
+    CounterpartyRef,
     DocumentCreate,
     DocumentOut,
     ImportIssue,
@@ -43,6 +45,7 @@ from app.modules.equipment.schemas import (
     TypeOut,
     UnitCard,
     UnitCreate,
+    UnitListOut,
     UnitOut,
     UnitPatch,
 )
@@ -146,18 +149,31 @@ async def create_type(
 # --- реестр ------------------------------------------------------------------------------------
 
 
-@router.get("/units", response_model=list[UnitOut])
+@router.get("/units", response_model=list[UnitListOut])
 async def list_units(
     _principal: Reader,
     session: Db,
     type_id: uuid.UUID | None = None,
     ownership: Literal["own", "rented"] | None = None,
     q: Annotated[str | None, Query(max_length=100)] = None,
+    status_filter: Annotated[
+        Literal["available", "assigned", "day_full", "in_repair", "doc_warning", "doc_expired"]
+        | None,
+        Query(alias="status"),
+    ] = None,
+    project_id: uuid.UUID | None = None,
     limit: Limit = 100,
     offset: Offset = 0,
-) -> list[UnitOut]:
+) -> list[UnitListOut]:
     return await service.list_units(
-        session, type_id=type_id, ownership=ownership, query=q, limit=limit, offset=offset
+        session,
+        type_id=type_id,
+        ownership=ownership,
+        query=q,
+        status_filter=status_filter,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -375,6 +391,11 @@ async def add_rate(
 # --- машинисты ---------------------------------------------------------------------------------
 
 
+@router.get("/counterparties", response_model=list[CounterpartyRef])
+async def list_counterparties(_principal: ContractReader, session: Db) -> list[CounterpartyRef]:
+    return await rates.list_counterparties(session)
+
+
 @router.get("/operators", response_model=list[OperatorOut])
 async def list_operators(
     _principal: Reader, session: Db, legal_entity_id: uuid.UUID | None = None
@@ -515,6 +536,14 @@ async def create_assignment(
     )
 
 
+@router.post("/assignments/check", response_model=AssignmentCheck)
+async def check_assignment(
+    body: AssignmentCreate, _principal: Assigner, session: Db
+) -> AssignmentCheck:
+    """Проверка назначения без записи: правила те же, что при создании. Код причины - в ответе."""
+    return await planning.check_assignment(session, body)
+
+
 @router.patch("/assignments/{assignment_id}", response_model=AssignmentOut)
 async def patch_assignment(
     assignment_id: uuid.UUID, body: AssignmentPatch, _principal: Assigner, session: Db
@@ -625,7 +654,7 @@ async def commit_import(
         )
         await session.commit()
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=ImportReport(
                 batch_id=None,
                 status="rejected",

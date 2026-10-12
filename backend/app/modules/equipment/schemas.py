@@ -100,6 +100,12 @@ class MaintenanceOut(BaseModel):
     done_at: datetime | None
 
 
+class UnitListOut(UnitOut):
+    """Строка реестра: статус на сегодня (ADR-014 часть 1, раздел 3)."""
+
+    status: str
+
+
 class UnitCard(UnitOut):
     """Карточка: статус на сегодня (вычисляется по видимым строкам), документы, ТО и ремонты."""
 
@@ -198,6 +204,13 @@ class RateOut(BaseModel):
     valid_from: date
 
 
+class CounterpartyRef(BaseModel):
+    """Контрагент для формы договора: только имя и идентификатор (без реквизитов)."""
+
+    id: uuid.UUID
+    name: str
+
+
 class OperatorCreate(_Strict):
     legal_entity_id: uuid.UUID
     full_name: str = Field(min_length=1, max_length=200)
@@ -251,6 +264,7 @@ class ReasonIn(_Strict):
 
 
 class RequestOut(BaseModel):
+    project_name: str | None = None
     id: uuid.UUID
     project_id: uuid.UUID
     legal_entity_id: uuid.UUID
@@ -299,6 +313,7 @@ class AssignmentPatch(_Strict):
 
 
 class AssignmentOut(BaseModel):
+    project_name: str | None = None
     id: uuid.UUID
     project_id: uuid.UUID
     legal_entity_id: uuid.UUID
@@ -326,6 +341,12 @@ class AssignmentCreated(AssignmentOut):
     warnings: list[AssignmentWarning]
 
 
+class AssignmentCheck(BaseModel):
+    """Проверка назначения без записи: правила те же, что при создании; ответ - предупреждения."""
+
+    warnings: list[AssignmentWarning]
+
+
 # --- календарь ---------------------------------------------------------------------------------
 
 
@@ -344,6 +365,22 @@ class CalendarDay(BaseModel):
     hours: Decimal
 
 
+class CalendarMaintenance(BaseModel):
+    id: uuid.UUID
+    kind: str
+    title: str
+    planned_from: date
+    planned_to: date | None
+    status: str
+
+
+class CalendarWarning(BaseModel):
+    """Документ, который истёк или истекает внутри окна календаря."""
+
+    kind: str
+    valid_until: date
+
+
 class CalendarUnit(BaseModel):
     id: uuid.UUID
     registry_number: str
@@ -351,6 +388,8 @@ class CalendarUnit(BaseModel):
     ownership: str
     assignments: list[CalendarAssignment]
     days: list[CalendarDay]
+    maintenance: list[CalendarMaintenance]
+    warnings: list[CalendarWarning]
 
 
 class CalendarOut(BaseModel):

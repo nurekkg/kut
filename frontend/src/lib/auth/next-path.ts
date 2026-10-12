@@ -1,4 +1,14 @@
+import type { Me } from "@/lib/auth/types";
+
 export const DEFAULT_PATH = "/projects";
+
+// Первый раздел после входа: список объектов нужен только тем, у кого есть objects:read.
+export function landingPath(user: Pick<Me, "role" | "permissions"> | null): string {
+  if (!user || user.permissions.includes("objects:read")) return DEFAULT_PATH;
+  if (user.role === "machinist") return "/equipment/my";
+  if (user.permissions.includes("equipment:read")) return "/equipment";
+  return DEFAULT_PATH;
+}
 
 const PLACEHOLDER_ORIGIN = "http://same-origin.invalid";
 

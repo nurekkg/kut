@@ -130,7 +130,7 @@ def _openpyxl() -> ModuleType:
 
 
 def _rejected(code: str) -> HTTPException:
-    return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, code)
+    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, code)
 
 
 def decode_csv(data: bytes) -> list[list[str]]:

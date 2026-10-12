@@ -31,7 +31,7 @@ export async function signInHere(page: Page, user: string): Promise<void> {
     await page.locator("#password").fill(PASSWORD);
     await page.getByRole("button", { name: "Войти" }).click();
     const signedIn = page
-      .waitForURL(/\/projects/, { timeout: 40_000 })
+      .waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 40_000 })
       .then(() => "ok" as const)
       .catch(() => "timeout" as const);
     const refused = page

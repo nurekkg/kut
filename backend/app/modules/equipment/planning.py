@@ -4,17 +4,19 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
 from app.modules.equipment.models import (
     EquipmentAssignment,
+    EquipmentMaintenance,
     EquipmentRequest,
     EquipmentType,
     EquipmentUnit,
 )
 from app.modules.equipment.schemas import (
+    AssignmentCheck,
     AssignmentCreate,
     AssignmentCreated,
     AssignmentOut,
@@ -22,13 +24,16 @@ from app.modules.equipment.schemas import (
     AssignmentWarning,
     CalendarAssignment,
     CalendarDay,
+    CalendarMaintenance,
     CalendarOut,
     CalendarUnit,
+    CalendarWarning,
     RequestCreate,
     RequestOut,
     RequestPatch,
 )
 from app.modules.equipment.service import (
+    latest_documents_bulk,
     latest_documents_statement,
     not_found,
     transition_forbidden,
@@ -123,7 +128,8 @@ async def list_requests(
     offset: int,
 ) -> list[RequestOut]:
     statement = (
-        select(EquipmentRequest)
+        select(EquipmentRequest, Project.name)
+        .outerjoin(Project, Project.id == EquipmentRequest.project_id)
         .where(EquipmentRequest.deleted_at.is_(None))
         .order_by(EquipmentRequest.date_from.desc(), EquipmentRequest.id)
         .limit(limit)
@@ -133,8 +139,8 @@ async def list_requests(
         statement = statement.where(EquipmentRequest.project_id == project_id)
     if status_filter is not None:
         statement = statement.where(EquipmentRequest.status == status_filter)
-    rows = await session.scalars(statement)
-    return [request_out(row) for row in rows]
+    rows = (await session.execute(statement)).all()
+    return [request_out(row).model_copy(update={"project_name": name}) for row, name in rows]
 
 
 async def create_request(session: AsyncSession, data: RequestCreate) -> RequestOut:
@@ -256,7 +262,10 @@ async def _document_warnings(
     ]
 
 
-async def create_assignment(session: AsyncSession, data: AssignmentCreate) -> AssignmentCreated:
+async def _place_assignment(
+    session: AsyncSession, data: AssignmentCreate
+) -> tuple[EquipmentAssignment, EquipmentUnit, EquipmentRequest | None]:
+    """Проверки и вставка назначения без фиксации: правила БД срабатывают на flush."""
     unit = await session.scalar(
         select(EquipmentUnit).where(
             EquipmentUnit.id == data.equipment_unit_id, EquipmentUnit.deleted_at.is_(None)
@@ -271,12 +280,12 @@ async def create_assignment(session: AsyncSession, data: AssignmentCreate) -> As
         if request.status not in ("submitted", "assigned"):
             raise HTTPException(status.HTTP_409_CONFLICT, "equipment.request_not_assignable")
         if data.project_id is not None and data.project_id != request.project_id:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "equipment.request_invalid")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "equipment.request_invalid")
         if unit.equipment_type_id != request.equipment_type_id:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "equipment.type_mismatch")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "equipment.type_mismatch")
         project_id = request.project_id
     if project_id is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "equipment.project_required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "equipment.project_required")
     legal_entity = await _project_legal_entity(session, project_id)
     row = EquipmentAssignment(
         **data.model_dump(exclude={"request_id", "project_id"}),
@@ -288,12 +297,25 @@ async def create_assignment(session: AsyncSession, data: AssignmentCreate) -> As
     async with db_rules(session):
         session.add(row)
         await session.flush()
+    return row, unit, request
+
+
+async def create_assignment(session: AsyncSession, data: AssignmentCreate) -> AssignmentCreated:
+    row, unit, request = await _place_assignment(session, data)
     if request is not None and request.status == "submitted":
         request.status = "assigned"
     warnings = await _document_warnings(session, unit.id, data.date_to)
     async with db_rules(session):
         await session.commit()
     return AssignmentCreated(**assignment_out(row).model_dump(), warnings=warnings)
+
+
+async def check_assignment(session: AsyncSession, data: AssignmentCreate) -> AssignmentCheck:
+    """Проверка без записи: то же назначение, что при создании, но транзакция откатывается."""
+    _row, unit, _request = await _place_assignment(session, data)
+    warnings = await _document_warnings(session, unit.id, data.date_to)
+    await session.rollback()
+    return AssignmentCheck(warnings=warnings)
 
 
 async def list_assignments(
@@ -307,7 +329,8 @@ async def list_assignments(
     offset: int,
 ) -> list[AssignmentOut]:
     statement = (
-        select(EquipmentAssignment)
+        select(EquipmentAssignment, Project.name)
+        .outerjoin(Project, Project.id == EquipmentAssignment.project_id)
         .where(EquipmentAssignment.deleted_at.is_(None))
         .order_by(EquipmentAssignment.date_from, EquipmentAssignment.id)
         .limit(limit)
@@ -321,8 +344,8 @@ async def list_assignments(
         statement = statement.where(EquipmentAssignment.date_to >= date_from)
     if date_to is not None:
         statement = statement.where(EquipmentAssignment.date_from <= date_to)
-    rows = await session.scalars(statement)
-    return [assignment_out(row) for row in rows]
+    rows = (await session.execute(statement)).all()
+    return [assignment_out(row).model_copy(update={"project_name": name}) for row, name in rows]
 
 
 async def patch_assignment(
@@ -397,11 +420,13 @@ async def calendar(
     type_id: uuid.UUID | None,
     limit: int,
 ) -> CalendarOut:
-    """Единицы × дни: назначения и суммы часов по дням. Видимость - RLS: прораб получает часы своих
-    объектов, машинист - своих назначений."""
+    """Единицы × дни: назначения и суммы часов по дням, ТО и ремонты, документы в окне.
+
+    Видимость - RLS: прораб получает часы своих объектов, машинист - своих назначений.
+    """
     if date_to < date_from or (date_to - date_from).days + 1 > MAX_CALENDAR_DAYS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "equipment.calendar_window_invalid"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "equipment.calendar_window_invalid"
         )
     statement = (
         select(EquipmentUnit, EquipmentType.code)
@@ -449,6 +474,36 @@ async def calendar(
         while day <= last:
             hours[assignment.equipment_unit_id][day] += assignment.planned_hours_per_day
             day += timedelta(days=1)
+    maintenance_rows = await session.scalars(
+        select(EquipmentMaintenance)
+        .where(
+            EquipmentMaintenance.equipment_unit_id.in_(unit_ids),
+            EquipmentMaintenance.status != "cancelled",
+            EquipmentMaintenance.deleted_at.is_(None),
+            EquipmentMaintenance.planned_from <= date_to,
+            or_(
+                EquipmentMaintenance.planned_to.is_(None),
+                EquipmentMaintenance.planned_to >= date_from,
+            ),
+        )
+        .order_by(EquipmentMaintenance.planned_from, EquipmentMaintenance.id)
+    )
+    maintenance: dict[uuid.UUID, list[CalendarMaintenance]] = defaultdict(list)
+    for item in maintenance_rows.all():
+        maintenance[item.equipment_unit_id].append(
+            CalendarMaintenance(
+                id=item.id,
+                kind=item.kind,
+                title=item.title,
+                planned_from=item.planned_from,
+                planned_to=item.planned_to,
+                status=item.status,
+            )
+        )
+    warnings: dict[uuid.UUID, list[CalendarWarning]] = defaultdict(list)
+    for unit_id, kind, until in (await session.execute(latest_documents_bulk(unit_ids))).all():
+        if until < date_to:
+            warnings[unit_id].append(CalendarWarning(kind=kind, valid_until=until))
     return CalendarOut(
         date_from=date_from,
         date_to=date_to,
@@ -463,6 +518,8 @@ async def calendar(
                     CalendarDay(date=day, hours=total)
                     for day, total in sorted(hours.get(unit.id, {}).items())
                 ],
+                maintenance=maintenance.get(unit.id, []),
+                warnings=warnings.get(unit.id, []),
             )
             for unit, code in units
         ],

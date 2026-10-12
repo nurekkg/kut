@@ -10,7 +10,7 @@ from app.core.context import RequestContext, use_context
 from app.core.db import get_sessionmaker
 from app.modules.auth import devseed
 from tests.auth_support import AuthWorld
-from tests.equipment_support import API, assign, east, headers_for, idem, new_unit, west
+from tests.equipment_support import API, assign, day, east, headers_for, idem, new_unit, west
 
 
 def context(
@@ -195,3 +195,43 @@ async def test_the_module_audit_rows_are_hidden_from_the_machinist(auth_world: A
     foreman = context(auth_world, "foreman", *scope)
     assert await rows(query, machinist) == [(0,)]
     assert (await rows(query, foreman))[0][0] > 0
+
+
+async def test_the_mechanic_closes_a_repair_writes_a_document_and_sees_no_money(
+    api: AsyncClient, auth_world: AuthWorld
+) -> None:
+    head = await headers_for(api, "equipment_head")
+    mechanic = await headers_for(api, "mechanic")
+    unit = await new_unit(api, head, auth_world)
+    repair = await api.post(
+        f"{API}/maintenance",
+        json={
+            "equipment_unit_id": unit["id"],
+            "kind": "repair",
+            "title": "Гидравлика",
+            "planned_from": day(10),
+        },
+        headers={**mechanic, **idem()},
+    )
+    assert repair.status_code == 201, repair.text
+    maintenance = repair.json()["id"]
+    started = await api.patch(
+        f"{API}/maintenance/{maintenance}", json={"status": "in_progress"}, headers=mechanic
+    )
+    assert started.status_code == 200, started.text
+    closed = await api.patch(
+        f"{API}/maintenance/{maintenance}", json={"status": "done"}, headers=mechanic
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["done_at"] is not None
+    document = await api.post(
+        f"{API}/units/{unit['id']}/documents",
+        json={"kind": "insurance", "number": "СТ-2031", "valid_until": "2036-12-31"},
+        headers={**mechanic, **idem()},
+    )
+    assert document.status_code == 201, document.text
+    card = await api.get(f"{API}/units/{unit['id']}", headers=mechanic)
+    assert card.status_code == 200, card.text
+    assert not {"rate", "rates", "amount", "contract"} & set(card.json())
+    assert (await api.get(f"{API}/own-rates", headers=mechanic)).status_code == 403
+    assert (await api.get(f"{API}/contracts", headers=mechanic)).status_code == 403
