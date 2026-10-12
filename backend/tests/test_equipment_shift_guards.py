@@ -113,7 +113,7 @@ async def test_a_project_with_a_shift_is_not_soft_deleted(
     )
     assert created.status_code == 201, created.text
     deleted = await api.delete(f"/api/v1/projects/{project}", headers=owner)
-    assert deleted.status_code == 409, deleted.text
+    assert (deleted.status_code, deleted.json()) == (409, {"detail": "project_has_shifts"})
     still = await api.get(f"/api/v1/projects/{project}", headers=owner)
     assert still.status_code == 200, still.text
 

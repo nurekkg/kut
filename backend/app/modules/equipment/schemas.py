@@ -190,16 +190,22 @@ class ContractOut(BaseModel):
 
 
 class RateCreate(_Strict):
+    """Тариф договора. Привязка к единице или типу необязательна: без неё - тариф договора."""
+
     unit: UnitName
     with_operator: bool
     amount: Money
     min_quantity: MinQuantity | None = None
     valid_from: date
+    equipment_unit_id: uuid.UUID | None = None
+    equipment_type_id: uuid.UUID | None = None
 
 
 class RateOut(BaseModel):
     id: uuid.UUID
     contract_id: uuid.UUID
+    equipment_unit_id: uuid.UUID | None
+    equipment_type_id: uuid.UUID | None
     unit: str
     with_operator: bool
     amount: Decimal

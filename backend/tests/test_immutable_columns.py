@@ -90,6 +90,8 @@ FROZEN = {table: {"id"} for table in AUDITED_TABLES} | {
         "amount",
         "min_quantity",
         "valid_from",
+        "equipment_unit_id",
+        "equipment_type_id",
     },
     "equipment_operator": {"id", "legal_entity_id", "employment"},
     "equipment_request": {"id", "project_id", "legal_entity_id"},
@@ -122,6 +124,7 @@ FROZEN = {table: {"id"} for table in AUDITED_TABLES} | {
         "amount",
         "source",
         "created_by",
+        "shift_id",
     },
     "equipment_delegate": {
         "id",

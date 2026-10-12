@@ -62,6 +62,8 @@ def rate_out(row: EquipmentRate) -> RateOut:
     return RateOut(
         id=row.id,
         contract_id=row.contract_id,
+        equipment_unit_id=row.equipment_unit_id,
+        equipment_type_id=row.equipment_type_id,
         unit=row.unit,
         with_operator=row.with_operator,
         amount=row.amount,

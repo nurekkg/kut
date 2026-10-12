@@ -23,13 +23,18 @@ from app.modules.equipment.shift_schemas import (
     FuelCreate,
     FuelOut,
     ReasonIn,
+    ReceiptConfirm,
+    ReceiptPresign,
+    ReceiptUrlOut,
     ShiftBatchCreate,
     ShiftBatchOut,
     ShiftCreate,
+    ShiftFuelCreate,
     ShiftOut,
     ShiftPatch,
 )
 from app.modules.idempotency.service import IdempotencyKeyHeader, idempotent_create
+from app.modules.photos.schemas import PresignedUpload
 from app.modules.rbac.enums import Action, Module
 
 router = APIRouter(prefix="/equipment", tags=["equipment"])
@@ -196,6 +201,71 @@ async def reverse_fuel(
     fuel_id: uuid.UUID, body: ReasonIn, principal: Reader, session: Db
 ) -> FuelOut:
     return await costs.reverse_fuel(session, fuel_id, body.reason, can_rates=_rates(principal))
+
+
+# Заправка в путевом листе: право проверяет БД (машинист - в своём черновике, техдиректор - после
+# согласования), маршрут открыт на чтение как у самого листа.
+
+
+@router.post("/shifts/{shift_id}/fuel", status_code=status.HTTP_201_CREATED, response_model=FuelOut)
+async def create_shift_fuel(
+    shift_id: uuid.UUID,
+    body: ShiftFuelCreate,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    principal: Reader,
+    session: Db,
+) -> Response:
+    return await idempotent_create(
+        session,
+        request=request,
+        user_id=principal.user_id,
+        key=key,
+        payload=body,
+        handler=lambda: costs.create_shift_fuel(
+            session, shift_id, body, can_rates=_rates(principal)
+        ),
+    )
+
+
+@router.get("/shifts/{shift_id}/fuel", response_model=list[FuelOut])
+async def list_shift_fuel(shift_id: uuid.UUID, principal: Reader, session: Db) -> list[FuelOut]:
+    return await costs.list_shift_fuel(session, shift_id, can_rates=_rates(principal))
+
+
+@router.post("/shifts/{shift_id}/fuel/{fuel_id}/remove", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_shift_fuel(
+    shift_id: uuid.UUID, fuel_id: uuid.UUID, _principal: Reader, session: Db
+) -> Response:
+    await costs.remove_shift_fuel(session, shift_id, fuel_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/shifts/{shift_id}/fuel/{fuel_id}/receipt", response_model=PresignedUpload)
+async def presign_receipt(
+    shift_id: uuid.UUID, fuel_id: uuid.UUID, body: ReceiptPresign, _principal: Reader, session: Db
+) -> PresignedUpload:
+    return await costs.receipt_presign(session, shift_id, fuel_id, body)
+
+
+@router.post("/shifts/{shift_id}/fuel/{fuel_id}/receipt/confirm", response_model=FuelOut)
+async def confirm_receipt(
+    shift_id: uuid.UUID,
+    fuel_id: uuid.UUID,
+    body: ReceiptConfirm,
+    principal: Reader,
+    session: Db,
+) -> FuelOut:
+    return await costs.receipt_confirm(
+        session, shift_id, fuel_id, body, can_rates=_rates(principal)
+    )
+
+
+@router.get("/shifts/{shift_id}/fuel/{fuel_id}/receipt", response_model=ReceiptUrlOut)
+async def receipt_url(
+    shift_id: uuid.UUID, fuel_id: uuid.UUID, _principal: Reader, session: Db
+) -> ReceiptUrlOut:
+    return await costs.receipt_url(session, shift_id, fuel_id)
 
 
 # --- делегаты подтверждения ---------------------------------------------------------------------

@@ -78,7 +78,7 @@ USERS = (
     DevUser("storekeeper", "storekeeper", "Кладовщик Восток (dev)", (EAST,)),
     DevUser("procurement", "procurement", "Снабженец Запад (dev)", (WEST,)),
     DevUser("accountant", "accountant", "Бухгалтер (dev)", (WEST,), legal_entities=LEGAL_ENTITIES),
-    DevUser("lawyer", "lawyer", "Юрист (dev)", (EAST, WEST)),
+    DevUser("lawyer", "lawyer", "Юрист (dev)", (EAST, WEST), legal_entities=LEGAL_ENTITIES),
     DevUser(
         "customer", "customer", "Представитель заказчика (dev)", (EAST,), counterparty=CUSTOMER
     ),

@@ -31,6 +31,7 @@ ASSIGNMENT_STATUSES = ("planned", "finished", "cancelled")
 MAINTENANCE_KINDS = ("to", "repair")
 MAINTENANCE_STATUSES = ("planned", "in_progress", "done", "cancelled")
 IMPORT_STATUSES = ("checked", "committed", "rejected")
+NIL_UUID = "'00000000-0000-0000-0000-000000000000'::uuid"
 
 
 def _in(values: tuple[str, ...]) -> str:
@@ -157,9 +158,13 @@ class EquipmentOwnRate(BusinessBase):
 
 
 class EquipmentRate(BusinessBase):
+    """Тариф договора аренды. Уровень: единица, тип или договор (по умолчанию, оба поля пусты)."""
+
     __tablename__ = "equipment_rate"
 
     contract_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("contract.id"))
+    equipment_unit_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("equipment_unit.id"))
+    equipment_type_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("equipment_type.id"))
     unit: Mapped[str]
     with_operator: Mapped[bool] = mapped_column(Boolean)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
@@ -173,9 +178,12 @@ class EquipmentRate(BusinessBase):
             "min_quantity IS NULL OR min_quantity >= 0", name="min_quantity_not_negative"
         ),
         CheckConstraint("unit <> 'month' OR min_quantity IS NULL", name="month_has_no_minimum"),
+        CheckConstraint("equipment_unit_id IS NULL OR equipment_type_id IS NULL", name="one_level"),
         Index(
-            "uq_equipment_rate_version",
+            "uq_equipment_rate_level_version",
             "contract_id",
+            text(f"COALESCE(equipment_unit_id, {NIL_UUID})"),
+            text(f"COALESCE(equipment_type_id, {NIL_UUID})"),
             "unit",
             "with_operator",
             "valid_from",
@@ -496,7 +504,11 @@ class EquipmentShiftLine(BusinessBase):
 
 
 class EquipmentFuel(BusinessBase):
-    """Заправка (ГСМ) строкой. Строка не меняется: сторно - отдельной строкой журнала."""
+    """Заправка (ГСМ) строкой. Строка не меняется: сторно - отдельной строкой журнала.
+
+    Сумма (amount) - деферред: приложение колонку не читает, её даёт журнал затрат (гейт read:rates,
+    ревизия f2b7d4c9e1a6). Заправка в листе (shift_id) попадает в журнал при проводке листа.
+    """
 
     __tablename__ = "equipment_fuel"
 
@@ -505,15 +517,34 @@ class EquipmentFuel(BusinessBase):
     equipment_unit_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("equipment_unit.id"))
     fuel_date: Mapped[date]
     liters: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
-    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), deferred=True)
     source: Mapped[str] = mapped_column(server_default=text("'manual'"))
     reversed_at: Mapped[datetime | None]
     reversed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id"))
     reverse_reason: Mapped[str | None]
+    shift_id: Mapped[uuid.UUID | None]
+    receipt_key: Mapped[str | None]
+    receipt_content_type: Mapped[str | None]
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["project_id", "legal_entity_id"], ["project.id", "project.legal_entity_id"]
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "shift_id"],
+            ["equipment_shift.project_id", "equipment_shift.id"],
+            name="fk_equipment_fuel_project_id_shift_id_equipment_shift",
+        ),
+        CheckConstraint("shift_id IS NULL OR project_id IS NOT NULL", name="shift_has_project"),
+        CheckConstraint(
+            "shift_id IS NULL OR (reversed_at IS NULL AND reverse_reason IS NULL)",
+            name="shift_not_reversed",
+        ),
+        CheckConstraint(
+            "(receipt_key IS NULL) = (receipt_content_type IS NULL)", name="receipt_pair"
+        ),
+        CheckConstraint(
+            "receipt_key IS NULL OR btrim(receipt_key) <> ''", name="receipt_key_not_blank"
         ),
         CheckConstraint("amount >= 0", name="amount_not_negative"),
         CheckConstraint("liters IS NULL OR liters >= 0", name="liters_not_negative"),
@@ -530,6 +561,7 @@ class EquipmentFuel(BusinessBase):
         ),
         Index("ix_equipment_fuel_equipment_unit_id_fuel_date", "equipment_unit_id", "fuel_date"),
         Index("ix_equipment_fuel_project_id", "project_id"),
+        Index("ix_equipment_fuel_shift_id", "shift_id"),
     )
 
 

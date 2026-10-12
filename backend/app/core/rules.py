@@ -87,6 +87,15 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "maintenance.amount_invalid": (422, "equipment.amount_invalid"),
     "maintenance.project_invalid": (422, "equipment.project_invalid"),
     "cost_entry.immutable": (409, "equipment.cost_immutable"),
+    # SE-2b: тариф по уровню, ГСМ в листе, версии листа, объект в определителях, делегаты, удаление.
+    "rate.target_invalid": (422, "equipment.rate_target_invalid"),
+    "rate.level_conflict": (422, "equipment.rate_level_conflict"),
+    "shift.posting_forbidden": (403, "forbidden"),
+    "fuel.shift_bound": (409, "equipment.fuel_shift_bound"),
+    "fuel.shift_invalid": (422, "equipment.shift_invalid"),
+    "delegate.forbidden": (403, "forbidden"),
+    "delegate.in_past": (422, "equipment.delegate_in_past"),
+    "project.has_shifts": (409, "project_has_shifts"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -117,7 +126,8 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "uq_contract_legal_entity_id_kind_number": (409, "equipment.contract_number_taken"),
     "uq_equipment_unit_legal_entity_id_registry_key": (409, "equipment.unit_key_taken"),
     "uq_equipment_own_rate_version": (409, "equipment.rate_version_exists"),
-    "uq_equipment_rate_version": (409, "equipment.rate_version_exists"),
+    "uq_equipment_rate_level_version": (409, "equipment.rate_version_exists"),
+    "ck_equipment_rate_one_level": (422, "equipment.rate_target_invalid"),
     "uq_equipment_operator_user_id": (409, "equipment.operator_user_taken"),
     "uq_equipment_document_equipment_unit_id_kind_version": (
         409,
@@ -187,6 +197,12 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "fk_equipment_fuel_equipment_unit_id_equipment_unit": (422, "equipment.unit_invalid"),
     "fk_equipment_delegate_project_id_project": (422, "equipment.project_invalid"),
     "fk_equipment_delegate_delegate_user_id_user": (422, "equipment.user_invalid"),
+    # ГСМ в листе: чек (пара ключ и тип), сторно у заправки в листе, объект заправки и листа.
+    "ck_equipment_fuel_receipt_pair": (422, "equipment.receipt_invalid"),
+    "ck_equipment_fuel_receipt_key_not_blank": (422, "equipment.receipt_invalid"),
+    "ck_equipment_fuel_shift_not_reversed": (409, "equipment.fuel_shift_bound"),
+    "ck_equipment_fuel_shift_has_project": (422, "equipment.shift_invalid"),
+    "fk_equipment_fuel_project_id_shift_id_equipment_shift": (422, "equipment.shift_invalid"),
 }
 
 

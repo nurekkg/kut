@@ -38,7 +38,6 @@ CONTRACTS = (
         (
             ("hour", False, "2200", None),
             ("hour", True, "3400", "40"),
-            ("shift", False, "14000", None),
         ),
     ),
     (
@@ -46,10 +45,7 @@ CONTRACTS = (
         "east",
         "Арендодатель Б (dev)",
         "АР-ВОСТОК-02",
-        (
-            ("trip", False, "2500", "10"),
-            ("hour", False, "1900", "30"),
-        ),
+        (("trip", False, "2500", "10"),),
     ),
     (
         "C",
@@ -63,6 +59,9 @@ CONTRACTS = (
     ),
 )
 RATE_FROM = date(2026, 1, 1)
+# Тариф уровня единицы (prefix, номер в префиксе, единица, с машинистом, сумма, минимум): у одной
+# арендованной единицы договора А смена без машиниста, остальные - часы на уровне договора.
+UNIT_RATES = (("A", 0, "shift", False, "14000", None),)
 
 
 def _scalar(connection: Connection, sql: str, **params: Any) -> Any:
@@ -134,8 +133,10 @@ def _contracts(
                 text(
                     "INSERT INTO equipment_rate (id, contract_id, unit, with_operator, amount,"
                     " min_quantity, valid_from) VALUES (:id, :contract, :unit, :op, :amount,"
-                    " :minimum, :from) ON CONFLICT (contract_id, unit, with_operator, valid_from)"
-                    " WHERE deleted_at IS NULL DO NOTHING"
+                    " :minimum, :from) ON CONFLICT (contract_id,"
+                    " (COALESCE(equipment_unit_id, '00000000-0000-0000-0000-000000000000'::uuid)),"
+                    " (COALESCE(equipment_type_id, '00000000-0000-0000-0000-000000000000'::uuid)),"
+                    " unit, with_operator, valid_from) WHERE deleted_at IS NULL DO NOTHING"
                 ),
                 {
                     "id": uuid.uuid4(),
@@ -166,14 +167,14 @@ def _units(
     for key, count in RENTED:
         entity = "west" if key == "C" else "east"
         plan.append((key, keys[entity], count, key))
-    ids: dict[str, list[uuid.UUID]] = {}
+    registry: dict[str, list[str]] = {}
     for prefix, entity_key, count, rented_key in plan:
-        ids[prefix] = []
+        registry[prefix] = []
         for index in range(count):
             code, _name, _unit = TYPES[index % len(TYPES)]
             number = f"{code}-{prefix}{index:03d}"
             unit_id = uuid.uuid4()
-            ids[prefix].append(unit_id)
+            registry[prefix].append(number.replace("-", ""))
             rows.append(
                 {
                     "id": unit_id,
@@ -197,7 +198,47 @@ def _units(
         ),
         rows,
     )
-    return ids
+    # Повторный прогон не создаёт единиц: идентификаторы берём из базы по регистрационному ключу.
+    stored = {
+        key: unit_id
+        for key, unit_id in connection.execute(
+            text(
+                "SELECT registry_key, id FROM equipment_unit"
+                " WHERE registry_key = ANY(CAST(:keys AS varchar[])) AND deleted_at IS NULL"
+            ),
+            {"keys": [key for keys_ in registry.values() for key in keys_]},
+        )
+    }
+    return {prefix: [stored[key] for key in keys_] for prefix, keys_ in registry.items()}
+
+
+def _unit_rates(
+    connection: Connection, contracts: dict[str, uuid.UUID], units: dict[str, list[uuid.UUID]]
+) -> None:
+    rows = [
+        {
+            "id": uuid.uuid4(),
+            "contract": contracts[prefix],
+            "unit_id": units[prefix][index],
+            "unit": unit,
+            "op": with_operator,
+            "amount": amount,
+            "minimum": minimum,
+            "from": RATE_FROM,
+        }
+        for prefix, index, unit, with_operator, amount, minimum in UNIT_RATES
+    ]
+    connection.execute(
+        text(
+            "INSERT INTO equipment_rate (id, contract_id, equipment_unit_id, unit, with_operator,"
+            " amount, min_quantity, valid_from) VALUES (:id, :contract, :unit_id, :unit, :op,"
+            " :amount, :minimum, :from) ON CONFLICT (contract_id,"
+            " (COALESCE(equipment_unit_id, '00000000-0000-0000-0000-000000000000'::uuid)),"
+            " (COALESCE(equipment_type_id, '00000000-0000-0000-0000-000000000000'::uuid)),"
+            " unit, with_operator, valid_from) WHERE deleted_at IS NULL DO NOTHING"
+        ),
+        rows,
+    )
 
 
 def _documents(connection: Connection, units: dict[str, list[uuid.UUID]], today: date) -> None:
@@ -487,6 +528,7 @@ def ensure_equipment(
     _tax_ids(connection, legal_entities, keys)
     contracts = _contracts(connection, legal_entities, counterparties, keys)
     units = _units(connection, types, legal_entities, keys, contracts)
+    _unit_rates(connection, contracts, units)
     _documents(connection, units, today)
     _operators(connection, legal_entities, counterparties, keys, users["machinist"])
     _own_rates(connection, types, legal_entities, keys, users)
@@ -512,8 +554,8 @@ def ensure_equipment(
 
 SECOND_EAST = "ЖК «Восток-2» (dev)"
 # (объект, юрлицо, единица, день назад, оператор, часы, автор, состояние, причина отказа)
-# Аренда - только с машинистом арендодателя: у договора А два тарифа без машиниста (час и смена),
-# и БД отказывает выбирать наугад (shift.rate_ambiguous).
+# Аренда - с машинистом арендодателя (часовой тариф договора). Для одной единицы договора А без
+# машиниста задан тариф смены на уровне единицы: он выигрывает у часа договора по приоритету.
 SHIFT_PLAN = (
     ("east", "east", "own_east", 1, "staff", "8", "foreman", "confirmed", None),
     ("east", "east", "own_east", 2, "staff", "6", "foreman", "submitted", None),
@@ -555,6 +597,25 @@ def _rented_unit(connection: Connection, contract_number: str) -> uuid.UUID:
         {"number": contract_number},
     ).scalar_one()
     return unit
+
+
+def _machinist_fuel(connection: Connection, shift_id: uuid.UUID, machinist: uuid.UUID) -> None:
+    """Заправка машиниста в его листе до подтверждения: в журнал попадёт при проводке листа."""
+    connection.execute(
+        text(
+            "INSERT INTO equipment_fuel (id, legal_entity_id, project_id, equipment_unit_id,"
+            " fuel_date, liters, amount, shift_id, created_by)"
+            " SELECT gen_random_uuid(), s.legal_entity_id, s.project_id, s.equipment_unit_id,"
+            " s.work_date, :liters, :amount, s.id, :machinist FROM equipment_shift s"
+            " WHERE s.id = :shift"
+        ),
+        {
+            "liters": Decimal("40.00"),
+            "amount": Decimal("3200.00"),
+            "shift": shift_id,
+            "machinist": machinist,
+        },
+    )
 
 
 def _move_shift(
@@ -665,6 +726,8 @@ def ensure_shifts(
                 "author": users[author] if author else None,
             },
         ).scalar_one()
+        if unit == "own_east" and state == "confirmed" and days == 1:
+            _machinist_fuel(connection, shift_id, users["machinist"])
         _move_shift(connection, shift_id, state, users["techdir"], reason)
         created += 1
     for fuel_project, day, amount, liters in (
@@ -706,7 +769,7 @@ def ensure_shifts(
     )
     return {
         "equipment_shift": created,
-        "equipment_fuel": 2,
+        "equipment_fuel": 3,
         "equipment_maintenance": 1,
         "project": 1,
     }

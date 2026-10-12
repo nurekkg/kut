@@ -35,7 +35,7 @@ def _not_found() -> HTTPException:
 
 
 @asynccontextmanager
-async def _writable(session: AsyncSession) -> AsyncIterator[None]:
+async def writable(session: AsyncSession) -> AsyncIterator[None]:
     """Строка видна, но политика UPDATE её не пускает (роль, не автор, делегат вне периода): ORM
     получает 0 строк. Это отказ права, а не сбой, поэтому 403, а не 500."""
     try:
@@ -230,7 +230,7 @@ async def update_shift(session: AsyncSession, shift_id: uuid.UUID, patch: ShiftP
     row = await _shift(session, shift_id)
     for field, value in patch.model_dump(exclude_unset=True, exclude={"lines"}).items():
         setattr(row, field, value)
-    async with _writable(session):
+    async with writable(session):
         await session.flush()
         if patch.lines is not None:
             await session.execute(
@@ -257,7 +257,7 @@ async def transition(
     if row.status == target:
         lines = await _lines(session, [row.id])
         return shift_out(row, lines[row.id])
-    async with _writable(session):
+    async with writable(session):
         row.status = target
         if target == "rejected":
             row.reject_reason = reason

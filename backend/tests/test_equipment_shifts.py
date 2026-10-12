@@ -3,6 +3,7 @@
 ADR-014 часть 1 §3, часть 2 §5, часть 3 §9. Даты листов в прошлом: лист не может быть позже сегодня.
 """
 
+from datetime import timedelta
 from typing import Any
 
 from httpx import AsyncClient
@@ -11,6 +12,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.modules.auth import devseed
+from app.modules.equipment.service import bishkek_today
 from tests.auth_support import AuthWorld
 from tests.equipment_support import (
     API,
@@ -425,8 +427,8 @@ async def test_a_delegate_confirms_inside_the_period_and_nowhere_else(
         json={
             "project_id": str(east(auth_world)),
             "delegate_user_id": str(machinist_id),
-            "date_from": past(10),
-            "date_to": past(12),
+            "date_from": bishkek_today().isoformat(),
+            "date_to": (bishkek_today() + timedelta(days=2)).isoformat(),
             "reason": "машинист не подтверждает свои часы",
         },
         headers={**foreman, **idem()},
@@ -437,8 +439,8 @@ async def test_a_delegate_confirms_inside_the_period_and_nowhere_else(
         json={
             "project_id": str(east(auth_world)),
             "delegate_user_id": str(delegate_id),
-            "date_from": past(10),
-            "date_to": past(12),
+            "date_from": bishkek_today().isoformat(),
+            "date_to": (bishkek_today() + timedelta(days=2)).isoformat(),
             "reason": "отпуск прораба",
         },
         headers={**foreman, **idem()},
@@ -449,29 +451,49 @@ async def test_a_delegate_confirms_inside_the_period_and_nowhere_else(
         json={
             "project_id": str(east(auth_world)),
             "delegate_user_id": str(delegate_id),
-            "date_from": past(10),
-            "date_to": past(12),
+            "date_from": bishkek_today().isoformat(),
+            "date_to": (bishkek_today() + timedelta(days=2)).isoformat(),
             "reason": "самоназначение",
         },
         headers={**master, **idem()},
     )
     assert by_delegate.status_code == 403
 
-    def shift(day_offset: int) -> dict[str, Any]:
+    def shift(work_date: str) -> dict[str, Any]:
         return shift_body(
             unit_id=unit["id"],
             project_id=east(auth_world),
-            work_date=past(day_offset),
+            work_date=work_date,
             operator_id=operator,
         )
 
-    inside = (await post_shift(api, foreman, shift(11))).json()
-    outside = (await post_shift(api, foreman, shift(20))).json()
+    inside = (await post_shift(api, foreman, shift(bishkek_today().isoformat()))).json()
+    outside = (await post_shift(api, foreman, shift(past(20)))).json()
     for item in (inside, outside):
         assert (await move(api, foreman, item["id"], "submit")).status_code == 200
     assert (await move(api, delegate, inside["id"], "confirm")).status_code == 200
     late = await move(api, delegate, outside["id"], "confirm")
     assert late.status_code == 403 and late.json() == {"detail": "forbidden"}
+
+
+async def test_a_delegation_cannot_start_before_today(
+    api: AsyncClient, auth_world: AuthWorld
+) -> None:
+    """Делегирование задним числом закрыто: период не раньше сегодня (закрытие месяца - SE-3)."""
+    foreman = await headers_for(api, "foreman")
+    yesterday = (bishkek_today() - timedelta(days=1)).isoformat()
+    refused = await api.post(
+        f"{API}/delegates",
+        json={
+            "project_id": str(east(auth_world)),
+            "delegate_user_id": str(auth_world.users["master"]),
+            "date_from": yesterday,
+            "date_to": bishkek_today().isoformat(),
+            "reason": "задним числом",
+        },
+        headers={**foreman, **idem()},
+    )
+    assert (refused.status_code, refused.json()) == (422, {"detail": "equipment.delegate_in_past"})
 
 
 async def test_another_objects_foreman_neither_sees_nor_confirms_the_shift(

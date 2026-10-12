@@ -7,11 +7,12 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.equipment.schemas import HoursPerDay, Money, ReasonIn
+from app.modules.photos.models import MAX_PHOTO_BYTES
 
 Odometer = Annotated[Decimal, Field(ge=0, max_digits=10, decimal_places=2)]
 Tonnes = Annotated[Decimal, Field(ge=0, max_digits=10, decimal_places=3)]
@@ -134,13 +135,38 @@ class FuelCreate(StrictModel):
     amount: Money
 
 
+class ShiftFuelCreate(StrictModel):
+    """Заправка в путевом листе: объект, дата и единица - от листа. Сумму вводит машинист."""
+
+    liters: Liters | None = None
+    amount: Money
+
+
+class ReceiptPresign(StrictModel):
+    """Чек заправки: тип и размер - в подписи загрузки, как у фото факта."""
+
+    content_type: Literal["image/jpeg", "image/png", "image/heic", "image/webp"]
+    size_bytes: int = Field(gt=0, le=MAX_PHOTO_BYTES)
+
+
+class ReceiptConfirm(StrictModel):
+    key: str = Field(min_length=1, max_length=300)
+
+
+class ReceiptUrlOut(BaseModel):
+    url: str
+    expires_in: int
+
+
 class FuelOut(BaseModel):
     id: uuid.UUID
     equipment_unit_id: uuid.UUID
     project_id: uuid.UUID | None
+    shift_id: uuid.UUID | None
     fuel_date: date
     liters: Decimal | None
     amount: Decimal | None
+    has_receipt: bool
     reversed_at: datetime | None
     reverse_reason: str | None
 
@@ -208,9 +234,13 @@ __all__ = [
     "LineIn",
     "LineOut",
     "ReasonIn",
+    "ReceiptConfirm",
+    "ReceiptPresign",
+    "ReceiptUrlOut",
     "ShiftBatchCreate",
     "ShiftBatchOut",
     "ShiftCreate",
+    "ShiftFuelCreate",
     "ShiftOut",
     "ShiftPatch",
 ]

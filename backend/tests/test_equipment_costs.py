@@ -371,7 +371,10 @@ async def test_totals_for_the_foreman_have_no_rows_and_no_tariffs(
     assert rows_for_foreman.status_code == 403
     ctx = in_context(world["author_id"], (east(auth_world), world["extra"]), (le_east(auth_world),))
     assert await rows("SELECT id FROM cost_entry", ctx) == []
-    assert await rows("SELECT amount FROM equipment_fuel", ctx) != []
+    # Сумма ГСМ приложению не выдана колонкой (ревизия f2b7d4c9e1a6): отказ, а не строка с нулём.
+    with pytest.raises(DBAPIError, match="permission denied for table equipment_fuel"):
+        await rows("SELECT amount FROM equipment_fuel", ctx)
+    assert await rows("SELECT liters FROM equipment_fuel", ctx) != []
 
 
 async def test_finance_reads_every_journal_row_of_the_reference_and_the_shift_change_is_audited(
