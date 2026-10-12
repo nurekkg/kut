@@ -178,7 +178,8 @@ async def test_a_correction_after_confirmation_is_made_by_the_technical_director
 async def test_the_receipt_is_presigned_uploaded_confirmed_and_not_replaced(
     api: AsyncClient, auth_world: AuthWorld, s3: httpx.AsyncClient
 ) -> None:
-    machinist, _, shift_id = await sheet(api, auth_world)
+    finance = await headers_for(api, "finance")
+    machinist, _, shift_id = await sheet(api, auth_world, finance)
     fuel_id = (await add_fuel(api, machinist, shift_id)).json()["id"]
     payload = b"fake-jpeg!!"
     presigned = await api.post(
@@ -201,7 +202,10 @@ async def test_the_receipt_is_presigned_uploaded_confirmed_and_not_replaced(
     )
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["has_receipt"] is True
-    link = await api.get(f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt", headers=machinist)
+    # Чек показывает сумму: ссылку получает только read:rates, как журнал; машинист - нет.
+    hidden = await api.get(f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt", headers=machinist)
+    assert (hidden.status_code, hidden.json()) == (403, {"detail": "forbidden"})
+    link = await api.get(f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt", headers=finance)
     assert link.status_code == 200 and link.json()["expires_in"] == 120
     other = f"project/{east(auth_world)}/shift/{shift_id}/fuel/{fuel_id}/{uuid4()}.jpg"
     replaced = await api.post(

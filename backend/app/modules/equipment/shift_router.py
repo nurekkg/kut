@@ -261,9 +261,10 @@ async def confirm_receipt(
     )
 
 
+# Чек показывает сумму заправки: ссылка на него - с правом read:rates, как у журнала затрат.
 @router.get("/shifts/{shift_id}/fuel/{fuel_id}/receipt", response_model=ReceiptUrlOut)
 async def receipt_url(
-    shift_id: uuid.UUID, fuel_id: uuid.UUID, _principal: Reader, session: Db
+    shift_id: uuid.UUID, fuel_id: uuid.UUID, _principal: RatesReader, session: Db
 ) -> ReceiptUrlOut:
     return await costs.receipt_url(session, shift_id, fuel_id)
 
