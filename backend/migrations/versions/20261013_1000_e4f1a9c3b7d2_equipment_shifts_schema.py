@@ -60,6 +60,22 @@ DATE_RANGE = "{column} >= DATE '2000-01-01' AND {column} <= DATE '2100-12-31'"
 
 # Делегат подтверждения: право подтверждения на объект в дату листа (решение Q5 A). Определитель
 # без параметра пользователя: берёт app.user_id(), поэтому не служит оракулом чужих делегатов.
+# Делегат подтверждения - тот, кто ведёт листы на объекте (право write:shift: прораб, мастер), но не
+# машинист: машинист не подтверждает собственные часы. Роли подтверждения (approve) у делегата нет -
+# право подтверждения даёт сам период делегирования (ADR-014, D17).
+ELIGIBLE_FUNCTION = """
+CREATE FUNCTION app.equipment_is_delegate_eligible(p_user uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public."user" u
+        JOIN public.role r ON r.id = u.role_id
+        JOIN public.role_permission rp ON rp.role_id = u.role_id AND rp.deleted_at IS NULL
+        JOIN public.permission p ON p.id = rp.permission_id AND p.deleted_at IS NULL
+        WHERE u.id = p_user AND u.deleted_at IS NULL AND r.code <> 'machinist'
+          AND p.module = 'equipment' AND p.action = 'write' AND p.qualifier = 'shift')
+$$
+"""
+
 DELEGATED_FUNCTION = """
 CREATE FUNCTION app.equipment_delegated(p_project uuid, p_day date) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
@@ -67,7 +83,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
         SELECT 1 FROM public.equipment_delegate d
         WHERE d.project_id = p_project AND d.delegate_user_id = app.user_id()
           AND d.deleted_at IS NULL AND d.revoked_at IS NULL
-          AND p_day BETWEEN d.date_from AND d.date_to)
+          AND p_day BETWEEN d.date_from AND d.date_to
+          AND app.equipment_is_delegate_eligible(d.delegate_user_id))
 $$
 """
 
@@ -503,7 +520,9 @@ def _rls_and_grants() -> None:
         f"equipment_fuel.created_by = app.user_id() OR ({fuel_scope} AND {CAN_READ}"
         f" AND NOT {IS_MACHINIST})",
     )
-    _policy("equipment_fuel", "INSERT", f"{fuel_scope} AND {CAN_WRITE_SHIFT}")
+    _policy(
+        "equipment_fuel", "INSERT", f"{fuel_scope} AND {CAN_WRITE_SHIFT} AND NOT {IS_MACHINIST}"
+    )
     _policy("equipment_fuel", "UPDATE", f"{fuel_scope} AND {CAN_AFTER_APPROVAL}")
 
     # Делегаты: видит сам делегат и все, кто видит объект; создаёт и отзывает утверждающий объекта.
@@ -626,6 +645,8 @@ def upgrade() -> None:
     _create_cost_entry()
     # Функцию создаёт и её права меняет владелец kut_auth: REVOKE от kut_owner без роли владельца отказывает.
     op.execute("SET LOCAL ROLE kut_auth")
+    op.execute(ELIGIBLE_FUNCTION)
+    op.execute("REVOKE ALL ON FUNCTION app.equipment_is_delegate_eligible(uuid) FROM PUBLIC")
     op.execute(DELEGATED_FUNCTION)
     op.execute("REVOKE ALL ON FUNCTION app.equipment_delegated(uuid, date) FROM PUBLIC")
     op.execute(
@@ -643,4 +664,5 @@ def downgrade() -> None:
     op.drop_table("equipment_shift")
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute("DROP FUNCTION IF EXISTS app.equipment_delegated(uuid, date)")
+    op.execute("DROP FUNCTION IF EXISTS app.equipment_is_delegate_eligible(uuid)")
     op.execute("RESET ROLE")

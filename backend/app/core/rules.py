@@ -78,6 +78,7 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "fuel.unit_invalid": (422, "equipment.unit_invalid"),
     "fuel.date_in_future": (422, "equipment.shift_date_in_future"),
     "fuel.reason_required": (422, "equipment.reason_required"),
+    "delegate.not_eligible": (422, "equipment.delegate_not_eligible"),
     "maintenance.forbidden": (403, "forbidden"),
     "maintenance.not_found": (404, "not_found"),
     "maintenance.transition_forbidden": (409, "equipment.transition_forbidden"),

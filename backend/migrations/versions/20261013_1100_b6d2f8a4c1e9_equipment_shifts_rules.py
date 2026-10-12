@@ -455,6 +455,11 @@ BEGIN
         IF v_content_changed THEN
             RAISE EXCEPTION 'shift.transition_forbidden' USING ERRCODE = 'check_violation';
         END IF;
+        PERFORM 1 FROM public.equipment_unit WHERE id = NEW.equipment_unit_id FOR UPDATE;
+        v_other := app.equipment_day_hours_other(NEW.equipment_unit_id, NEW.work_date, NEW.id);
+        IF v_other + NEW.hours > 24 THEN
+            RAISE EXCEPTION 'shift.day_hours_exceeded' USING ERRCODE = 'check_violation';
+        END IF;
         NEW.reject_reason := NULL;
         RETURN NEW;
     END IF;
@@ -499,7 +504,9 @@ DECLARE
     v_user uuid := app.user_id();
     v_unit public.equipment_unit;
 BEGIN
-    IF v_user IS NOT NULL AND NOT app.has_permission('equipment', 'write', 'shift') THEN
+    IF v_user IS NOT NULL AND (
+        NOT app.has_permission('equipment', 'write', 'shift') OR app.is_machinist()
+    ) THEN
         RAISE EXCEPTION 'fuel.forbidden' USING ERRCODE = 'check_violation';
     END IF;
     SELECT * INTO v_unit FROM public.equipment_unit
@@ -666,6 +673,17 @@ BEGIN
             OR c.project_id = ANY ((SELECT app.project_ids())::uuid[])))
            OR (c.project_id IS NULL AND v_rates))
     GROUP BY c.project_id, c.category::text;
+END $$
+""",
+    # Делегат подтверждения - тот, кто ведёт листы на объекте (write:shift), но не машинист.
+    """
+CREATE FUNCTION app.equipment_delegate_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+BEGIN
+    IF NOT app.equipment_is_delegate_eligible(NEW.delegate_user_id) THEN
+        RAISE EXCEPTION 'delegate.not_eligible' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
 END $$
 """,
     # Точки расширения SE-1 (зависимости мешают мягкому удалению): листы, строки, ГСМ, делегаты и журнал
@@ -852,6 +870,13 @@ TRIGGERS = (
     ("equipment_fuel_guard", "equipment_fuel", "BEFORE INSERT", "equipment_fuel_guard", False),
     ("equipment_fuel_post", "equipment_fuel", "AFTER INSERT", "equipment_fuel_post", False),
     (
+        "equipment_delegate_guard",
+        "equipment_delegate",
+        "BEFORE INSERT",
+        "equipment_delegate_guard",
+        False,
+    ),
+    (
         "equipment_maintenance_guard",
         "equipment_maintenance",
         "BEFORE UPDATE",
@@ -881,6 +906,7 @@ TRIGGER_FUNCTIONS = (
     "equipment_fuel_guard()",
     "equipment_fuel_post()",
     "equipment_maintenance_guard()",
+    "equipment_delegate_guard()",
     "cost_entry_forbid_change()",
 )
 
@@ -945,6 +971,7 @@ def downgrade() -> None:
         "equipment_fuel_post()",
         "equipment_fuel_guard()",
         "equipment_maintenance_guard()",
+        "equipment_delegate_guard()",
         "cost_entry_forbid_change()",
     ):
         op.execute(f"DROP FUNCTION IF EXISTS app.{signature}")

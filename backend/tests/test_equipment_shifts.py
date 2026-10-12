@@ -411,6 +411,27 @@ async def test_a_delegate_confirms_inside_the_period_and_nowhere_else(
         projects=(east(auth_world),),
         entities=(le_east(auth_world),),
     )
+    _, master = await signed_in(
+        api,
+        new_user,
+        worker_sync_engine,
+        "master",
+        projects=(east(auth_world),),
+        entities=(le_east(auth_world),),
+    )
+    machinist_id = auth_world.users["machinist"]
+    not_eligible = await api.post(
+        f"{API}/delegates",
+        json={
+            "project_id": str(east(auth_world)),
+            "delegate_user_id": str(machinist_id),
+            "date_from": past(10),
+            "date_to": past(12),
+            "reason": "машинист не подтверждает свои часы",
+        },
+        headers={**foreman, **idem()},
+    )
+    assert not_eligible.json() == {"detail": "equipment.delegate_not_eligible"}
     created = await api.post(
         f"{API}/delegates",
         json={
@@ -432,7 +453,7 @@ async def test_a_delegate_confirms_inside_the_period_and_nowhere_else(
             "date_to": past(12),
             "reason": "самоназначение",
         },
-        headers={**delegate, **idem()},
+        headers={**master, **idem()},
     )
     assert by_delegate.status_code == 403
 
