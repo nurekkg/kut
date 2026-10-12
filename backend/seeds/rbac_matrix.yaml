@@ -51,7 +51,7 @@ matrix:
     customer: "R (свой)"
     subcontractor: "R (свой)"
     supplier: "—"
-    equipment_head: "—"
+    equipment_head: "R"
     mechanic: "—"
     machinist: "—"
   gpr:

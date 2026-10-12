@@ -223,6 +223,10 @@ jobs:
           export DEV_SEED_PASSWORD="$(grep '^DEV_SEED_PASSWORD=' ../.env | cut -d= -f2-)"
           export DEV_SEED_TOTP_SECRET="$(grep '^DEV_SEED_TOTP_SECRET=' ../.env | cut -d= -f2-)"
           npx playwright test --retries=0
+      - name: Замер календаря в лог
+        if: always()
+        working-directory: e2e
+        run: cat artifacts/equipment-timing.json || echo "замер не записан"
       - name: Failure diagnostics
         if: failure()
         run: |

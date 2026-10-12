@@ -123,6 +123,9 @@ ADR_EQUIPMENT_GRANTS = {
     },
     ("technical_director", "equipment", "write", None),
     ("equipment_head", "equipment", "write", None),
+    # Начальник отдела видит объекты (решение PO, SE-2a): реестр и назначения по объекту. Бюджет,
+    # заказчик и адрес остаются закрыты: их даёт finance:read, а у начальника его нет.
+    ("equipment_head", "objects", "read", None),
     ("foreman", "equipment", "write", "request"),
     ("technical_director", "equipment", "approve", "assign"),
     ("equipment_head", "equipment", "approve", "assign"),
