@@ -113,6 +113,8 @@ async def unit_out(session: AsyncSession, row: EquipmentUnit) -> UnitOut:
         ownership=row.ownership,
         registry_number=row.registry_number,
         contract_id=row.contract_id,
+        model=row.model,
+        year=row.year,
     )
 
 
@@ -194,6 +196,8 @@ async def list_units(
             ownership=unit.ownership,
             registry_number=unit.registry_number,
             contract_id=unit.contract_id,
+            model=unit.model,
+            year=unit.year,
         )
         for unit, code in rows
     ]
@@ -207,6 +211,8 @@ async def create_unit(session: AsyncSession, data: UnitCreate) -> UnitOut:
         registry_key=normalize_key(data.registry_number),
         registry_number=data.registry_number,
         contract_id=data.contract_id,
+        model=data.model,
+        year=data.year,
     )
     async with db_rules(session):
         session.add(row)

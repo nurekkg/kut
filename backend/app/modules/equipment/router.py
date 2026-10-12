@@ -643,7 +643,11 @@ async def commit_import(
         key=key,
         payload=ImportPayload(file_sha256=file_sha256),
         handler=lambda: imports.apply(
-            session, checked.records, file_sha256=file_sha256, rows_total=checked.rows_total
+            session,
+            checked.records,
+            file_sha256=file_sha256,
+            rows_total=checked.rows_total,
+            actor=principal.user_id,
         ),
     )
 

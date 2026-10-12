@@ -182,13 +182,16 @@ def _units(
                     "key": number.replace("-", ""),
                     "number": number,
                     "contract": contracts[rented_key] if rented_key else None,
+                    "model": f"Модель {code}-{index % 5 + 1}",
+                    "year": 2008 + index % 15,
                 }
             )
     connection.execute(
         text(
             "INSERT INTO equipment_unit (id, legal_entity_id, equipment_type_id, ownership,"
-            " registry_key, registry_number, contract_id) VALUES (:id, :le, :type, :ownership,"
-            " :key, :number, :contract) ON CONFLICT (legal_entity_id, registry_key)"
+            " registry_key, registry_number, contract_id, model, year) VALUES (:id, :le, :type,"
+            " :ownership, :key, :number, :contract, :model, :year)"
+            " ON CONFLICT (legal_entity_id, registry_key)"
             " WHERE deleted_at IS NULL DO NOTHING"
         ),
         rows,

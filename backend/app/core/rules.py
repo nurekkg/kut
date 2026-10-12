@@ -52,6 +52,10 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
         "equipment.contract_legal_entity_mismatch",
     ),
     "equipment.rate_already_approved": (409, "equipment.rate_already_approved"),
+    "equipment.contract_inactive": (409, "equipment.contract_inactive"),
+    # Номер и контрагент договора после активации: сообщение триггера forbid_column_change.
+    "contract.counterparty_id is immutable": (409, "equipment.contract_frozen"),
+    "contract.number is immutable": (409, "equipment.contract_frozen"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -100,6 +104,7 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "ck_equipment_maintenance_dates_ordered": (422, "equipment.dates_invalid"),
     "ck_contract_dates_ordered": (422, "equipment.dates_invalid"),
     "ck_equipment_unit_registry_not_blank": (422, "equipment.registry_number_invalid"),
+    "ck_equipment_unit_year_range": (422, "equipment.year_invalid"),
     "ck_equipment_unit_contract_matches_ownership": (
         422,
         "equipment.contract_matches_ownership",

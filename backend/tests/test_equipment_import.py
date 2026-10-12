@@ -1,17 +1,18 @@
 """Импорт реестра техники: проверка по строкам, всё или ничего, повтор (ADR-014 часть 3 §9)."""
 
-import importlib.util
 import io
 import time
 import uuid
 import zipfile
 from typing import Any
 
+import openpyxl
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.modules.equipment.devseed import TAX_IDS
+from app.modules.equipment.imports import COLUMNS, OPTIONAL_COLUMNS
 from tests.auth_support import AuthWorld
 from tests.equipment_support import API, headers_for, idem
 
@@ -145,6 +146,7 @@ async def test_five_thousand_rows_are_checked_and_loaded_within_the_recorded_tim
     commit_seconds = time.perf_counter() - started
     assert loaded.status_code == 201, loaded.text[:300]
     print(f"\nimport 5000 rows: check {check_seconds:.2f}s, commit {commit_seconds:.2f}s")
+    assert commit_seconds <= 3.0, f"фиксация 5000 строк {commit_seconds:.2f} с больше 3 с"
     async with worker_engine.begin() as connection:
         await connection.execute(
             text("UPDATE equipment_unit SET deleted_at = now() WHERE registry_key LIKE :pattern"),
@@ -168,26 +170,6 @@ async def test_a_workbook_with_macros_is_refused(api: AsyncClient, auth_world: A
     assert response.json() == {"detail": "equipment.import_macros_forbidden"}
 
 
-async def test_the_xlsx_path_needs_openpyxl_and_says_so_when_it_is_missing(
-    api: AsyncClient, auth_world: AuthWorld
-) -> None:
-    head = await headers_for(api, "equipment_head")
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("[Content_Types].xml", "<Types/>")
-    response = await api.post(
-        f"{API}/import/check",
-        params={"filename": "units.xlsx"},
-        content=buffer.getvalue(),
-        headers=head,
-    )
-    if importlib.util.find_spec("openpyxl") is None:
-        assert response.status_code == 501
-        assert response.json() == {"detail": "equipment.xlsx_unavailable"}
-    else:  # pragma: no cover - путь зависит от установленного пакета
-        assert response.status_code in (200, 422)
-
-
 async def test_templates_and_the_journal_are_available_to_the_registry_writers(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
@@ -199,3 +181,80 @@ async def test_templates_and_the_journal_are_available_to_the_registry_writers(
     assert journal and {item["status"] for item in journal} <= {"checked", "committed", "rejected"}
     foreman = await headers_for(api, "foreman")
     assert (await api.get(f"{API}/import/batches", headers=foreman)).status_code == 403
+
+
+def workbook(rows: list[list[object]]) -> bytes:
+    book = openpyxl.Workbook()
+    sheet = book.active
+    for row in rows:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+async def test_the_xlsx_template_is_filled_and_loaded_as_a_registry(
+    api: AsyncClient, auth_world: AuthWorld
+) -> None:
+    head = await headers_for(api, "equipment_head")
+    template = await api.get(f"{API}/import/template", params={"format": "xlsx"}, headers=head)
+    assert template.status_code == 200
+    assert template.content[:2] == b"PK"
+    sheet = openpyxl.load_workbook(io.BytesIO(template.content)).worksheets[0]
+    header = [cell.value for cell in sheet[1]]
+    assert header == [title for _key, title in (*COLUMNS, *OPTIONAL_COLUMNS)]
+    prefix = f"XL{uuid.uuid4().hex[:6].upper()}"
+    rows = [header] + [
+        [TAX, "SAM", "own", f"{prefix}{index}", None, "Самосвал КАМАЗ", 2015] for index in range(3)
+    ]
+    loaded = await api.post(
+        f"{API}/import",
+        params={"filename": "units.xlsx"},
+        content=workbook(rows),
+        headers={**head, **idem()},
+    )
+    assert loaded.status_code == 201, loaded.text
+    assert loaded.json()["created"] == 3
+    units = await units_named(api, head, prefix)
+    assert len(units) == 3
+    assert {(unit["model"], unit["year"]) for unit in units} == {("Самосвал КАМАЗ", 2015)}
+
+
+async def test_formulas_in_a_workbook_are_not_evaluated(
+    api: AsyncClient, auth_world: AuthWorld
+) -> None:
+    head = await headers_for(api, "equipment_head")
+    prefix = f"FM{uuid.uuid4().hex[:6].upper()}"
+    rows = [
+        [title for _key, title in COLUMNS],
+        [TAX, "SAM", "own", f'="{prefix}"&"1"', None],
+    ]
+    checked = await api.post(
+        f"{API}/import/check",
+        params={"filename": "formula.xlsx"},
+        content=workbook(rows),
+        headers=head,
+    )
+    assert checked.status_code == 200
+    assert checked.json()["status"] == "rejected"
+    errors = [(issue["row"], issue["code"]) for issue in checked.json()["errors"]]
+    assert errors == [(2, "registry_number_required")]
+    assert await units_named(api, head, prefix) == []
+
+
+async def test_model_and_year_come_from_the_file_and_a_bad_year_is_a_row_error(
+    api: AsyncClient, auth_world: AuthWorld
+) -> None:
+    head = await headers_for(api, "equipment_head")
+    prefix = f"MY{uuid.uuid4().hex[:6].upper()}"
+    header = HEADER + ";Марка и модель;Год выпуска"
+    good = [TAX, "SAM", "own", f"{prefix}1", "", "Komatsu HD785", "2012"]
+    bad = [TAX, "SAM", "own", f"{prefix}2", "", "Komatsu HD785", "1800"]
+    both = ("\n".join([header, ";".join(good), ";".join(bad)]) + "\n").encode("utf-8-sig")
+    checked = (await check(api, head, both)).json()
+    assert [(issue["row"], issue["code"]) for issue in checked["errors"]] == [(3, "year_invalid")]
+    only_good = ("\n".join([header, ";".join(good)]) + "\n").encode("utf-8-sig")
+    loaded = await commit(api, head, only_good)
+    assert loaded.status_code == 201, loaded.text
+    unit = (await units_named(api, head, prefix))[0]
+    assert (unit["model"], unit["year"]) == ("Komatsu HD785", 2012)

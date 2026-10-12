@@ -98,10 +98,13 @@ class EquipmentUnit(BusinessBase):
     ownership: Mapped[str]
     registry_key: Mapped[str]
     registry_number: Mapped[str]
+    model: Mapped[str | None]
+    year: Mapped[int | None]
     contract_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("contract.id"))
 
     __table_args__ = (
         CheckConstraint(f"ownership IN ({_in(OWNERSHIPS)})", name="ownership_valid"),
+        CheckConstraint("year IS NULL OR year BETWEEN 1950 AND 2100", name="year_range"),
         CheckConstraint(
             "btrim(registry_key) <> '' AND btrim(registry_number) <> ''",
             name="registry_not_blank",

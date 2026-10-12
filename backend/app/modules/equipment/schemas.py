@@ -46,6 +46,8 @@ class UnitCreate(_Strict):
     ownership: Ownership
     registry_number: str = Field(min_length=1, max_length=100)
     contract_id: uuid.UUID | None = None
+    model: str | None = Field(default=None, max_length=200)
+    year: int | None = Field(default=None, ge=1950, le=2100)
 
 
 class UnitPatch(_Strict):
@@ -54,6 +56,8 @@ class UnitPatch(_Strict):
     equipment_type_id: uuid.UUID | None = None
     registry_number: str | None = Field(default=None, min_length=1, max_length=100)
     contract_id: uuid.UUID | None = None
+    model: str | None = Field(default=None, max_length=200)
+    year: int | None = Field(default=None, ge=1950, le=2100)
 
     @model_validator(mode="after")
     def _no_nulls(self) -> Self:
@@ -71,6 +75,8 @@ class UnitOut(BaseModel):
     ownership: str
     registry_number: str
     contract_id: uuid.UUID | None
+    model: str | None
+    year: int | None
 
 
 class DocumentOut(BaseModel):

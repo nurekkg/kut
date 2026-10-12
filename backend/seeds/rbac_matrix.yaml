@@ -243,9 +243,11 @@ extra:
   - {role: storekeeper, permission: "works:read"}
   - {role: accountant, permission: "works:read"}
   - {role: lawyer, permission: "works:read"}
-  # Техника (ADR-014 часть 2 §5, D14): восемь квалифицированных прав. Чтение ТО, документов, заявок и
-  # назначений - по equipment:read (RLS, часть 2 §5); «—» у ПТО, бухгалтера, финдиректора и механика
-  # по этим строкам не выполняется БД - вопрос PO в отчёте.
+  # Техника (ADR-014 часть 2 §5, D14): восемь квалифицированных прав. Решение PO 2026-10-12: чтение
+  # ТО, документов, заявок и назначений - по equipment:read и RLS, девятое право не вводится. R в строке
+  # equipment читает эти таблицы (сметчик-ПТО, бухгалтер, финдиректор, механик тоже). Машинист ТО,
+  # документов и заявок не видит, назначения - только свои. Юрист: тарифы и договоры - по
+  # equipment:read:rates, реестр и ТО - «—».
   - {role: foreman, permission: "equipment:write:request"}
   - {role: technical_director, permission: "equipment:approve:assign"}
   - {role: equipment_head, permission: "equipment:approve:assign"}

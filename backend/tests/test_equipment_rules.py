@@ -493,3 +493,95 @@ async def test_a_foreman_cannot_edit_a_draft_written_by_another_author(
     )
     assert response.status_code == 403
     assert response.json() == {"detail": "forbidden"}
+
+
+async def test_a_rented_unit_is_assignable_only_inside_an_active_contract_period(
+    api: AsyncClient, auth_world: AuthWorld
+) -> None:
+    """Решение PO 2026-10-12: назначение арендованной единицы - только при активном договоре,
+    который покрывает даты назначения (409 equipment.contract_inactive)."""
+    finance = await headers_for(api, "finance")
+    head = await headers_for(api, "equipment_head")
+    lessor = next(
+        value
+        for name, value in auth_world.counterparties.items()
+        if name.startswith("Арендодатель А")
+    )
+    created = await api.post(
+        f"{API}/contracts",
+        json={
+            "legal_entity_id": str(auth_world.legal_entities[devseed.LE_EAST]),
+            "counterparty_id": str(lessor),
+            "kind": "rental_equipment",
+            "number": f"АР-{uuid4().hex[:6]}",
+            "date_from": day(0),
+            "date_to": day(10),
+        },
+        headers={**finance, **idem()},
+    )
+    assert created.status_code == 201, created.text
+    contract_id = created.json()["id"]
+    await api.patch(f"{API}/contracts/{contract_id}", json={"status": "active"}, headers=finance)
+    rented = await new_unit(api, head, auth_world, ownership="rented", contract_id=contract_id)
+    outside = await assign(
+        api, head, unit_id=rented["id"], project_id=east(auth_world), start=5, end=15, hours="8"
+    )
+    assert outside.json() == {"detail": "equipment.contract_inactive"}
+    inside = await assign(
+        api, head, unit_id=rented["id"], project_id=east(auth_world), start=2, end=8, hours="8"
+    )
+    assert inside.status_code == 201, inside.text
+    await api.patch(f"{API}/contracts/{contract_id}", json={"status": "closed"}, headers=finance)
+    after_close = await assign(
+        api, head, unit_id=rented["id"], project_id=east(auth_world), start=3, end=4, hours="8"
+    )
+    assert after_close.json() == {"detail": "equipment.contract_inactive"}
+
+
+async def test_the_number_and_counterparty_of_a_contract_freeze_at_activation(
+    api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine
+) -> None:
+    """Решение PO 2026-10-12: после активации номер и контрагент договора неизменяемы
+    (изменения - через новую версию или допсоглашение). В черновике - можно."""
+    finance = await headers_for(api, "finance")
+    lessor = next(
+        value
+        for name, value in auth_world.counterparties.items()
+        if name.startswith("Арендодатель А")
+    )
+    other = next(
+        value
+        for name, value in auth_world.counterparties.items()
+        if name.startswith("Арендодатель Б")
+    )
+    created = await api.post(
+        f"{API}/contracts",
+        json={
+            "legal_entity_id": str(auth_world.legal_entities[devseed.LE_EAST]),
+            "counterparty_id": str(lessor),
+            "kind": "rental_equipment",
+            "number": f"ФР-{uuid4().hex[:6]}",
+            "date_from": day(0),
+        },
+        headers={**finance, **idem()},
+    )
+    assert created.status_code == 201, created.text
+    contract_id = created.json()["id"]
+    async with worker_engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE contract SET number = :number WHERE id = :id"),
+            {"number": f"ФР-{uuid4().hex[:6]}", "id": contract_id},
+        )
+    await api.patch(f"{API}/contracts/{contract_id}", json={"status": "active"}, headers=finance)
+    with pytest.raises(DBAPIError, match=r"contract\.number is immutable"):
+        async with worker_engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE contract SET number = :number WHERE id = :id"),
+                {"number": f"ФР-{uuid4().hex[:6]}", "id": contract_id},
+            )
+    with pytest.raises(DBAPIError, match=r"contract\.counterparty_id is immutable"):
+        async with worker_engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE contract SET counterparty_id = :cp WHERE id = :id"),
+                {"cp": other, "id": contract_id},
+            )

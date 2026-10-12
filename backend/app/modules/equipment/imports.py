@@ -3,6 +3,8 @@
 Всё или ничего: при любой ошибке строки файл не загружается, отчёт содержит номер строки файла
 (строка 1 - заголовок), колонку, код и текст. Повтор того же файла - ноль создано, ноль обновлено.
 Файл читается как данные: формулы не вычисляются (cached-значения), макросы отклоняются.
+Запись пакетная: новые строки одним INSERT (колонки массивами, unnest), изменённые - UPDATE по
+первичному ключу. Построчной записи нет.
 """
 
 import csv
@@ -13,9 +15,10 @@ import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from types import ModuleType
+from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import Row, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.equipment.models import (
@@ -38,8 +41,62 @@ COLUMNS = (
     ("registry_number", "Номер"),
     ("contract_number", "Номер договора аренды"),
 )
+OPTIONAL_COLUMNS = (
+    ("model", "Марка и модель"),
+    ("year", "Год выпуска"),
+)
+MODEL_MAX = 200
 MACRO_PARTS = ("xl/vbaProject.bin",)
 MACRO_TYPE = "macroEnabled"
+UNIT_COLUMNS = (
+    "id",
+    "legal_entity_id",
+    "equipment_type_id",
+    "ownership",
+    "registry_key",
+    "registry_number",
+    "contract_id",
+    "model",
+    "year",
+    "created_by",
+    "updated_by",
+)
+INSERT_UNITS = text(
+    """
+    INSERT INTO equipment_unit (id, legal_entity_id, equipment_type_id, ownership, registry_key,
+        registry_number, contract_id, model, year, created_by, updated_by)
+    SELECT * FROM unnest(
+        CAST(:id AS uuid[]), CAST(:legal_entity_id AS uuid[]), CAST(:equipment_type_id AS uuid[]),
+        CAST(:ownership AS text[]), CAST(:registry_key AS text[]), CAST(:registry_number AS text[]),
+        CAST(:contract_id AS uuid[]), CAST(:model AS text[]), CAST(:year AS integer[]),
+        CAST(:created_by AS uuid[]), CAST(:updated_by AS uuid[])
+    )
+    """
+)
+UPDATE_COLUMNS = (
+    "id",
+    "registry_number",
+    "equipment_type_id",
+    "ownership",
+    "contract_id",
+    "model",
+    "year",
+    "updated_by",
+)
+UPDATE_UNITS = text(
+    """
+    UPDATE equipment_unit AS u
+    SET registry_number = v.registry_number, equipment_type_id = v.equipment_type_id,
+        ownership = v.ownership, contract_id = v.contract_id, model = v.model, year = v.year,
+        updated_by = v.updated_by, updated_at = now()
+    FROM unnest(
+        CAST(:id AS uuid[]), CAST(:registry_number AS text[]), CAST(:equipment_type_id AS uuid[]),
+        CAST(:ownership AS text[]), CAST(:contract_id AS uuid[]), CAST(:model AS text[]),
+        CAST(:year AS integer[]), CAST(:updated_by AS uuid[])
+    ) AS v (id, registry_number, equipment_type_id, ownership, contract_id, model, year, updated_by)
+    WHERE u.id = v.id
+    """
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +108,8 @@ class Record:
     registry_number: str
     registry_key: str
     contract_id: uuid.UUID | None
+    model: str | None
+    year: int | None
 
 
 @dataclass(slots=True)
@@ -132,6 +191,9 @@ def _header_map(header: Sequence[str]) -> tuple[dict[str, int], list[ImportIssue
                     row=1, column=title, code="header_missing", message=f"Нет колонки «{title}»"
                 )
             )
+    for key, title in OPTIONAL_COLUMNS:
+        if title.casefold() in names:
+            found[key] = names.index(title.casefold())
     return found, issues
 
 
@@ -139,8 +201,10 @@ def _issue(row: int, column: str, code: str, message: str) -> ImportIssue:
     return ImportIssue(row=row, column=column, code=code, message=message)
 
 
-def _cell(cells: Sequence[str], index: int) -> str:
-    return cells[index].strip() if index < len(cells) else ""
+def _cell(cells: Sequence[str], index: int | None) -> str:
+    if index is None or index >= len(cells):
+        return ""
+    return cells[index].strip()
 
 
 async def _lookups(
@@ -178,6 +242,10 @@ async def _lookups(
         ).all()
     }
     return legal, types, contracts
+
+
+def _optional(cells: Sequence[str], columns: dict[str, int], key: str) -> str:
+    return _cell(cells, columns.get(key))
 
 
 async def check(session: AsyncSession, rows: list[list[str]]) -> Checked:
@@ -243,6 +311,32 @@ async def check(session: AsyncSession, rows: list[list[str]]) -> Checked:
                     "Не указан гос. или заводской номер",
                 )
             )
+        model = _optional(cells, columns, "model") or None
+        if model is not None and len(model) > MODEL_MAX:
+            row_issues.append(
+                _issue(
+                    number,
+                    "Марка и модель",
+                    "model_too_long",
+                    f"Не длиннее {MODEL_MAX} знаков",
+                )
+            )
+        year: int | None = None
+        year_text = _optional(cells, columns, "year")
+        if year_text:
+            try:
+                year = int(year_text)
+            except ValueError:
+                year = None
+            if year is None or not 1950 <= year <= 2100:
+                row_issues.append(
+                    _issue(
+                        number,
+                        "Год выпуска",
+                        "year_invalid",
+                        "Год выпуска - целое число от 1950 до 2100",
+                    )
+                )
         contract_number = _cell(cells, columns["contract_number"])
         contract_id = None
         if ownership == "rented" and not contract_number:
@@ -310,22 +404,44 @@ async def check(session: AsyncSession, rows: list[list[str]]) -> Checked:
                 registry_number=registry_number,
                 registry_key=key,
                 contract_id=contract_id,
+                model=model,
+                year=year,
             )
         )
     return Checked(records, issues, len(body))
 
 
-async def _existing(session: AsyncSession) -> dict[tuple[uuid.UUID, str], EquipmentUnit]:
-    return {
-        (unit.legal_entity_id, unit.registry_key): unit
-        for unit in await session.scalars(
-            select(EquipmentUnit).where(EquipmentUnit.deleted_at.is_(None))
-        )
-    }
+async def _existing(session: AsyncSession) -> dict[tuple[uuid.UUID, str], Row[Any]]:
+    """Живые единицы реестра одним запросом: только нужные поля, без ORM-объектов."""
+    rows = await session.execute(
+        select(
+            EquipmentUnit.id,
+            EquipmentUnit.legal_entity_id,
+            EquipmentUnit.registry_key,
+            EquipmentUnit.registry_number,
+            EquipmentUnit.equipment_type_id,
+            EquipmentUnit.ownership,
+            EquipmentUnit.contract_id,
+            EquipmentUnit.model,
+            EquipmentUnit.year,
+        ).where(EquipmentUnit.deleted_at.is_(None))
+    )
+    return {(row.legal_entity_id, row.registry_key): row for row in rows}
+
+
+def _unchanged(unit: Row[Any], record: Record) -> bool:
+    return bool(
+        unit.registry_number == record.registry_number
+        and unit.equipment_type_id == record.equipment_type_id
+        and unit.ownership == record.ownership
+        and unit.contract_id == record.contract_id
+        and unit.model == record.model
+        and unit.year == record.year
+    )
 
 
 def _counts(
-    records: Sequence[Record], existing: dict[tuple[uuid.UUID, str], EquipmentUnit]
+    records: Sequence[Record], existing: dict[tuple[uuid.UUID, str], Row[Any]]
 ) -> tuple[int, int, int]:
     """Создать, обновить, оставить - по каждой записи файла (ключ: юрлицо и номер)."""
     created = updated = unchanged = 0
@@ -333,12 +449,7 @@ def _counts(
         unit = existing.get((record.legal_entity_id, record.registry_key))
         if unit is None:
             created += 1
-        elif (
-            unit.registry_number == record.registry_number
-            and unit.equipment_type_id == record.equipment_type_id
-            and unit.ownership == record.ownership
-            and unit.contract_id == record.contract_id
-        ):
+        elif _unchanged(unit, record):
             unchanged += 1
         else:
             updated += 1
@@ -350,30 +461,63 @@ async def diff_counts(session: AsyncSession, records: Sequence[Record]) -> tuple
     return _counts(records, await _existing(session))
 
 
+def _arrays(rows: Sequence[dict[str, Any]], columns: Sequence[str]) -> dict[str, list[Any]]:
+    """Колонки строк массивами для unnest; UUID передаются текстом и приводятся в SQL."""
+    arrays: dict[str, list[Any]] = {name: [] for name in columns}
+    for row in rows:
+        for name in columns:
+            value = row[name]
+            arrays[name].append(str(value) if isinstance(value, uuid.UUID) else value)
+    return arrays
+
+
 async def apply(
-    session: AsyncSession, records: Sequence[Record], *, file_sha256: str, rows_total: int
+    session: AsyncSession,
+    records: Sequence[Record],
+    *,
+    file_sha256: str,
+    rows_total: int,
+    actor: uuid.UUID,
 ) -> ImportReport:
-    """Запись реестра в текущей транзакции (вызывает идемпотентная обёртка)."""
+    """Запись реестра в текущей транзакции (вызывает идемпотентная обёртка).
+
+    Новые строки - одним INSERT (колонки массивами, unnest), изменённые - пакетным UPDATE по
+    первичному ключу; аудит срабатывает по оператору, а не по строке.
+    """
     existing = await _existing(session)
     created, updated, unchanged = _counts(records, existing)
+    new_rows: list[dict[str, Any]] = []
+    changed_rows: list[dict[str, Any]] = []
     for record in records:
         unit = existing.get((record.legal_entity_id, record.registry_key))
+        values = {
+            "legal_entity_id": record.legal_entity_id,
+            "equipment_type_id": record.equipment_type_id,
+            "ownership": record.ownership,
+            "registry_number": record.registry_number,
+            "contract_id": record.contract_id,
+            "model": record.model,
+            "year": record.year,
+        }
         if unit is None:
-            session.add(
-                EquipmentUnit(
-                    legal_entity_id=record.legal_entity_id,
-                    equipment_type_id=record.equipment_type_id,
-                    ownership=record.ownership,
-                    registry_key=record.registry_key,
-                    registry_number=record.registry_number,
-                    contract_id=record.contract_id,
-                )
+            new_rows.append(
+                {
+                    **values,
+                    "id": uuid.uuid4(),
+                    "registry_key": record.registry_key,
+                    "created_by": actor,
+                    "updated_by": actor,
+                }
             )
-        else:
-            unit.registry_number = record.registry_number
-            unit.equipment_type_id = record.equipment_type_id
-            unit.ownership = record.ownership
-            unit.contract_id = record.contract_id
+        elif not _unchanged(unit, record):
+            changed_rows.append({**values, "id": unit.id, "updated_by": actor})
+    if new_rows:
+        # Один оператор на все новые строки: executemany выполнил бы аудит и проверки политик
+        # по разу на каждую строку.
+        await session.execute(INSERT_UNITS, _arrays(new_rows, UNIT_COLUMNS))
+    if changed_rows:
+        # Тот же приём для изменённых строк: один UPDATE вместо оператора на каждую строку.
+        await session.execute(UPDATE_UNITS, _arrays(changed_rows, UPDATE_COLUMNS))
     batch = EquipmentImportBatch(
         kind="units",
         file_sha256=file_sha256,
@@ -431,7 +575,7 @@ def issues_csv(issues: Sequence[ImportIssue]) -> str:
 
 
 def template_rows() -> list[list[str]]:
-    return [[title for _key, title in COLUMNS]]
+    return [[title for _key, title in (*COLUMNS, *OPTIONAL_COLUMNS)]]
 
 
 def template_xlsx() -> bytes:
