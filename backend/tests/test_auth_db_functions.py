@@ -470,7 +470,16 @@ async def test_user_policy_internal_roles_see_themselves_and_users_sharing_a_pro
     users = auth_world.users
     east_team = {
         users[name]
-        for name in ("foreman", "master", "estimator", "storekeeper", "lawyer", "customer", "sub_a")
+        for name in (
+            "foreman",
+            "master",
+            "estimator",
+            "storekeeper",
+            "lawyer",
+            "customer",
+            "sub_a",
+            "machinist",
+        )
     }
 
     foreman = await visible_users(context(users["foreman"], projects={east}))

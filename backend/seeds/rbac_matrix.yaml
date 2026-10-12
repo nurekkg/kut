@@ -30,6 +30,10 @@ roles:
   - {code: customer, name: "Представитель заказчика / инвестора", scope: counterparty, rank: 0}
   - {code: subcontractor, name: "Субподрядчик", scope: counterparty, rank: 0}
   - {code: supplier, name: "Поставщик", scope: counterparty, rank: 0}
+  # Модуль «Техника» (ADR-014 часть 2 §5, решение PO Q8): три роли вне ТЗ §7.3.
+  - {code: equipment_head, name: "Начальник отдела спецтехники / диспетчер", scope: group, rank: 50}
+  - {code: mechanic, name: "Механик", scope: group, rank: 30}
+  - {code: machinist, name: "Машинист (штатный)", scope: project, rank: 30}
 
 # Таблица ТЗ §7.3: модуль -> роль -> ячейка.
 matrix:
@@ -47,6 +51,9 @@ matrix:
     customer: "R (свой)"
     subcontractor: "R (свой)"
     supplier: "—"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
   gpr:
     owner: "R"
     finance_director: "R"
@@ -61,6 +68,9 @@ matrix:
     customer: "R"
     subcontractor: "R (свой)"
     supplier: "—"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
   work_actual:
     owner: "R"
     finance_director: "—"
@@ -75,6 +85,9 @@ matrix:
     customer: "R"
     subcontractor: "R (свой)"
     supplier: "—"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
   documents:
     owner: "R"
     finance_director: "R"
@@ -89,6 +102,9 @@ matrix:
     customer: "R"
     subcontractor: "R (свой)"
     supplier: "R (свой)"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
   materials:
     owner: "R"
     finance_director: "R"
@@ -103,6 +119,9 @@ matrix:
     customer: "—"
     subcontractor: "—"
     supplier: "—"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
   procurement:
     owner: "R"
     finance_director: "R"
@@ -117,6 +136,9 @@ matrix:
     customer: "—"
     subcontractor: "—"
     supplier: "R (свой)"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
   subcontract:
     owner: "R"
     finance_director: "R"
@@ -131,6 +153,9 @@ matrix:
     customer: "—"
     subcontractor: "R (свой)"
     supplier: "—"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
   finance:
     owner: "R"
     finance_director: "R/W"
@@ -145,6 +170,9 @@ matrix:
     customer: "—"
     subcontractor: "—"
     supplier: "R (свой)"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
   reports:
     owner: "R"
     finance_director: "R"
@@ -159,6 +187,29 @@ matrix:
     customer: "R"
     subcontractor: "R (свой)"
     supplier: "R (свой)"
+    equipment_head: "—"
+    mechanic: "—"
+    machinist: "—"
+
+  # Техника (ADR-014 часть 2 §5). Строка - обычные права по реестру; квалифицированные - в extra.
+  # ДОПУЩЕНИЕ, НУЖНА ПРОВЕРКА PO: «—» у новых ролей в остальных модулях (ADR их не задаёт).
+  equipment:
+    owner: "R"
+    finance_director: "R"
+    technical_director: "R/W"
+    equipment_head: "R/W"
+    estimator: "R"
+    procurement: "—"
+    storekeeper: "—"
+    foreman: "R"
+    master: "R"
+    accountant: "R"
+    lawyer: "—"
+    mechanic: "R"
+    machinist: "R (свой)"
+    customer: "—"
+    subcontractor: "—"
+    supplier: "—"
 
 # Права вне матрицы §7.3, формат «модуль:действие[:уточнение]».
 extra:
@@ -192,3 +243,25 @@ extra:
   - {role: storekeeper, permission: "works:read"}
   - {role: accountant, permission: "works:read"}
   - {role: lawyer, permission: "works:read"}
+  # Техника (ADR-014 часть 2 §5, D14): восемь квалифицированных прав. Чтение ТО, документов, заявок и
+  # назначений - по equipment:read (RLS, часть 2 §5); «—» у ПТО, бухгалтера, финдиректора и механика
+  # по этим строкам не выполняется БД - вопрос PO в отчёте.
+  - {role: foreman, permission: "equipment:write:request"}
+  - {role: technical_director, permission: "equipment:approve:assign"}
+  - {role: equipment_head, permission: "equipment:approve:assign"}
+  - {role: foreman, permission: "equipment:write:shift"}
+  - {role: master, permission: "equipment:write:shift"}
+  - {role: machinist, permission: "equipment:write:shift"}
+  - {role: technical_director, permission: "equipment:approve:shift"}
+  - {role: foreman, permission: "equipment:approve:shift"}
+  - {role: technical_director, permission: "equipment:write:after_approval"}
+  - {role: finance_director, permission: "equipment:approve:rate"}
+  - {role: owner, permission: "equipment:read:rates"}
+  - {role: finance_director, permission: "equipment:read:rates"}
+  - {role: technical_director, permission: "equipment:read:rates"}
+  - {role: equipment_head, permission: "equipment:read:rates"}
+  - {role: accountant, permission: "equipment:read:rates"}
+  - {role: lawyer, permission: "equipment:read:rates"}
+  - {role: technical_director, permission: "equipment:write:maintenance"}
+  - {role: equipment_head, permission: "equipment:write:maintenance"}
+  - {role: mechanic, permission: "equipment:write:maintenance"}

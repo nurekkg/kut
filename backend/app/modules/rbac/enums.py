@@ -14,6 +14,7 @@ class Module(StrEnum):
     REPORTS = "reports"
     SETTINGS = "settings"
     WORKS = "works"
+    EQUIPMENT = "equipment"
 
 
 class Action(StrEnum):
@@ -35,6 +36,15 @@ class RoleScope(StrEnum):
 QUALIFIED_PERMISSIONS: Final[tuple[tuple[Module, Action, str], ...]] = (
     (Module.WORK_ACTUAL, Action.WRITE, "after_approval"),
     (Module.MATERIALS, Action.APPROVE, "limit_override"),
+    # Техника (ADR-014 часть 2 §5, D14): восемь квалифицированных прав.
+    (Module.EQUIPMENT, Action.WRITE, "request"),
+    (Module.EQUIPMENT, Action.APPROVE, "assign"),
+    (Module.EQUIPMENT, Action.WRITE, "shift"),
+    (Module.EQUIPMENT, Action.APPROVE, "shift"),
+    (Module.EQUIPMENT, Action.WRITE, "after_approval"),
+    (Module.EQUIPMENT, Action.APPROVE, "rate"),
+    (Module.EQUIPMENT, Action.READ, "rates"),
+    (Module.EQUIPMENT, Action.WRITE, "maintenance"),
 )
 
 
