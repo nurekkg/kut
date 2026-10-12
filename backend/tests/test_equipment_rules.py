@@ -213,7 +213,9 @@ async def test_maintenance_moves_only_along_the_documented_states(
     )
     assert again.status_code == 200
     done = await api.patch(
-        f"{API}/maintenance/{maintenance}", json={"status": "done"}, headers=mechanic
+        f"{API}/maintenance/{maintenance}",
+        json={"status": "done", "amount": "900.00"},
+        headers=mechanic,
     )
     assert done.json()["status"] == "done" and done.json()["done_at"]
     back = await api.patch(

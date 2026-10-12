@@ -5,6 +5,7 @@
 
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Connection, text
@@ -507,3 +508,205 @@ def ensure_equipment(
     created = {table: after[table] - before[table] for table in before}
     created.update(plan)
     return {table: count for table, count in created.items() if count}
+
+
+SECOND_EAST = "ЖК «Восток-2» (dev)"
+# (объект, юрлицо, единица, день назад, оператор, часы, автор, состояние, причина отказа)
+# Аренда - только с машинистом арендодателя: у договора А два тарифа без машиниста (час и смена),
+# и БД отказывает выбирать наугад (shift.rate_ambiguous).
+SHIFT_PLAN = (
+    ("east", "east", "own_east", 1, "staff", "8", "foreman", "confirmed", None),
+    ("east", "east", "own_east", 2, "staff", "6", "foreman", "submitted", None),
+    ("east", "east", "own_east", 3, "staff", "7", "foreman", "rejected", "не совпадает с табелем"),
+    ("east", "east", "own_east", 4, "staff", "5", "foreman", "draft", None),
+    ("second", "east", "own_east", 1, "staff", "6", "foreman", "confirmed", None),
+    ("east", "east", "rented_a", 2, "lessor_a", "10", "foreman", "confirmed", None),
+    ("east", "east", "rented_a", 3, "lessor_a", "6", "foreman", "submitted", None),
+    ("west", "west", "rented_c", 1, "lessor_west", "9", None, "confirmed", None),
+    ("west", "west", "rented_c", 2, "lessor_west", "8", None, "submitted", None),
+    ("west", "west", "rented_c", 3, "lessor_west", "7", None, "rejected", "нет подписи прораба"),
+    ("west", "west", "rented_c", 4, "lessor_west", "5", None, "draft", None),
+)
+
+
+def _own_unit(connection: Connection, legal_entity: uuid.UUID) -> uuid.UUID:
+    """Своя единица юрлица, у типа которой есть утверждённый норматив за час."""
+    unit: uuid.UUID = connection.execute(
+        text(
+            "SELECT u.id FROM equipment_unit u JOIN equipment_own_rate r"
+            " ON r.equipment_type_id = u.equipment_type_id"
+            " AND r.legal_entity_id = u.legal_entity_id"
+            " WHERE u.legal_entity_id = :le AND u.ownership = 'own' AND u.deleted_at IS NULL"
+            " AND r.unit = 'hour' AND r.approved_by IS NOT NULL AND r.deleted_at IS NULL"
+            " ORDER BY u.registry_number LIMIT 1"
+        ),
+        {"le": legal_entity},
+    ).scalar_one()
+    return unit
+
+
+def _rented_unit(connection: Connection, contract_number: str) -> uuid.UUID:
+    unit: uuid.UUID = connection.execute(
+        text(
+            "SELECT u.id FROM equipment_unit u JOIN contract c ON c.id = u.contract_id"
+            " WHERE c.number = :number AND u.deleted_at IS NULL"
+            " ORDER BY u.registry_number LIMIT 1"
+        ),
+        {"number": contract_number},
+    ).scalar_one()
+    return unit
+
+
+def _move_shift(
+    connection: Connection,
+    shift_id: uuid.UUID,
+    state: str,
+    approver: uuid.UUID | None,
+    reason: str | None,
+) -> None:
+    """Переход листа по правилам БД: черновик -> на подтверждение -> подтверждён или отказан."""
+    if state == "draft":
+        return
+    connection.execute(
+        text("UPDATE equipment_shift SET status = 'submitted' WHERE id = :id"), {"id": shift_id}
+    )
+    if state == "rejected":
+        connection.execute(
+            text(
+                "UPDATE equipment_shift SET status = 'rejected', reject_reason = :reason"
+                " WHERE id = :id"
+            ),
+            {"id": shift_id, "reason": reason},
+        )
+    elif state == "confirmed":
+        connection.execute(
+            text(
+                "UPDATE equipment_shift SET status = 'confirmed', confirmed_by = :approver"
+                " WHERE id = :id"
+            ),
+            {"id": shift_id, "approver": approver},
+        )
+
+
+def ensure_shifts(
+    connection: Connection,
+    *,
+    today: date,
+    east: uuid.UUID,
+    west: uuid.UUID,
+    east_entity: uuid.UUID,
+    west_entity: uuid.UUID,
+    users: dict[str, uuid.UUID],
+) -> dict[str, int]:
+    """Демо-листы SE-2a, только при пустой таблице листов: листы во всех состояниях на «Востоке»
+    и «Западе», второй объект юрлица «Восток» (одна машина на двух объектах в один день), ГСМ и
+    закрытый ремонт. Проводки пишут триггеры и определители, как в приложении; записи в журнал
+    напрямую нет."""
+    if connection.execute(text("SELECT count(*) FROM equipment_shift")).scalar_one():
+        return {}
+    second = connection.execute(
+        text("SELECT id FROM project WHERE name = :name AND deleted_at IS NULL"),
+        {"name": SECOND_EAST},
+    ).scalar_one_or_none()
+    if second is None:
+        second = connection.execute(
+            text(
+                "INSERT INTO project (id, legal_entity_id, name)"
+                " VALUES (gen_random_uuid(), :le, :name) RETURNING id"
+            ),
+            {"le": east_entity, "name": SECOND_EAST},
+        ).scalar_one()
+    projects = {"east": east, "second": second, "west": west}
+    units = {
+        "own_east": _own_unit(connection, east_entity),
+        "rented_a": _rented_unit(connection, "АР-ВОСТОК-01"),
+        "rented_c": _rented_unit(connection, "АР-ЗАПАД-01"),
+    }
+    operators = {
+        "staff": connection.execute(
+            text("SELECT id FROM equipment_operator WHERE user_id = :user"),
+            {"user": users["machinist"]},
+        ).scalar_one(),
+        "lessor_a": connection.execute(
+            text(
+                "SELECT o.id FROM equipment_operator o"
+                " JOIN counterparty c ON c.id = o.counterparty_id"
+                " WHERE c.name = 'Арендодатель А (dev)' AND o.employment = 'lessor'"
+                " AND o.deleted_at IS NULL LIMIT 1"
+            )
+        ).scalar_one(),
+        "lessor_west": connection.execute(
+            text(
+                "SELECT id FROM equipment_operator WHERE legal_entity_id = :le"
+                " AND employment = 'lessor' AND deleted_at IS NULL ORDER BY full_name LIMIT 1"
+            ),
+            {"le": west_entity},
+        ).scalar_one(),
+    }
+    entities = {"east": east_entity, "west": west_entity}
+    created = 0
+    for project, entity, unit, days, operator, hours, author, state, reason in SHIFT_PLAN:
+        if operators[operator] is None:
+            continue
+        shift_id = connection.execute(
+            text(
+                "INSERT INTO equipment_shift (id, legal_entity_id, project_id, equipment_unit_id,"
+                " work_date, operator_id, hours, source, status, created_by, posting_version,"
+                " lines_revision) VALUES (gen_random_uuid(), :le, :project, :unit, :day, :operator,"
+                " :hours, 'manual', 'draft', :author, 0, 0) RETURNING id"
+            ),
+            {
+                "le": entities[entity],
+                "project": projects[project],
+                "unit": units[unit],
+                "day": today - timedelta(days=days),
+                "operator": operators[operator],
+                "hours": Decimal(hours),
+                "author": users[author] if author else None,
+            },
+        ).scalar_one()
+        _move_shift(connection, shift_id, state, users["techdir"], reason)
+        created += 1
+    for fuel_project, day, amount, liters in (
+        (east, 1, "14000.00", "120.50"),
+        (None, 2, "2500.00", None),
+    ):
+        connection.execute(
+            text(
+                "INSERT INTO equipment_fuel (id, legal_entity_id, project_id, equipment_unit_id,"
+                " fuel_date, liters, amount, created_by)"
+                " VALUES (gen_random_uuid(), :le, :project, :unit, :day, :liters, :amount,"
+                " :author)"
+            ),
+            {
+                "le": east_entity,
+                "project": fuel_project,
+                "unit": units["own_east"],
+                "day": today - timedelta(days=day),
+                "liters": Decimal(liters) if liters else None,
+                "amount": Decimal(amount),
+                "author": users["foreman"],
+            },
+        )
+    repair = connection.execute(
+        text(
+            "INSERT INTO equipment_maintenance (id, legal_entity_id, equipment_unit_id, kind,"
+            " title, planned_from, status) VALUES (gen_random_uuid(), :le, :unit, 'repair',"
+            " 'Гидравлика, шланги', :day, 'planned') RETURNING id"
+        ),
+        {"le": east_entity, "unit": units["own_east"], "day": today - timedelta(days=6)},
+    ).scalar_one()
+    connection.execute(
+        text("UPDATE equipment_maintenance SET status = 'in_progress' WHERE id = :id"),
+        {"id": repair},
+    )
+    connection.execute(
+        text("SELECT app.equipment_maintenance_close(:m, :p, :a)"),
+        {"m": repair, "p": east, "a": Decimal("45000.00")},
+    )
+    return {
+        "equipment_shift": created,
+        "equipment_fuel": 2,
+        "equipment_maintenance": 1,
+        "project": 1,
+    }

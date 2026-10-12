@@ -2,12 +2,12 @@ import re
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
@@ -416,15 +416,19 @@ async def transition_maintenance(
     row = await _maintenance(session, maintenance_id)
     if patch.status == row.status:
         return maintenance_out(row)
+    if patch.status == "done":
+        # Закрытие через определитель: сумма - в журнал затрат той же транзакции (ADR, часть 1 §3).
+        async with db_rules(session):
+            await session.execute(
+                text("SELECT app.equipment_maintenance_close(:m, :p, :a)"),
+                {"m": maintenance_id, "p": patch.project_id, "a": patch.amount},
+            )
+            await session.commit()
+        await session.refresh(row)
+        return maintenance_out(row)
     if patch.status not in MAINTENANCE_NEXT.get(row.status, frozenset()):
         raise transition_forbidden()
-    if row.status == "planned" and patch.status == "done" and row.kind == "repair":
-        raise transition_forbidden()  # ремонт проходит через «в работе»; ТО можно закрыть сразу
     row.status = patch.status
-    if patch.status == "done":
-        row.done_at = datetime.now(UTC)
-        if patch.project_id is not None:
-            row.project_id = patch.project_id
     async with db_rules(session):
         await session.commit()
     return maintenance_out(row)

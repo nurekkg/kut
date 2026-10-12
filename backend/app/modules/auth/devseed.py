@@ -16,7 +16,7 @@ from sqlalchemy import Connection, create_engine, text
 from app.core.config import get_settings
 from app.modules.auth.crypto import encrypt_totp_secret
 from app.modules.auth.security import MIN_PASSWORD_LENGTH, hash_password
-from app.modules.equipment.devseed import ensure_equipment
+from app.modules.equipment.devseed import ensure_equipment, ensure_shifts
 from app.modules.equipment.service import bishkek_today
 from app.modules.objects.devseed import ensure_project_card, ensure_tree, ensure_works
 from app.modules.photos.devseed import ensure_photos
@@ -344,6 +344,38 @@ def seed_media(connection: Connection, report: SeedReport) -> None:
         report.add("work_photo", ensure_photos(connection, project, entity))
 
 
+def seed_shifts(connection: Connection, report: SeedReport) -> None:
+    """Листы, ГСМ и ремонт SE-2a: только dev-seed, как фото; тестовая база их не получает."""
+    east = _find(
+        connection, "SELECT id FROM project WHERE name = :name AND deleted_at IS NULL", name=EAST
+    )
+    west = _find(
+        connection, "SELECT id FROM project WHERE name = :name AND deleted_at IS NULL", name=WEST
+    )
+    east_entity = _find(connection, "SELECT id FROM legal_entity WHERE name = :name", name=LE_EAST)
+    west_entity = _find(connection, "SELECT id FROM legal_entity WHERE name = :name", name=LE_WEST)
+    users = {
+        login: _find(
+            connection,
+            'SELECT id FROM "user" WHERE email = :email',
+            email=f"{login}@{EMAIL_DOMAIN}",
+        )
+        for login in ("foreman", "techdir", "machinist")
+    }
+    if None in (east, west, east_entity, west_entity, *users.values()):
+        return
+    for table, count in ensure_shifts(
+        connection,
+        today=bishkek_today(),
+        east=east,
+        west=west,
+        east_entity=east_entity,
+        west_entity=west_entity,
+        users=users,
+    ).items():
+        report.add(table, count)
+
+
 def main() -> int:
     settings = get_settings()
     if settings.app_env != "development":
@@ -361,6 +393,7 @@ def main() -> int:
     with engine.begin() as connection:
         report = seed(connection, password_hash=hash_password(password), totp_secret=totp_secret)
         seed_media(connection, report)
+        seed_shifts(connection, report)
     engine.dispose()
     print(f"dev seed: created {report.created}" if report.changed else "dev seed: nothing to do")
     return 0

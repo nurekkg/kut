@@ -129,8 +129,11 @@ class MaintenanceCreate(_Strict):
 
 
 class MaintenancePatch(_Strict):
+    """Закрытие (done) принимает сумму: она уходит в журнал затрат, в ответе её нет."""
+
     status: MaintenanceTarget
     project_id: uuid.UUID | None = None
+    amount: Money | None = None
 
 
 # --- нормативы, договоры, тарифы, машинисты ----------------------------------------------------
