@@ -405,3 +405,91 @@ async def test_cancelling_an_assigned_request_cancels_its_planned_assignments(
         next(item for item in rows if item["id"] == created.json()["id"])["status"] == "cancelled"
     )
     assert cancelled.status_code == 200
+
+
+async def test_a_node_with_a_live_equipment_request_cannot_be_deleted(
+    worker_engine: AsyncEngine, auth_world: AuthWorld
+) -> None:
+    """Точка расширения S2: живая заявка техники на узел мешает удалению узла (ADR-014 SE-1)."""
+    project = east(auth_world)
+    request_id = uuid4()
+    async with worker_engine.begin() as connection:
+        node = (
+            await connection.execute(
+                text(
+                    "SELECT n.id FROM project_node n WHERE n.project_id = :project"
+                    " AND n.deleted_at IS NULL"
+                    " AND NOT EXISTS (SELECT 1 FROM project_node c WHERE c.parent_id = n.id"
+                    " AND c.deleted_at IS NULL)"
+                    " AND NOT EXISTS (SELECT 1 FROM schedule_item s WHERE s.node_id = n.id"
+                    " AND s.deleted_at IS NULL)"
+                    " AND NOT EXISTS (SELECT 1 FROM work_actual w WHERE w.node_id = n.id"
+                    " AND w.deleted_at IS NULL) LIMIT 1"
+                ),
+                {"project": project},
+            )
+        ).scalar_one()
+        sam = (
+            await connection.execute(text("SELECT id FROM equipment_type WHERE code = 'SAM'"))
+        ).scalar_one()
+        await connection.execute(
+            text(
+                "INSERT INTO equipment_request (id, project_id, legal_entity_id, node_id,"
+                " equipment_type_id, date_from, date_to, planned_hours_per_day, status)"
+                " VALUES (:id, :project, :le, :node, :type, DATE '2031-05-01',"
+                " DATE '2031-05-02', 8, 'draft')"
+            ),
+            {
+                "id": request_id,
+                "project": project,
+                "le": auth_world.legal_entities[devseed.LE_EAST],
+                "node": node,
+                "type": sam,
+            },
+        )
+    try:
+        async with worker_engine.connect() as connection:
+            with pytest.raises(DBAPIError, match=r"node\.has_dependents"):
+                await connection.execute(
+                    text("UPDATE project_node SET deleted_at = now() WHERE id = :node"),
+                    {"node": node},
+                )
+                await connection.commit()
+    finally:
+        async with worker_engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE equipment_request SET deleted_at = now() WHERE id = :id"),
+                {"id": request_id},
+            )
+
+
+async def test_a_foreman_cannot_edit_a_draft_written_by_another_author(
+    api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine
+) -> None:
+    head_id = auth_world.users["equipment_head"]
+    request_id = uuid4()
+    async with worker_engine.begin() as connection:
+        sam = (
+            await connection.execute(text("SELECT id FROM equipment_type WHERE code = 'SAM'"))
+        ).scalar_one()
+        await connection.execute(
+            text(
+                "INSERT INTO equipment_request (id, project_id, legal_entity_id, equipment_type_id,"
+                " date_from, date_to, planned_hours_per_day, status, created_by)"
+                " VALUES (:id, :project, :le, :type, DATE '2031-06-01', DATE '2031-06-02', 8,"
+                " 'draft', :author)"
+            ),
+            {
+                "id": request_id,
+                "project": east(auth_world),
+                "le": auth_world.legal_entities[devseed.LE_EAST],
+                "type": sam,
+                "author": head_id,
+            },
+        )
+    foreman = await headers_for(api, "foreman")
+    response = await api.patch(
+        f"{API}/requests/{request_id}", json={"planned_hours_per_day": "6"}, headers=foreman
+    )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}

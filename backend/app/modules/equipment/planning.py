@@ -147,11 +147,12 @@ async def create_request(session: AsyncSession, data: RequestCreate) -> RequestO
 
 
 async def patch_request(
-    session: AsyncSession, request_id: uuid.UUID, patch: RequestPatch
+    session: AsyncSession, request_id: uuid.UUID, patch: RequestPatch, actor: uuid.UUID
 ) -> RequestOut:
     row = await _request(session, request_id)
     if row.status != "draft":
         raise transition_forbidden()
+    await _author_or_approver(session, row, actor, approver=False)
     for field in patch.model_fields_set:
         setattr(row, field, getattr(patch, field))
     async with db_rules(session):

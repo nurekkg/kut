@@ -185,3 +185,13 @@ async def test_a_foreign_object_is_not_found_for_the_foreman(
     response = await api.post(f"{API}/requests", json=body, headers={**foreman, **idem()})
     assert response.status_code == 404
     assert response.json() == {"detail": "not_found"}
+
+
+async def test_the_module_audit_rows_are_hidden_from_the_machinist(auth_world: AuthWorld) -> None:
+    """Журнал аудита техники: машинист не видит строк модуля, прораб - видит (ADR-014)."""
+    query = "SELECT count(*) FROM audit_log WHERE table_name LIKE 'equipment\\_%'"
+    scope = (east(auth_world),), (auth_world.legal_entities[devseed.LE_EAST],)
+    machinist = context(auth_world, "machinist", *scope)
+    foreman = context(auth_world, "foreman", *scope)
+    assert await rows(query, machinist) == [(0,)]
+    assert (await rows(query, foreman))[0][0] > 0

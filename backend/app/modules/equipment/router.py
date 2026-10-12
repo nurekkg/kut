@@ -440,9 +440,9 @@ async def create_request(
 
 @router.patch("/requests/{request_id}", response_model=RequestOut)
 async def patch_request(
-    request_id: uuid.UUID, body: RequestPatch, _principal: RequestWriter, session: Db
+    request_id: uuid.UUID, body: RequestPatch, principal: RequestWriter, session: Db
 ) -> RequestOut:
-    return await planning.patch_request(session, request_id, body)
+    return await planning.patch_request(session, request_id, body, principal.user_id)
 
 
 @router.post("/requests/{request_id}/submit", response_model=RequestOut)

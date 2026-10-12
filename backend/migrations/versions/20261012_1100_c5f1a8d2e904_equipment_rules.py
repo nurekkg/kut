@@ -147,6 +147,103 @@ BEGIN
 END $$
 """
 
+NODE_PREVIOUS = """
+CREATE OR REPLACE FUNCTION app.project_node_has_dependents(p_node uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.project_node child
+        WHERE child.parent_id = p_node AND child.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.schedule_item item
+        WHERE item.node_id = p_node AND item.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.work_actual fact
+        WHERE fact.node_id = p_node AND fact.deleted_at IS NULL)
+$$
+"""
+
+ITEM_PREVIOUS = """
+CREATE OR REPLACE FUNCTION app.schedule_item_has_dependents(p_item uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.schedule_dependency dep
+        WHERE (dep.predecessor_id = p_item OR dep.successor_id = p_item)
+          AND dep.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.work_actual fact
+        WHERE fact.schedule_item_id = p_item AND fact.deleted_at IS NULL)
+$$
+"""
+
+PROJECT_PREVIOUS = """
+CREATE OR REPLACE FUNCTION app.project_has_dependents(p_project uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.project_node node
+        WHERE node.project_id = p_project AND node.deleted_at IS NULL)
+$$
+"""
+
+# Точки расширения S2/S3a (app.*_has_dependents): техника ссылается на узел, строку ГПР и объект,
+# поэтому живые заявки и назначения тоже мешают удалению. Тела S2/S3a сохранены выше для понижения.
+NODE_DEPENDENTS = """
+CREATE OR REPLACE FUNCTION app.project_node_has_dependents(p_node uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.project_node child
+        WHERE child.parent_id = p_node AND child.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.schedule_item item
+        WHERE item.node_id = p_node AND item.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.work_actual fact
+        WHERE fact.node_id = p_node AND fact.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.equipment_request req
+        WHERE req.node_id = p_node AND req.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.equipment_assignment asg
+        WHERE asg.node_id = p_node AND asg.deleted_at IS NULL)
+$$
+"""
+
+ITEM_DEPENDENTS = """
+CREATE OR REPLACE FUNCTION app.schedule_item_has_dependents(p_item uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.schedule_dependency dep
+        WHERE (dep.predecessor_id = p_item OR dep.successor_id = p_item)
+          AND dep.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.work_actual fact
+        WHERE fact.schedule_item_id = p_item AND fact.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.equipment_request req
+        WHERE req.schedule_item_id = p_item AND req.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.equipment_assignment asg
+        WHERE asg.schedule_item_id = p_item AND asg.deleted_at IS NULL)
+$$
+"""
+
+PROJECT_DEPENDENTS = """
+CREATE OR REPLACE FUNCTION app.project_has_dependents(p_project uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.project_node node
+        WHERE node.project_id = p_project AND node.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.equipment_request req
+        WHERE req.project_id = p_project AND req.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.equipment_assignment asg
+        WHERE asg.project_id = p_project AND asg.deleted_at IS NULL)
+        OR EXISTS (
+        SELECT 1 FROM public.equipment_maintenance mnt
+        WHERE mnt.project_id = p_project AND mnt.deleted_at IS NULL)
+$$
+"""
+
 TRIGGERS = (
     (
         "equipment_assignment_guard",
@@ -184,6 +281,8 @@ def upgrade() -> None:
     for _trigger, _table, _event, function in TRIGGERS:
         op.execute(f"REVOKE ALL ON FUNCTION app.{function}() FROM PUBLIC")
         op.execute(f"GRANT EXECUTE ON FUNCTION app.{function}() TO kut_owner")
+    for sql in (NODE_DEPENDENTS, ITEM_DEPENDENTS, PROJECT_DEPENDENTS):
+        op.execute(sql)
     op.execute("RESET ROLE")
     for trigger, table, event, function in TRIGGERS:
         op.execute(
@@ -196,3 +295,7 @@ def downgrade() -> None:
     for trigger, table, _event, function in TRIGGERS:
         op.execute(f"DROP TRIGGER IF EXISTS {trigger} ON {table}")
         op.execute(f"DROP FUNCTION IF EXISTS app.{function}()")
+    op.execute("SET LOCAL ROLE kut_auth")
+    for sql in (NODE_PREVIOUS, ITEM_PREVIOUS, PROJECT_PREVIOUS):
+        op.execute(sql)
+    op.execute("RESET ROLE")

@@ -780,6 +780,16 @@ def _audit() -> None:
         + CAN_WRITE
         + ")"
     )
+    # Базовая политика журнала открывает строки по объекту или юрлицу без проверки права, поэтому
+    # строки техники закрываем здесь: без equipment:read их нет, машинист не видит их совсем.
+    op.execute(
+        "CREATE POLICY audit_log_equipment_module ON audit_log AS RESTRICTIVE FOR SELECT TO kut_app"
+        " USING (COALESCE(table_name, '') NOT LIKE 'equipment\\_%' OR ("
+        + CAN_READ
+        + " AND NOT "
+        + IS_MACHINIST
+        + "))"
+    )
 
 
 def upgrade() -> None:
@@ -801,6 +811,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP POLICY IF EXISTS audit_log_equipment_module ON audit_log")
     op.execute("DROP POLICY IF EXISTS audit_log_equipment_contracts ON audit_log")
     op.execute("DROP POLICY IF EXISTS audit_log_equipment_rates ON audit_log")
     for table in (
