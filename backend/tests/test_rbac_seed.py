@@ -103,6 +103,54 @@ EXTRA_GRANTS = {
 }
 
 
+# Модуль «Техника» (ADR-014 часть 2 §5) - отдельный источник, записанный из строк ADR, а не из YAML.
+ADR_EQUIPMENT_ROLES = ("equipment_head", "mechanic", "machinist")
+ADR_EQUIPMENT_GRANTS = {
+    *{
+        (role, "equipment", "read", None)
+        for role in (
+            "owner",
+            "finance_director",
+            "technical_director",
+            "equipment_head",
+            "estimator",
+            "foreman",
+            "master",
+            "accountant",
+            "mechanic",
+            "machinist",
+        )
+    },
+    ("technical_director", "equipment", "write", None),
+    ("equipment_head", "equipment", "write", None),
+    ("foreman", "equipment", "write", "request"),
+    ("technical_director", "equipment", "approve", "assign"),
+    ("equipment_head", "equipment", "approve", "assign"),
+    ("foreman", "equipment", "write", "shift"),
+    ("master", "equipment", "write", "shift"),
+    ("machinist", "equipment", "write", "shift"),
+    ("technical_director", "equipment", "approve", "shift"),
+    ("foreman", "equipment", "approve", "shift"),
+    ("technical_director", "equipment", "write", "after_approval"),
+    ("finance_director", "equipment", "approve", "rate"),
+    *{
+        (role, "equipment", "read", "rates")
+        for role in (
+            "owner",
+            "finance_director",
+            "technical_director",
+            "equipment_head",
+            "accountant",
+            "lawyer",
+        )
+    },
+    *{
+        (role, "equipment", "write", "maintenance")
+        for role in ("technical_director", "equipment_head", "mechanic")
+    },
+}
+
+
 async def db_grants(engine: AsyncEngine) -> set[tuple[str, str, str, str | None]]:
     async with engine.connect() as connection:
         rows = await connection.execute(
@@ -118,10 +166,10 @@ async def db_grants(engine: AsyncEngine) -> set[tuple[str, str, str, str | None]
 async def test_the_database_holds_exactly_the_tz_matrix_plus_the_documented_extras(
     owner_engine: AsyncEngine,
 ) -> None:
-    assert await db_grants(owner_engine) == tz_grants() | EXTRA_GRANTS
+    assert await db_grants(owner_engine) == tz_grants() | EXTRA_GRANTS | ADR_EQUIPMENT_GRANTS
 
 
-async def test_there_are_ten_internal_and_three_external_roles_with_the_agreed_scopes(
+async def test_there_are_thirteen_internal_and_three_external_roles_with_the_agreed_scopes(
     owner_engine: AsyncEngine,
 ) -> None:
     async with owner_engine.connect() as connection:
@@ -133,14 +181,16 @@ async def test_there_are_ten_internal_and_three_external_roles_with_the_agreed_s
                 )
             )
         }
-    assert set(rows) == set(TZ_ROLES)
+    assert set(rows) == set(TZ_ROLES) | set(ADR_EQUIPMENT_ROLES)
     internal = {code for code, (scope, _f, _s) in rows.items() if scope != "counterparty"}
     external = {code for code, (scope, _f, _s) in rows.items() if scope == "counterparty"}
-    assert (len(internal), external) == (10, {"customer", "subcontractor", "supplier"})
+    assert (len(internal), external) == (13, {"customer", "subcontractor", "supplier"})
     assert {code for code, (scope, _f, _s) in rows.items() if scope == "group"} == {
         "owner",
         "finance_director",
         "technical_director",  # решение PO после S1a
+        "equipment_head",  # ADR-014 (Q8)
+        "mechanic",  # ADR-014, допущение rev2: парк общий
     }
     assert all(is_system for _scope, _tfa, is_system in rows.values())
 
@@ -153,14 +203,14 @@ async def test_two_factor_is_required_for_owner_finance_director_and_accountant_
     assert codes == {"owner", "finance_director", "accountant"}
 
 
-async def test_special_rights_belong_to_the_technical_director_only(
+async def test_qualified_rights_are_exactly_the_documented_ones(
     owner_engine: AsyncEngine,
 ) -> None:
     qualified = {grant for grant in await db_grants(owner_engine) if grant[3] is not None}
     assert qualified == {
         ("technical_director", "work_actual", "write", "after_approval"),
         ("technical_director", "materials", "approve", "limit_override"),
-    }
+    } | {grant for grant in ADR_EQUIPMENT_GRANTS if grant[3] is not None}
 
 
 async def test_external_roles_are_read_only(owner_engine: AsyncEngine) -> None:
@@ -279,8 +329,9 @@ def raw_spec() -> dict[str, object]:
 
 def test_the_shipped_yaml_is_valid() -> None:
     spec = RbacSpec.model_validate(raw_spec())
-    assert len(spec.roles) == 13
-    assert set(spec.matrix) == {Module(value) for value in TZ_MODULES.values()}
+    assert len(spec.roles) == 16
+    # Модуль «Техника» (ADR-014) вне ТЗ §7.3: его строка есть, ТЗ-модули - те же.
+    assert set(spec.matrix) == {Module(value) for value in TZ_MODULES.values()} | {Module.EQUIPMENT}
 
 
 @pytest.mark.parametrize(

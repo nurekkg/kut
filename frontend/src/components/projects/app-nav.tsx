@@ -37,8 +37,8 @@ export function AppNav() {
   const { user } = useAuth();
   const can = (permission: string) => user?.permissions.includes(permission) ?? false;
   const items = [
-    { href: "/projects", label: t("projects"), show: true, counter: false },
-    { href: "/dashboard", label: dash("nav"), show: user?.scope === "group", counter: false },
+    { href: "/projects", label: t("projects"), show: can("objects:read"), counter: false },
+    { href: "/dashboard", label: dash("nav"), show: user?.scope === "group" && can("objects:read"), counter: false },
     { href: "/works", label: t("works"), show: can("works:read"), counter: false },
     {
       href: "/approvals",
@@ -47,6 +47,8 @@ export function AppNav() {
       counter: true,
     },
     { href: "/m", label: t("field"), show: can("work_actual:write"), counter: false },
+    { href: "/equipment", label: t("equipment"), show: can("equipment:read") && user?.role !== "machinist", counter: false },
+    { href: "/equipment/my", label: t("equipmentMy"), show: user?.role === "machinist", counter: false },
   ].filter((item) => item.show);
   if (items.length < 2) return null;
   return (

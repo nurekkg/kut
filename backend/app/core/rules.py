@@ -41,6 +41,21 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "actual.item_invalid": (422, "actual_item_invalid"),
     "actual.has_dependents": (409, "actual_has_photos"),
     "photo.forbidden": (403, "forbidden"),
+    # Техника (ADR-014): коды с точкой - как в ADR; триггеры правил часть 1 §1 и §3.
+    "equipment.day_hours_exceeded": (409, "equipment.day_hours_exceeded"),
+    "equipment.maintenance_overlap": (409, "equipment.maintenance_overlap"),
+    "equipment.document_expired": (409, "equipment.document_expired"),
+    "equipment.contract_not_active": (409, "equipment.contract_not_active"),
+    "equipment.contract_kind_invalid": (422, "equipment.contract_kind_invalid"),
+    "equipment.contract_legal_entity_mismatch": (
+        422,
+        "equipment.contract_legal_entity_mismatch",
+    ),
+    "equipment.rate_already_approved": (409, "equipment.rate_already_approved"),
+    "equipment.contract_inactive": (409, "equipment.contract_inactive"),
+    # Номер и контрагент договора после активации: сообщение триггера forbid_column_change.
+    "contract.counterparty_id is immutable": (409, "equipment.contract_frozen"),
+    "contract.number is immutable": (409, "equipment.contract_frozen"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -66,6 +81,44 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "uq_project_finance_project_id": (409, "finance_card_conflict"),
     # Факт указывает на строку ГПР другого узла или другого вида работ (составной внешний ключ).
     "fk_work_actual_project_id_schedule_item": (422, "actual_item_invalid"),
+    # Техника (ADR-014 часть 1 §1): уникальность и проверки полей, составные внешние ключи объекта.
+    "uq_equipment_type_code": (409, "equipment.type_code_taken"),
+    "uq_contract_legal_entity_id_kind_number": (409, "equipment.contract_number_taken"),
+    "uq_equipment_unit_legal_entity_id_registry_key": (409, "equipment.unit_key_taken"),
+    "uq_equipment_own_rate_version": (409, "equipment.rate_version_exists"),
+    "uq_equipment_rate_version": (409, "equipment.rate_version_exists"),
+    "uq_equipment_operator_user_id": (409, "equipment.operator_user_taken"),
+    "uq_equipment_document_equipment_unit_id_kind_version": (
+        409,
+        "equipment.document_version_conflict",
+    ),
+    "ck_equipment_own_rate_approver_is_not_proposer": (409, "equipment.approver_is_proposer"),
+    "ck_equipment_request_reject_reason_required": (422, "equipment.reason_required"),
+    "ck_equipment_assignment_cancel_reason_required": (422, "equipment.reason_required"),
+    "ck_equipment_request_hours_in_day": (422, "equipment.hours_invalid"),
+    "ck_equipment_assignment_hours_in_day": (422, "equipment.hours_invalid"),
+    "ck_equipment_request_dates_in_range": (422, "equipment.dates_out_of_range"),
+    "ck_equipment_assignment_dates_in_range": (422, "equipment.dates_out_of_range"),
+    "ck_equipment_request_dates_ordered": (422, "equipment.dates_invalid"),
+    "ck_equipment_assignment_dates_ordered": (422, "equipment.dates_invalid"),
+    "ck_equipment_maintenance_dates_ordered": (422, "equipment.dates_invalid"),
+    "ck_contract_dates_ordered": (422, "equipment.dates_invalid"),
+    "ck_equipment_unit_registry_not_blank": (422, "equipment.registry_number_invalid"),
+    "ck_equipment_unit_year_range": (422, "equipment.year_invalid"),
+    "ck_equipment_unit_contract_matches_ownership": (
+        422,
+        "equipment.contract_matches_ownership",
+    ),
+    "fk_equipment_request_project_id_project_node": (422, "equipment.node_invalid"),
+    "fk_equipment_assignment_project_id_project_node": (422, "equipment.node_invalid"),
+    "fk_equipment_request_project_id_schedule_item": (422, "equipment.schedule_item_invalid"),
+    "fk_equipment_assignment_project_id_schedule_item": (422, "equipment.schedule_item_invalid"),
+    "fk_equipment_assignment_project_id_equipment_request": (422, "equipment.request_invalid"),
+    "fk_equipment_request_equipment_type_id_equipment_type": (422, "equipment.type_invalid"),
+    "fk_equipment_unit_equipment_type_id_equipment_type": (422, "equipment.type_invalid"),
+    "fk_equipment_unit_contract_id_contract": (422, "equipment.contract_invalid"),
+    "fk_equipment_assignment_operator_id_equipment_operator": (422, "equipment.operator_invalid"),
+    "fk_equipment_maintenance_project_id_project": (422, "equipment.project_invalid"),
 }
 
 

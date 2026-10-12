@@ -298,6 +298,12 @@ async def test_the_dependents_check_is_an_extension_point_other_modules_can_wide
 ) -> None:
     node = await add(worker, world, NodeType.BUILDING)
     await worker.commit()
+    # Тело функции возвращаем ТЕКУЩЕЕ, а не первоначальное: иначе проверки ГПР, фактов и техники,
+    # добавленные позже, пропадают для всех тестов, которые идут после этого файла.
+    async with owner_engine.connect() as owner:
+        original = await owner.scalar(
+            text("SELECT pg_get_functiondef('app.project_node_has_dependents(uuid)'::regprocedure)")
+        )
     try:
         async with owner_engine.connect() as owner:
             await owner.execute(text("SET LOCAL ROLE kut_auth"))
@@ -316,15 +322,7 @@ async def test_the_dependents_check_is_an_extension_point_other_modules_can_wide
     finally:
         async with owner_engine.connect() as owner:
             await owner.execute(text("SET LOCAL ROLE kut_auth"))
-            await owner.execute(
-                text(
-                    "CREATE OR REPLACE FUNCTION app.project_node_has_dependents(p_node uuid)"
-                    " RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER"
-                    " SET search_path = pg_catalog AS $$ SELECT EXISTS (SELECT 1"
-                    " FROM public.project_node child WHERE child.parent_id = p_node"
-                    " AND child.deleted_at IS NULL) $$"
-                )
-            )
+            await owner.exec_driver_sql(original)
             await owner.commit()
         await worker.execute(
             text("UPDATE project_node SET deleted_at = now() WHERE id = :id"), {"id": node}

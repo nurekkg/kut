@@ -16,6 +16,8 @@ from sqlalchemy import Connection, create_engine, text
 from app.core.config import get_settings
 from app.modules.auth.crypto import encrypt_totp_secret
 from app.modules.auth.security import MIN_PASSWORD_LENGTH, hash_password
+from app.modules.equipment.devseed import ensure_equipment
+from app.modules.equipment.service import bishkek_today
 from app.modules.objects.devseed import ensure_project_card, ensure_tree, ensure_works
 from app.modules.photos.devseed import ensure_photos
 from app.modules.schedule.devseed import ensure_schedule
@@ -31,6 +33,9 @@ SUB_B = "Субподрядчик Б (dev)"
 CUSTOMER = "Заказчик (dev)"
 SUPPLIER = "Поставщик (dev)"
 COUNTERPARTIES = (
+    ("Арендодатель А (dev)", "supplier"),
+    ("Арендодатель Б (dev)", "supplier"),
+    ("Арендодатель В (dev)", "supplier"),
     (SUB_A, "subcontractor"),
     (SUB_B, "subcontractor"),
     (CUSTOMER, "customer"),
@@ -60,7 +65,14 @@ USERS = (
     DevUser("owner", "owner", "Владелец (dev)"),
     DevUser("finance", "finance_director", "Финансовый директор (dev)"),
     DevUser("techdir", "technical_director", "Технический директор (dev)"),
-    DevUser("foreman", "foreman", "Прораб Восток (dev)", (EAST,), phone="+996555100001"),
+    DevUser(
+        "foreman",
+        "foreman",
+        "Прораб Восток (dev)",
+        (EAST,),
+        legal_entities=(LE_EAST,),
+        phone="+996555100001",
+    ),
     DevUser("master", "master", "Мастер Восток (dev)", (EAST,), phone="+996555100002"),
     DevUser("estimator", "estimator", "Сметчик (dev)", (EAST,)),
     DevUser("storekeeper", "storekeeper", "Кладовщик Восток (dev)", (EAST,)),
@@ -73,6 +85,10 @@ USERS = (
     DevUser("sub_a", "subcontractor", "Субподрядчик А: прораб (dev)", (EAST,), counterparty=SUB_A),
     DevUser("sub_b", "subcontractor", "Субподрядчик Б: прораб (dev)", (WEST,), counterparty=SUB_B),
     DevUser("supplier", "supplier", "Поставщик: менеджер (dev)", (WEST,), counterparty=SUPPLIER),
+    # Техника (ADR-014, Q8): три роли модуля; машинист - штатный, с объектом и юрлицом.
+    DevUser("equipment_head", "equipment_head", "Начальник отдела спецтехники (dev)"),
+    DevUser("mechanic", "mechanic", "Механик парка (dev)"),
+    DevUser("machinist", "machinist", "Машинист Восток (dev)", (EAST,), legal_entities=(LE_EAST,)),
 )
 
 
@@ -228,6 +244,7 @@ def seed(
     totp_roles: frozenset[str] = TOTP_ROLES,
     tree: bool = True,
     schedule: bool = True,
+    equipment: bool = True,
 ) -> SeedReport:
     report = SeedReport()
     roles = {
@@ -277,6 +294,17 @@ def seed(
                 user_id,
                 legal_entities[entity],
             )
+    if equipment:
+        for table, count in ensure_equipment(
+            connection,
+            legal_entities=legal_entities,
+            counterparties=counterparties,
+            projects={"east": projects[EAST], "west": projects[WEST]},
+            users=user_ids,
+            keys={"east": LE_EAST, "west": LE_WEST},
+            today=bishkek_today(),
+        ).items():
+            report.add(table, count)
     if tree:
         report.add(
             "project_node",

@@ -12,7 +12,16 @@ from tests.auth_support import AuthWorld, bearer, token_for
 pytestmark = pytest.mark.usefixtures("clean_redis")
 
 API = "/api/v1"
-EAST_USERS = {"foreman", "master", "estimator", "storekeeper", "lawyer", "customer", "sub_a"}
+EAST_USERS = {
+    "foreman",
+    "master",
+    "estimator",
+    "storekeeper",
+    "lawyer",
+    "customer",
+    "sub_a",
+    "machinist",  # штатный машинист «Востока» (ADR-014)
+}
 WEST_USERS = {"accountant", "procurement", "lawyer", "supplier", "sub_b"}
 GROUP_USERS = {"owner", "finance", "techdir"}
 
