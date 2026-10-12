@@ -106,9 +106,11 @@ async def test_the_machinist_sees_only_their_own_assignments_and_no_requests_or_
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     machinist = await headers_for(api, "machinist")
+    own = (await api.get(f"{API}/operators", headers=machinist)).json()
+    assert [item["user_id"] for item in own] == [str(auth_world.users["machinist"])]
     seen = (await api.get(f"{API}/assignments", headers=machinist)).json()
     assert seen, "демо-назначение машиниста должно быть видно"
-    assert all(item["operator_id"] is not None for item in seen)
+    assert {item["operator_id"] for item in seen} == {own[0]["id"]}
     assert (await api.get(f"{API}/requests", headers=machinist)).json() == []
     assert (await api.get(f"{API}/maintenance", headers=machinist)).json() == []
 
