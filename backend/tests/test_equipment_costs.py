@@ -144,7 +144,7 @@ async def reference_world(
         finance,
         le,
         lessor(auth_world, "В"),
-        [{"unit": "motor_hour", "with_operator": True, "amount": "333.33"}],
+        [{"unit": "motor_hour", "with_operator": True, "amount": "166.65"}],
     )
     motor = await new_unit(
         api,
@@ -204,7 +204,7 @@ async def reference_world(
             hours="10",
             odometer_from="100.00",
             odometer_to="107.50",
-            lines=[{"hours": "6"}, {"hours": "4"}],
+            lines=[{"hours": "3"}, {"hours": "7"}],
         ),
     )
     fuel_extra = await api.post(
@@ -324,9 +324,9 @@ async def test_the_journal_matches_the_reference_line_by_line_to_the_tiyn(
                 east_id,
                 "equipment_rental",
                 1,
-                money("4.5"),
-                money("333.33"),
-                money("1499.99"),
+                money("2.25"),
+                money("166.65"),
+                money("374.96"),
                 False,
             ),
             (
@@ -334,9 +334,9 @@ async def test_the_journal_matches_the_reference_line_by_line_to_the_tiyn(
                 east_id,
                 "equipment_rental",
                 1,
-                money(3),
-                money("333.33"),
-                money("999.99"),
+                money("5.25"),
+                money("166.65"),
+                money("874.91"),
                 False,
             ),
         ]
