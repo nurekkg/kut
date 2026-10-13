@@ -37,6 +37,7 @@ from app.modules.equipment.schemas import (
     OwnRateOut,
     RateCreate,
     RateOut,
+    RatePatch,
     ReasonIn,
     RequestCreate,
     RequestOut,
@@ -386,6 +387,35 @@ async def add_rate(
         payload=body,
         handler=lambda: rates.add_rate(session, contract_id, body),
     )
+
+
+@router.patch(
+    "/contracts/{contract_id}/rates/{rate_id}",
+    response_model=RateOut,
+    dependencies=[Depends(require(Module.EQUIPMENT, Action.READ, qualifier="rates"))],
+)
+async def patch_rate(
+    contract_id: uuid.UUID,
+    rate_id: uuid.UUID,
+    body: RatePatch,
+    _principal: FinanceWriter,
+    session: Db,
+) -> RateOut:
+    """Окончание тарифа (valid_to): выбор по дате работы его больше не берёт."""
+    return await rates.patch_rate(session, contract_id, rate_id, body)
+
+
+@router.delete(
+    "/contracts/{contract_id}/rates/{rate_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require(Module.EQUIPMENT, Action.READ, qualifier="rates"))],
+)
+async def delete_rate(
+    contract_id: uuid.UUID, rate_id: uuid.UUID, _principal: FinanceWriter, session: Db
+) -> Response:
+    """Мягкое удаление тарифа; с проводками - 409 equipment.rate_has_postings (БД)."""
+    await rates.delete_rate(session, contract_id, rate_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # --- машинисты ---------------------------------------------------------------------------------

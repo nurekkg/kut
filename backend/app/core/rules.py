@@ -91,11 +91,16 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "rate.target_invalid": (422, "equipment.rate_target_invalid"),
     "rate.level_conflict": (422, "equipment.rate_level_conflict"),
     "shift.posting_forbidden": (403, "forbidden"),
+    "shift.approver_is_operator": (403, "equipment.approver_is_operator"),
     "fuel.shift_bound": (409, "equipment.fuel_shift_bound"),
     "fuel.shift_invalid": (422, "equipment.shift_invalid"),
     "delegate.forbidden": (403, "forbidden"),
     "delegate.in_past": (422, "equipment.delegate_in_past"),
     "project.has_shifts": (409, "project_has_shifts"),
+    # Решения PO 2026-10-13: тариф с проводками, чек заправки, накладная без объекта, ремонт в done.
+    "rate.has_postings": (409, "equipment.rate_has_postings"),
+    "receipt.locked": (409, "equipment.receipt_locked"),
+    "receipt.invalid": (422, "equipment.receipt_invalid"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -128,6 +133,7 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "uq_equipment_own_rate_version": (409, "equipment.rate_version_exists"),
     "uq_equipment_rate_level_version": (409, "equipment.rate_version_exists"),
     "ck_equipment_rate_one_level": (422, "equipment.rate_target_invalid"),
+    "ck_equipment_rate_valid_to_not_before_from": (422, "equipment.rate_period_invalid"),
     "uq_equipment_operator_user_id": (409, "equipment.operator_user_taken"),
     "uq_equipment_document_equipment_unit_id_kind_version": (
         409,

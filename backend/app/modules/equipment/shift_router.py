@@ -9,9 +9,9 @@ import uuid
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
-from app.modules.auth.deps import require
+from app.modules.auth.deps import get_principal, require
 from app.modules.auth.principal import Principal
 from app.modules.equipment import costs, shifts
 from app.modules.equipment.router import Db, Limit, Offset, RatesReader, Reader
@@ -32,6 +32,7 @@ from app.modules.equipment.shift_schemas import (
     ShiftFuelCreate,
     ShiftOut,
     ShiftPatch,
+    UsageOut,
 )
 from app.modules.idempotency.service import IdempotencyKeyHeader, idempotent_create
 from app.modules.photos.schemas import PresignedUpload
@@ -45,6 +46,18 @@ ShiftWriter = Annotated[
 ShiftApprover = Annotated[
     Principal, Depends(require(Module.EQUIPMENT, Action.APPROVE, qualifier="shift"))
 ]
+# Заправка без листа: прораб и мастер (write:shift) и накладная без объекта - начальник отдела и
+# техдиректор (решение PO 2026-10-13). Право и объект проверяет БД: здесь только отсев по роли.
+BILL_ROLES = frozenset({"equipment_head", "technical_director"})
+
+
+async def fuel_writer(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
+    if principal.has(Module.EQUIPMENT, Action.WRITE, "shift") or principal.role_code in BILL_ROLES:
+        return principal
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+
+
+FuelWriter = Annotated[Principal, Depends(fuel_writer)]
 ShiftStatusFilter = Annotated[
     Literal["draft", "submitted", "confirmed", "rejected"] | None, Query(alias="status")
 ]
@@ -160,7 +173,7 @@ async def create_fuel(
     body: FuelCreate,
     request: Request,
     key: IdempotencyKeyHeader,
-    principal: ShiftWriter,
+    principal: FuelWriter,
     session: Db,
 ) -> Response:
     return await idempotent_create(
@@ -169,13 +182,13 @@ async def create_fuel(
         user_id=principal.user_id,
         key=key,
         payload=body,
-        handler=lambda: costs.create_fuel(session, body, can_rates=_rates(principal)),
+        handler=lambda: costs.create_fuel(session, body),
     )
 
 
 @router.get("/fuel", response_model=list[FuelOut])
 async def list_fuel(
-    principal: Reader,
+    _principal: Reader,
     session: Db,
     project_id: uuid.UUID | None = None,
     unit_id: uuid.UUID | None = None,
@@ -190,7 +203,6 @@ async def list_fuel(
         unit_id=unit_id,
         date_from=date_from,
         date_to=date_to,
-        can_rates=_rates(principal),
         limit=limit,
         offset=offset,
     )
@@ -198,9 +210,9 @@ async def list_fuel(
 
 @router.post("/fuel/{fuel_id}/reverse", response_model=FuelOut)
 async def reverse_fuel(
-    fuel_id: uuid.UUID, body: ReasonIn, principal: Reader, session: Db
+    fuel_id: uuid.UUID, body: ReasonIn, _principal: Reader, session: Db
 ) -> FuelOut:
-    return await costs.reverse_fuel(session, fuel_id, body.reason, can_rates=_rates(principal))
+    return await costs.reverse_fuel(session, fuel_id, body.reason)
 
 
 # Заправка в путевом листе: право проверяет БД (машинист - в своём черновике, техдиректор - после
@@ -222,15 +234,13 @@ async def create_shift_fuel(
         user_id=principal.user_id,
         key=key,
         payload=body,
-        handler=lambda: costs.create_shift_fuel(
-            session, shift_id, body, can_rates=_rates(principal)
-        ),
+        handler=lambda: costs.create_shift_fuel(session, shift_id, body),
     )
 
 
 @router.get("/shifts/{shift_id}/fuel", response_model=list[FuelOut])
-async def list_shift_fuel(shift_id: uuid.UUID, principal: Reader, session: Db) -> list[FuelOut]:
-    return await costs.list_shift_fuel(session, shift_id, can_rates=_rates(principal))
+async def list_shift_fuel(shift_id: uuid.UUID, _principal: Reader, session: Db) -> list[FuelOut]:
+    return await costs.list_shift_fuel(session, shift_id)
 
 
 @router.post("/shifts/{shift_id}/fuel/{fuel_id}/remove", status_code=status.HTTP_204_NO_CONTENT)
@@ -250,23 +260,23 @@ async def presign_receipt(
 
 @router.post("/shifts/{shift_id}/fuel/{fuel_id}/receipt/confirm", response_model=FuelOut)
 async def confirm_receipt(
-    shift_id: uuid.UUID,
-    fuel_id: uuid.UUID,
-    body: ReceiptConfirm,
-    principal: Reader,
-    session: Db,
+    shift_id: uuid.UUID, fuel_id: uuid.UUID, body: ReceiptConfirm, _principal: Reader, session: Db
 ) -> FuelOut:
-    return await costs.receipt_confirm(
-        session, shift_id, fuel_id, body, can_rates=_rates(principal)
-    )
+    return await costs.receipt_confirm(session, shift_id, fuel_id, body)
 
 
-# Чек показывает сумму заправки: ссылка на него - с правом read:rates, как у журнала затрат.
+# Чек показывает сумму заправки: ссылку получает загрузивший его и тот, у кого read:rates (сервис).
 @router.get("/shifts/{shift_id}/fuel/{fuel_id}/receipt", response_model=ReceiptUrlOut)
 async def receipt_url(
-    shift_id: uuid.UUID, fuel_id: uuid.UUID, _principal: RatesReader, session: Db
+    shift_id: uuid.UUID, fuel_id: uuid.UUID, principal: Reader, session: Db
 ) -> ReceiptUrlOut:
-    return await costs.receipt_url(session, shift_id, fuel_id)
+    return await costs.receipt_url(
+        session,
+        shift_id,
+        fuel_id,
+        user_id=principal.user_id,
+        can_rates=_rates(principal),
+    )
 
 
 # --- делегаты подтверждения ---------------------------------------------------------------------
@@ -311,6 +321,20 @@ async def revoke_delegate(
 # --- журнал затрат ------------------------------------------------------------------------------
 
 
+@router.get("/usage/totals", response_model=list[UsageOut])
+async def usage_totals(
+    _principal: Reader,
+    session: Db,
+    date_from: date,
+    date_to: date,
+    project_id: uuid.UUID | None = None,
+) -> list[UsageOut]:
+    """Количества по технике для вкладки «Техника» и очереди подтверждения: без денег."""
+    return await costs.usage_totals(
+        session, date_from=date_from, date_to=date_to, project_id=project_id
+    )
+
+
 @router.get("/costs/totals", response_model=list[CostTotalOut])
 async def cost_totals(
     _principal: Reader,
@@ -319,6 +343,7 @@ async def cost_totals(
     date_to: date,
     project_id: uuid.UUID | None = None,
 ) -> list[CostTotalOut]:
+    """Итоги журнала: без read:rates пусто (БД), сумм прорабу нет."""
     return await costs.cost_totals(
         session, date_from=date_from, date_to=date_to, project_id=project_id
     )
@@ -331,6 +356,7 @@ async def cost_entries(
     date_from: date,
     date_to: date,
     project_id: uuid.UUID | None = None,
+    unit_id: uuid.UUID | None = None,
     category: str | None = None,
     limit: Limit = 100,
     offset: Offset = 0,
@@ -340,6 +366,7 @@ async def cost_entries(
         date_from=date_from,
         date_to=date_to,
         project_id=project_id,
+        unit_id=unit_id,
         category=category,
         limit=limit,
         offset=offset,

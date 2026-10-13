@@ -4,6 +4,7 @@
 документов до 2027 года). Даты листов и ставок - в прошлом: лист не может быть позже сегодня, а
 ставка действует с RATE_FROM."""
 
+import re
 from datetime import date, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -18,6 +19,7 @@ from app.modules.auth import devseed
 from tests.auth_support import AuthWorld, bearer, token_for
 
 API = "/api/v1/equipment"
+MONEY_KEY = re.compile(r"amount|rate|tariff|price|cost|sum|total|budget", re.IGNORECASE)
 BASE = date(2031, 3, 1)
 PAST = date(2026, 6, 1)
 RATE_FROM = "2026-04-01"
@@ -369,3 +371,17 @@ __all__ = [
     "type_id",
     "west",
 ]
+
+
+def money_keys(payload: Any) -> set[str]:
+    """Ключи с суммами и тарифами на любой глубине ответа: прорабу их быть не должно (Q11 C)."""
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if MONEY_KEY.search(key):
+                found.add(key)
+            found |= money_keys(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            found |= money_keys(item)
+    return found

@@ -472,7 +472,15 @@ async def test_a_delegate_confirms_inside_the_period_and_nowhere_else(
     for item in (inside, outside):
         assert (await move(api, foreman, item["id"], "submit")).status_code == 200
     assert (await move(api, delegate, inside["id"], "confirm")).status_code == 200
-    late = await move(api, delegate, outside["id"], "confirm")
+    # Право - по дате подтверждения (сегодня, Бишкек): лист за прошлый день, подтверждённый внутри
+    # периода делегата, проходит (решение PO 2026-10-13, пункт 2).
+    assert (await move(api, delegate, outside["id"], "confirm")).status_code == 200
+    # Делегирование отозвано: тот же делегат и тот же день - отказ.
+    revoked = await api.post(f"{API}/delegates/{created.json()['id']}/revoke", headers=foreman)
+    assert revoked.status_code == 200, revoked.text
+    ended = (await post_shift(api, foreman, shift(past(21)))).json()
+    assert (await move(api, foreman, ended["id"], "submit")).status_code == 200
+    late = await move(api, delegate, ended["id"], "confirm")
     assert late.status_code == 403 and late.json() == {"detail": "forbidden"}
 
 

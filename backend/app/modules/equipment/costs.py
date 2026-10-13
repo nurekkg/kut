@@ -1,17 +1,18 @@
-"""ГСМ, делегаты подтверждения и журнал затрат (SE-2a/SE-2b, ADR-014 часть 2 §3-5, решения PO).
+"""ГСМ, делегаты подтверждения, журнал затрат и количества по технике (SE-2a/SE-2b, PO 2026-10-13).
 
 Проводки создают и сторнируют определители БД (app.equipment_fuel_post, app.equipment_fuel_reverse,
-app.equipment_shift_post); сервис читает результат. Сумма заправки приложению в таблице не выдана
-(ревизия f2b7d4c9e1a6): её показывает журнал затрат текущей версии, и только при read:rates. Строки
-журнала отдаёт только RLS с гейтом read:rates; итоги для прораба - app.equipment_cost_totals.
-Чек заправки - ключ в S3, как фото факта: подписанная загрузка, подтверждение после HEAD.
+app.equipment_shift_post); сервис читает результат. Сумма заправки приложению не выдана (колонка
+amount без SELECT у kut_app): деньги по технике видит только журнал затрат с гейтом read:rates.
+Ответы о заправке и листах сумм не содержат ни для кого. Строки журнала отдаёт RLS с гейтом
+read:rates; итоги журнала - app.equipment_cost_totals (только read:rates). Количества для вкладки
+«Техника» - usage_totals. Чек заправки - ключ в S3, как фото факта: подписанная загрузка, запись
+после HEAD; право на чек проверяет БД до подписи (app.equipment_fuel_receipt_check) и при записи
+(app.equipment_fuel_attach_receipt).
 """
 
 import re
 import uuid
-from collections.abc import Sequence
 from datetime import UTC, date, datetime
-from decimal import Decimal
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, status
@@ -39,6 +40,7 @@ from app.modules.equipment.shift_schemas import (
     ReceiptPresign,
     ReceiptUrlOut,
     ShiftFuelCreate,
+    UsageOut,
 )
 from app.modules.equipment.shifts import writable
 from app.modules.photos.models import EXTENSIONS, MAX_PHOTO_BYTES
@@ -47,6 +49,24 @@ from app.modules.photos.schemas import PresignedUpload
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _RECEIPT_KEY = re.compile(
     rf"project/{_UUID}/shift/{_UUID}/fuel/{_UUID}/{_UUID}\.(?:jpg|png|heic|webp)"
+)
+_USAGE = text(
+    "SELECT project_id, equipment_unit_id, day, SUM(shifts) AS shifts, SUM(hours) AS hours,"
+    " SUM(trips) AS trips, SUM(tonnes) AS tonnes, SUM(downtime_hours) AS downtime_hours,"
+    " SUM(liters) AS liters FROM ("
+    " SELECT s.project_id, s.equipment_unit_id, s.work_date AS day, 1 AS shifts, s.hours,"
+    " COALESCE(s.trips, 0) AS trips, COALESCE(s.tonnes, 0) AS tonnes, s.downtime_hours,"
+    " 0 AS liters FROM public.equipment_shift s"
+    " WHERE s.deleted_at IS NULL AND s.status = 'confirmed' AND s.work_date BETWEEN :f AND :t"
+    " AND (CAST(:p AS uuid) IS NULL OR s.project_id = CAST(:p AS uuid))"
+    " UNION ALL"
+    " SELECT fu.project_id, fu.equipment_unit_id, fu.fuel_date, 0, 0, 0, 0, 0,"
+    " COALESCE(fu.liters, 0)"
+    " FROM public.equipment_fuel fu"
+    " WHERE fu.deleted_at IS NULL AND fu.reversed_at IS NULL AND fu.project_id IS NOT NULL"
+    " AND fu.fuel_date BETWEEN :f AND :t"
+    " AND (CAST(:p AS uuid) IS NULL OR fu.project_id = CAST(:p AS uuid))"
+    ") x GROUP BY project_id, equipment_unit_id, day ORDER BY day, equipment_unit_id"
 )
 
 
@@ -79,7 +99,9 @@ async def _shift(session: AsyncSession, shift_id: uuid.UUID) -> EquipmentShift:
 
 async def _fuel(session: AsyncSession, fuel_id: uuid.UUID) -> EquipmentFuel:
     row = await session.scalar(
-        select(EquipmentFuel).where(EquipmentFuel.id == fuel_id, EquipmentFuel.deleted_at.is_(None))
+        select(EquipmentFuel)
+        .where(EquipmentFuel.id == fuel_id, EquipmentFuel.deleted_at.is_(None))
+        .execution_options(populate_existing=True)
     )
     if row is None:
         raise _not_found()
@@ -101,30 +123,7 @@ async def _shift_fuel(
     return row
 
 
-async def _fuel_amounts(
-    session: AsyncSession, fuel_ids: Sequence[uuid.UUID], *, can_rates: bool
-) -> dict[uuid.UUID, Decimal]:
-    """Суммы заправок из журнала: текущая версия проводки листа (без листа - версия 1), без сторно.
-    Без права read:rates журнал строк не отдаёт, суммы нет."""
-    if not can_rates or not fuel_ids:
-        return {}
-    rows = await session.execute(
-        text(
-            "SELECT c.source_id, SUM(c.amount) AS amount"
-            " FROM public.cost_entry c"
-            " JOIN public.equipment_fuel f ON f.id = c.source_id"
-            " LEFT JOIN public.equipment_shift s ON s.id = f.shift_id"
-            " WHERE c.source_type = 'equipment_fuel' AND c.source_id = ANY(CAST(:ids AS uuid[]))"
-            " AND c.reversal_of_id IS NULL AND c.posting_version = COALESCE(s.posting_version, 1)"
-            " GROUP BY c.source_id"
-        ),
-        {"ids": list(fuel_ids)},
-    )
-    return {row.source_id: row.amount for row in rows}
-
-
-def _fuel_out(row: EquipmentFuel, amount: Decimal | None) -> FuelOut:
-    """Строка заправки без колонки amount: сумму приложение не читает, её даёт журнал (см. выше)."""
+def _fuel_out(row: EquipmentFuel) -> FuelOut:
     return FuelOut(
         id=row.id,
         equipment_unit_id=row.equipment_unit_id,
@@ -132,21 +131,14 @@ def _fuel_out(row: EquipmentFuel, amount: Decimal | None) -> FuelOut:
         shift_id=row.shift_id,
         fuel_date=row.fuel_date,
         liters=row.liters,
-        amount=amount,
         has_receipt=row.receipt_key is not None,
         reversed_at=row.reversed_at,
         reverse_reason=row.reverse_reason,
     )
 
 
-async def _fuel_outs(
-    session: AsyncSession, rows: Sequence[EquipmentFuel], *, can_rates: bool
-) -> list[FuelOut]:
-    amounts = await _fuel_amounts(session, [row.id for row in rows], can_rates=can_rates)
-    return [_fuel_out(row, amounts.get(row.id)) for row in rows]
-
-
-async def create_fuel(session: AsyncSession, body: FuelCreate, *, can_rates: bool) -> FuelOut:
+async def create_fuel(session: AsyncSession, body: FuelCreate) -> FuelOut:
+    """Заправка без листа. Накладная без объекта - начальник отдела и техдиректор (БД)."""
     unit = await session.scalar(
         select(EquipmentUnit).where(
             EquipmentUnit.id == body.equipment_unit_id, EquipmentUnit.deleted_at.is_(None)
@@ -167,13 +159,13 @@ async def create_fuel(session: AsyncSession, body: FuelCreate, *, can_rates: boo
         await session.flush()
         fuel_id = row.id
         await session.commit()
-    return (await _fuel_outs(session, [await _fuel(session, fuel_id)], can_rates=can_rates))[0]
+    return _fuel_out(await _fuel(session, fuel_id))
 
 
 async def create_shift_fuel(
-    session: AsyncSession, shift_id: uuid.UUID, body: ShiftFuelCreate, *, can_rates: bool
+    session: AsyncSession, shift_id: uuid.UUID, body: ShiftFuelCreate
 ) -> FuelOut:
-    """Заправка в листе: объект, дату и единицу берёт лист; право и статус листа проверяет БД."""
+    """Заправка в листе: объект, дату и единицу берёт лист; право и статус проверяет БД."""
     shift = await _shift(session, shift_id)
     async with db_rules(session):
         row = EquipmentFuel(
@@ -189,19 +181,17 @@ async def create_shift_fuel(
         await session.flush()
         fuel_id = row.id
         await session.commit()
-    return (await _fuel_outs(session, [await _fuel(session, fuel_id)], can_rates=can_rates))[0]
+    return _fuel_out(await _fuel(session, fuel_id))
 
 
-async def list_shift_fuel(
-    session: AsyncSession, shift_id: uuid.UUID, *, can_rates: bool
-) -> list[FuelOut]:
+async def list_shift_fuel(session: AsyncSession, shift_id: uuid.UUID) -> list[FuelOut]:
     await _shift(session, shift_id)
     rows = await session.scalars(
         select(EquipmentFuel)
         .where(EquipmentFuel.shift_id == shift_id, EquipmentFuel.deleted_at.is_(None))
         .order_by(EquipmentFuel.created_at, EquipmentFuel.id)
     )
-    return await _fuel_outs(session, list(rows), can_rates=can_rates)
+    return [_fuel_out(row) for row in rows]
 
 
 async def remove_shift_fuel(session: AsyncSession, shift_id: uuid.UUID, fuel_id: uuid.UUID) -> None:
@@ -217,7 +207,10 @@ async def remove_shift_fuel(session: AsyncSession, shift_id: uuid.UUID, fuel_id:
 async def receipt_presign(
     session: AsyncSession, shift_id: uuid.UUID, fuel_id: uuid.UUID, body: ReceiptPresign
 ) -> PresignedUpload:
+    """Подпись загрузки - только тому, кто вправе сменить чек: право и статус проверяет БД."""
     row = await _shift_fuel(session, shift_id, fuel_id)
+    async with db_rules(session):
+        await session.execute(text("SELECT app.equipment_fuel_receipt_check(:f)"), {"f": fuel_id})
     ttl = get_settings().photo_upload_ttl_seconds
     key = (
         f"project/{row.project_id}/shift/{shift_id}/fuel/{fuel_id}/"
@@ -232,23 +225,17 @@ async def receipt_presign(
 
 
 async def receipt_confirm(
-    session: AsyncSession,
-    shift_id: uuid.UUID,
-    fuel_id: uuid.UUID,
-    body: ReceiptConfirm,
-    *,
-    can_rates: bool,
+    session: AsyncSession, shift_id: uuid.UUID, fuel_id: uuid.UUID, body: ReceiptConfirm
 ) -> FuelOut:
     """Чек записывается после того, как сервер увидел файл в S3: тип и размер - из хранилища.
-    Чек уже есть с тем же ключом - повтор без записи; с другим ключом - отказ (чек не подменяют)."""
+    Повтор того же ключа - без записи. Другой ключ заменяет чек, пока лист в черновике или отклонён
+    (после отправки и подтверждения - нет, БД). Прежний файл в S3 остаётся: документы не
+    удаляются."""
     row = await _shift_fuel(session, shift_id, fuel_id)
     prefix = f"project/{row.project_id}/shift/{shift_id}/fuel/{fuel_id}/"
     if not (body.key.startswith(prefix) and _RECEIPT_KEY.fullmatch(body.key)):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "receipt_key_invalid")
-    if row.receipt_key is not None:
-        if row.receipt_key != body.key:
-            raise HTTPException(status.HTTP_409_CONFLICT, "receipt_exists")
-    else:
+    if row.receipt_key != body.key:
         try:
             stored = await storage.head_object(body.key)
         except (ClientError, BotoCoreError) as error:
@@ -259,20 +246,29 @@ async def receipt_confirm(
             raise HTTPException(status.HTTP_409_CONFLICT, "receipt_not_uploaded")
         if stored.content_type not in EXTENSIONS or not 0 < stored.size <= MAX_PHOTO_BYTES:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "receipt_invalid")
-        async with writable(session):
-            row.receipt_key = body.key
-            row.receipt_content_type = stored.content_type
-            await session.flush()
+        async with db_rules(session):
+            await session.execute(
+                text("SELECT app.equipment_fuel_attach_receipt(:f, :k, :t)"),
+                {"f": fuel_id, "k": body.key, "t": stored.content_type},
+            )
             await session.commit()
-    return (await _fuel_outs(session, [await _fuel(session, fuel_id)], can_rates=can_rates))[0]
+    return _fuel_out(await _fuel(session, fuel_id))
 
 
 async def receipt_url(
-    session: AsyncSession, shift_id: uuid.UUID, fuel_id: uuid.UUID
+    session: AsyncSession,
+    shift_id: uuid.UUID,
+    fuel_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID,
+    can_rates: bool,
 ) -> ReceiptUrlOut:
+    """Ссылка на чек: загрузивший видит свой; остальным - только с read:rates (чек - это сумма)."""
     row = await _shift_fuel(session, shift_id, fuel_id)
     if row.receipt_key is None or row.receipt_content_type is None:
         raise _not_found()
+    if not (can_rates or row.receipt_uploaded_by == user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
     ttl = get_settings().photo_download_ttl_seconds
     url = storage.presign_get(row.receipt_key, row.receipt_content_type, ttl)
     return ReceiptUrlOut(url=url, expires_in=ttl)
@@ -285,7 +281,6 @@ async def list_fuel(
     unit_id: uuid.UUID | None,
     date_from: date | None,
     date_to: date | None,
-    can_rates: bool,
     limit: int,
     offset: int,
 ) -> list[FuelOut]:
@@ -301,12 +296,10 @@ async def list_fuel(
     rows = await session.scalars(
         query.order_by(EquipmentFuel.fuel_date.desc(), EquipmentFuel.id).limit(limit).offset(offset)
     )
-    return await _fuel_outs(session, list(rows), can_rates=can_rates)
+    return [_fuel_out(row) for row in rows]
 
 
-async def reverse_fuel(
-    session: AsyncSession, fuel_id: uuid.UUID, reason: str, *, can_rates: bool
-) -> FuelOut:
+async def reverse_fuel(session: AsyncSession, fuel_id: uuid.UUID, reason: str) -> FuelOut:
     """Сторно заправки без листа: строка остаётся, в журнале - сторно. Повтор - без новых строк."""
     await _fuel(session, fuel_id)
     async with db_rules(session):
@@ -314,7 +307,7 @@ async def reverse_fuel(
             text("SELECT app.equipment_fuel_reverse(:f, :r)"), {"f": fuel_id, "r": reason}
         )
         await session.commit()
-    return (await _fuel_outs(session, [await _fuel(session, fuel_id)], can_rates=can_rates))[0]
+    return _fuel_out(await _fuel(session, fuel_id))
 
 
 async def create_delegate(session: AsyncSession, body: DelegateCreate) -> DelegateOut:
@@ -367,6 +360,32 @@ async def revoke_delegate(
     return delegate_out(row)
 
 
+async def usage_totals(
+    session: AsyncSession,
+    *,
+    date_from: date,
+    date_to: date,
+    project_id: uuid.UUID | None,
+) -> list[UsageOut]:
+    """Количества по технике, объекту и дню: часы, рейсы, тонны, простой (подтверждённые листы)
+    и литры (заправки без сторно). Денег нет ни в одной колонке; строки видны по RLS листов."""
+    rows = await session.execute(_USAGE, {"f": date_from, "t": date_to, "p": project_id})
+    return [
+        UsageOut(
+            project_id=row.project_id,
+            equipment_unit_id=row.equipment_unit_id,
+            day=row.day,
+            shifts=row.shifts,
+            hours=row.hours,
+            trips=row.trips,
+            tonnes=row.tonnes,
+            downtime_hours=row.downtime_hours,
+            liters=row.liters,
+        )
+        for row in rows
+    ]
+
+
 async def cost_totals(
     session: AsyncSession,
     *,
@@ -374,7 +393,7 @@ async def cost_totals(
     date_to: date,
     project_id: uuid.UUID | None,
 ) -> list[CostTotalOut]:
-    """Итоги по объекту и категории: прорабу - только итоги (Q11 B); строк и тарифов здесь нет."""
+    """Итоги по объекту и категории - только с read:rates (БД); без него список пуст (Q11 C)."""
     rows = await session.execute(
         text(
             "SELECT project_id, category, amount, entries"
@@ -399,6 +418,7 @@ async def cost_entries(
     date_from: date,
     date_to: date,
     project_id: uuid.UUID | None,
+    unit_id: uuid.UUID | None,
     category: str | None,
     limit: int,
     offset: int,
@@ -407,6 +427,8 @@ async def cost_entries(
     query = select(CostEntry).where(CostEntry.period >= date_from, CostEntry.period <= date_to)
     if project_id is not None:
         query = query.where(CostEntry.project_id == project_id)
+    if unit_id is not None:
+        query = query.where(CostEntry.equipment_unit_id == unit_id)
     if category is not None:
         query = query.where(CostEntry.category == category)
     rows = await session.scalars(

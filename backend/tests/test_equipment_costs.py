@@ -28,6 +28,7 @@ from tests.equipment_support import (
     lessor,
     lessor_contract,
     lessor_operator,
+    money_keys,
     move,
     new_type,
     new_unit,
@@ -222,7 +223,7 @@ async def reference_world(
     fuel_overhead = await api.post(
         f"{API}/fuel",
         json={"equipment_unit_id": str(own["id"]), "fuel_date": past(1), "amount": "3000.00"},
-        headers={**author, **idem()},
+        headers={**head, **idem()},
     )
     assert fuel_overhead.status_code == 201, fuel_overhead.text
     mechanic = await headers_for(api, "mechanic")
@@ -344,33 +345,49 @@ async def test_the_journal_matches_the_reference_line_by_line_to_the_tiyn(
     assert await journal(worker_engine, [own, rent, trip, motor]) == expected
 
 
-async def test_totals_for_the_foreman_have_no_rows_and_no_tariffs(
+async def test_totals_for_the_foreman_hold_no_money_at_any_depth_and_no_rows_or_tariffs(
     api: AsyncClient,
     auth_world: AuthWorld,
     new_user: Any,
     worker_sync_engine: Engine,
 ) -> None:
+    """Q11 C: прораб (approve:shift без read:rates) получает количества, но ни одной суммы."""
     world = await reference_world(api, auth_world, new_user, worker_sync_engine)
     author = world["author"]
-    totals = await api.get(
-        f"{API}/costs/totals", params={**WINDOW, "project_id": str(world["extra"])}, headers=author
+    window = {**WINDOW, "project_id": str(world["extra"])}
+    totals = await api.get(f"{API}/costs/totals", params=window, headers=author)
+    assert (totals.status_code, totals.json()) == (200, [])
+    everything = await api.get(f"{API}/costs/totals", params=WINDOW, headers=author)
+    assert (everything.status_code, everything.json()) == (200, [])
+    usage = await api.get(f"{API}/usage/totals", params=window, headers=author)
+    assert usage.status_code == 200, usage.text
+    assert usage.json() != [] and money_keys(usage.json()) == set()
+    fuel = await api.get(
+        f"{API}/fuel", params={**WINDOW, "project_id": str(world["extra"])}, headers=author
     )
-    assert totals.status_code == 200, totals.text
-    assert {(row["category"], money(row["amount"]), row["entries"]) for row in totals.json()} == {
+    assert fuel.status_code == 200 and money_keys(fuel.json()) == set()
+    techdir = await headers_for(api, "techdir")
+    priced = await api.get(f"{API}/costs/totals", params=window, headers=techdir)
+    assert {(row["category"], money(row["amount"]), row["entries"]) for row in priced.json()} == {
         ("equipment_own", money(6500), 1),
         ("equipment_rental", money(6750), 1),
         ("equipment_fuel", money("12500.50"), 1),
         ("equipment_repair", money(45000), 1),
     }
-    everything = await api.get(f"{API}/costs/totals", params=WINDOW, headers=author)
-    assert everything.status_code == 200
-    assert all(row["project_id"] is not None for row in everything.json())
     rows_for_foreman = await api.get(
         f"{API}/costs/entries", params={**WINDOW, "limit": 500}, headers=author
     )
     assert rows_for_foreman.status_code == 403
     ctx = in_context(world["author_id"], (east(auth_world), world["extra"]), (le_east(auth_world),))
     assert await rows("SELECT id FROM cost_entry", ctx) == []
+    assert (
+        await rows(
+            "SELECT category FROM app.equipment_cost_totals("
+            "DATE '2026-01-01', DATE '2100-12-31', NULL)",
+            ctx,
+        )
+        == []
+    )
     # Сумма ГСМ приложению не выдана колонкой (ревизия f2b7d4c9e1a6): отказ, а не строка с нулём.
     with pytest.raises(DBAPIError, match="permission denied for table equipment_fuel"):
         await rows("SELECT amount FROM equipment_fuel", ctx)
@@ -416,10 +433,11 @@ async def test_a_fuel_reversal_needs_the_after_approval_right(
         projects=(east(auth_world),),
         entities=(le_east(auth_world),),
     )
+    head = await headers_for(api, "equipment_head")
     fuel = await api.post(
         f"{API}/fuel",
         json={"equipment_unit_id": str(unit["id"]), "fuel_date": past(9), "amount": "250.00"},
-        headers={**author, **idem()},
+        headers={**head, **idem()},
     )
     assert fuel.status_code == 201, fuel.text
     denied = await api.post(
@@ -503,7 +521,7 @@ async def test_the_journal_refuses_every_change_and_keeps_its_guard(
     head = await headers_for(api, "equipment_head")
     finance = await headers_for(api, "finance")
     unit = await own_unit(api, auth_world, head, finance)
-    author_id, author = await signed_in(
+    author_id, _ = await signed_in(
         api,
         new_user,
         worker_sync_engine,
@@ -511,10 +529,11 @@ async def test_the_journal_refuses_every_change_and_keeps_its_guard(
         projects=(east(auth_world),),
         entities=(le_east(auth_world),),
     )
+    head = await headers_for(api, "equipment_head")
     fuel = await api.post(
         f"{API}/fuel",
         json={"equipment_unit_id": str(unit["id"]), "fuel_date": past(12), "amount": "99.00"},
-        headers={**author, **idem()},
+        headers={**head, **idem()},
     )
     assert fuel.status_code == 201, fuel.text
     async with worker_engine.connect() as connection:

@@ -197,8 +197,15 @@ class RateCreate(_Strict):
     amount: Money
     min_quantity: MinQuantity | None = None
     valid_from: date
+    valid_to: date | None = None
     equipment_unit_id: uuid.UUID | None = None
     equipment_type_id: uuid.UUID | None = None
+
+
+class RatePatch(_Strict):
+    """Окончание тарифа: дата или null (без окончания). Поле обязательно."""
+
+    valid_to: date | None
 
 
 class RateOut(BaseModel):
@@ -211,6 +218,7 @@ class RateOut(BaseModel):
     amount: Decimal
     min_quantity: Decimal | None
     valid_from: date
+    valid_to: date | None
 
 
 class CounterpartyRef(BaseModel):

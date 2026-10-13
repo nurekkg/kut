@@ -170,6 +170,7 @@ class EquipmentRate(BusinessBase):
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     min_quantity: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     valid_from: Mapped[date]
+    valid_to: Mapped[date | None]
 
     __table_args__ = (
         CheckConstraint(f"unit IN ({_in(UNITS)})", name="unit_valid"),
@@ -179,6 +180,9 @@ class EquipmentRate(BusinessBase):
         ),
         CheckConstraint("unit <> 'month' OR min_quantity IS NULL", name="month_has_no_minimum"),
         CheckConstraint("equipment_unit_id IS NULL OR equipment_type_id IS NULL", name="one_level"),
+        CheckConstraint(
+            "valid_to IS NULL OR valid_to >= valid_from", name="valid_to_not_before_from"
+        ),
         Index(
             "uq_equipment_rate_level_version",
             "contract_id",
@@ -525,6 +529,7 @@ class EquipmentFuel(BusinessBase):
     shift_id: Mapped[uuid.UUID | None]
     receipt_key: Mapped[str | None]
     receipt_content_type: Mapped[str | None]
+    receipt_uploaded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id"))
 
     __table_args__ = (
         ForeignKeyConstraint(

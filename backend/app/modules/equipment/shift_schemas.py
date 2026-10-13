@@ -159,13 +159,14 @@ class ReceiptUrlOut(BaseModel):
 
 
 class FuelOut(BaseModel):
+    """Заправка без суммы: сумма - только в журнале затрат (read:rates)."""
+
     id: uuid.UUID
     equipment_unit_id: uuid.UUID
     project_id: uuid.UUID | None
     shift_id: uuid.UUID | None
     fuel_date: date
     liters: Decimal | None
-    amount: Decimal | None
     has_receipt: bool
     reversed_at: datetime | None
     reverse_reason: str | None
@@ -193,6 +194,20 @@ class DelegateOut(BaseModel):
 
 
 # --- журнал затрат ------------------------------------------------------------------------------
+
+
+class UsageOut(BaseModel):
+    """Количества по технике, объекту и дню (вкладка «Техника»): без денег."""
+
+    project_id: uuid.UUID
+    equipment_unit_id: uuid.UUID
+    day: date
+    shifts: int
+    hours: Decimal
+    trips: int
+    tonnes: Decimal
+    downtime_hours: Decimal
+    liters: Decimal
 
 
 class CostTotalOut(BaseModel):
@@ -243,4 +258,5 @@ __all__ = [
     "ShiftFuelCreate",
     "ShiftOut",
     "ShiftPatch",
+    "UsageOut",
 ]

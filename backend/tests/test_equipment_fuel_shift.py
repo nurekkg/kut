@@ -21,6 +21,7 @@ from tests.equipment_support import (
     headers_for,
     idem,
     le_east,
+    money_keys,
     move,
     own_operator,
     own_unit,
@@ -98,16 +99,12 @@ async def test_a_machinist_enters_fuel_in_his_sheet_and_does_not_see_the_amount(
     added = await add_fuel(api, machinist, shift_id)
     assert added.status_code == 201, added.text
     body = added.json()
-    assert (body["shift_id"], body["liters"], body["amount"], body["has_receipt"]) == (
-        shift_id,
-        "40.00",
-        None,
-        False,
-    )
+    assert (body["shift_id"], body["liters"], body["has_receipt"]) == (shift_id, "40.00", False)
+    assert "amount" not in body
     listed = await api.get(f"{API}/shifts/{shift_id}/fuel", headers=machinist)
     assert listed.status_code == 200, listed.text
     assert [item["id"] for item in listed.json()] == [body["id"]]
-    assert listed.json()[0]["amount"] is None
+    assert money_keys(listed.json()) == set()
 
 
 async def test_a_foreman_who_did_not_write_the_sheet_cannot_add_fuel_to_it(
@@ -179,7 +176,7 @@ async def test_the_receipt_is_presigned_uploaded_confirmed_and_not_replaced(
     api: AsyncClient, auth_world: AuthWorld, s3: httpx.AsyncClient
 ) -> None:
     finance = await headers_for(api, "finance")
-    machinist, _, shift_id = await sheet(api, auth_world, finance)
+    machinist, foreman, shift_id = await sheet(api, auth_world, finance)
     fuel_id = (await add_fuel(api, machinist, shift_id)).json()["id"]
     payload = b"fake-jpeg!!"
     presigned = await api.post(
@@ -202,18 +199,43 @@ async def test_the_receipt_is_presigned_uploaded_confirmed_and_not_replaced(
     )
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["has_receipt"] is True
-    # Чек показывает сумму: ссылку получает только read:rates, как журнал; машинист - нет.
-    hidden = await api.get(f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt", headers=machinist)
-    assert (hidden.status_code, hidden.json()) == (403, {"detail": "forbidden"})
+    # Чек показывает сумму: ссылку получает загрузивший его и read:rates; прораб без денег - нет.
+    own_link = await api.get(f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt", headers=machinist)
+    assert own_link.status_code == 200 and own_link.json()["expires_in"] == 120
+    foreman_link = await api.get(f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt", headers=foreman)
+    assert (foreman_link.status_code, foreman_link.json()) == (403, {"detail": "forbidden"})
     link = await api.get(f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt", headers=finance)
     assert link.status_code == 200 and link.json()["expires_in"] == 120
-    other = f"project/{east(auth_world)}/shift/{shift_id}/fuel/{fuel_id}/{uuid4()}.jpg"
+    # Пока лист в черновике, чек заменяют: новый файл загружен, подтверждён и стал ссылкой.
+    second = await upload_receipt(api, s3, machinist, shift_id, fuel_id, b"second-jpeg!")
     replaced = await api.post(
         f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt/confirm",
-        json={"key": other},
+        json={"key": second},
         headers=machinist,
     )
-    assert (replaced.status_code, replaced.json()) == (409, {"detail": "receipt_exists"})
+    assert replaced.status_code == 200, replaced.text
+    relinked = await api.get(f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt", headers=finance)
+    assert relinked.status_code == 200 and second in relinked.json()["url"]
+
+
+async def upload_receipt(
+    api: AsyncClient,
+    s3: httpx.AsyncClient,
+    headers: dict[str, str],
+    shift_id: str,
+    fuel_id: str,
+    payload: bytes,
+) -> str:
+    presigned = await api.post(
+        f"{API}/shifts/{shift_id}/fuel/{fuel_id}/receipt",
+        json={"content_type": "image/jpeg", "size_bytes": len(payload)},
+        headers=headers,
+    )
+    assert presigned.status_code == 200, presigned.text
+    item = presigned.json()
+    uploaded = await s3.put(item["upload_url"], content=payload, headers=item["headers"])
+    assert uploaded.status_code == 200, uploaded.text
+    return str(item["key"])
 
 
 async def test_a_receipt_key_of_another_fuel_row_and_a_missing_upload_are_refused(
@@ -276,22 +298,33 @@ async def test_a_fuel_of_a_sheet_is_never_reversed_by_the_standalone_route(
     )
 
 
-async def test_the_amount_of_a_sheet_fuel_comes_from_the_journal_for_the_rates_reader_only(
+async def test_fuel_rows_carry_no_amount_and_the_journal_holds_it_for_the_rates_reader(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
-    """Сумма в листе - из журнала текущей версии: до подтверждения её нет ни у кого, после - у
-    читающего с read:rates; у машиниста она не видна никогда."""
+    """Заправка в листе без суммы для всех; сумма - в журнале текущей версии, видна с read:rates."""
     finance = await headers_for(api, "finance")
     machinist, foreman, shift_id = await sheet(api, auth_world, finance)
     fuel_id = (await add_fuel(api, machinist, shift_id)).json()["id"]
-    draft = await api.get(f"{API}/shifts/{shift_id}/fuel", headers=finance)
-    assert draft.status_code == 200, draft.text
-    assert [item["amount"] for item in draft.json()] == [None]
     assert (await move(api, foreman, shift_id, "submit")).status_code == 200
     techdir = await headers_for(api, "techdir")
     assert (await move(api, techdir, shift_id, "confirm")).status_code == 200
-    posted = await api.get(f"{API}/shifts/{shift_id}/fuel", headers=finance)
-    assert posted.status_code == 200, posted.text
-    assert [(item["id"], item["amount"]) for item in posted.json()] == [(fuel_id, "3200.00")]
-    hidden = await api.get(f"{API}/shifts/{shift_id}/fuel", headers=machinist)
-    assert [item["amount"] for item in hidden.json()] == [None]
+    for who in (finance, machinist, foreman):
+        listed = await api.get(f"{API}/shifts/{shift_id}/fuel", headers=who)
+        assert listed.status_code == 200, listed.text
+        assert [item["id"] for item in listed.json()] == [fuel_id]
+        assert money_keys(listed.json()) == set()
+    entries = await api.get(
+        f"{API}/costs/entries",
+        params={"date_from": "2026-01-01", "date_to": "2100-12-31", "category": "equipment_fuel"},
+        headers=finance,
+    )
+    assert entries.status_code == 200, entries.text
+    assert [
+        (row["source_id"], row["amount"]) for row in entries.json() if row["source_id"] == fuel_id
+    ] == [(fuel_id, "3200.00")]
+    refused = await api.get(
+        f"{API}/costs/entries",
+        params={"date_from": "2026-01-01", "date_to": "2100-12-31"},
+        headers=foreman,
+    )
+    assert refused.status_code == 403

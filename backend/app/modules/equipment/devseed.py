@@ -483,6 +483,7 @@ def _plan(
         ),
     ]
     for unit, kind, title, date_from, date_to, status in maintenance:
+        maintenance_id = uuid.uuid4()
         connection.execute(
             text(
                 "INSERT INTO equipment_maintenance (id, legal_entity_id, equipment_unit_id, kind,"
@@ -491,15 +492,21 @@ def _plan(
                 " :from, :to, :status, CASE WHEN CAST(:status AS varchar) = 'done' THEN now() END)"
             ),
             {
-                "id": uuid.uuid4(),
+                "id": maintenance_id,
                 "unit": unit,
                 "kind": kind,
                 "title": title,
                 "from": date_from,
                 "to": date_to,
-                "status": status,
+                "status": "in_progress" if status == "done" else status,
             },
         )
+        if status == "done":
+            # Закрытие - через определитель (сумма - в журнал); INSERT в done отказан БД.
+            connection.execute(
+                text("SELECT app.equipment_maintenance_close(:id, NULL, CAST(:amount AS numeric))"),
+                {"id": maintenance_id, "amount": "18500.00"},
+            )
     created["equipment_maintenance"] = len(maintenance)
     return created
 
