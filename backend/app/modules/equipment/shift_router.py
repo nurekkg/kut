@@ -18,10 +18,12 @@ from app.modules.equipment.router import Db, Limit, Offset, RatesReader, Reader
 from app.modules.equipment.shift_schemas import (
     CostEntryOut,
     CostTotalOut,
+    DelegateCandidateOut,
     DelegateCreate,
     DelegateOut,
     FuelCreate,
     FuelOut,
+    QuantityUnitOut,
     ReasonIn,
     ReceiptConfirm,
     ReceiptPresign,
@@ -279,7 +281,31 @@ async def receipt_url(
     )
 
 
+# --- подсказки для экрана машиниста и делегатов ---------------------------------------------------
+
+
+@router.get("/quantity-unit", response_model=QuantityUnitOut)
+async def quantity_unit(
+    _principal: Reader,
+    session: Db,
+    equipment_unit_id: uuid.UUID,
+    operator_id: uuid.UUID,
+    work_date: date,
+) -> QuantityUnitOut:
+    """Что вводить в смену: единица тарифа (часы, рейсы, тонны). Ставку не раскрываем."""
+    return await costs.quantity_unit(
+        session, unit_id=equipment_unit_id, operator_id=operator_id, work_date=work_date
+    )
+
+
 # --- делегаты подтверждения ---------------------------------------------------------------------
+
+
+@router.get("/delegate-candidates", response_model=list[DelegateCandidateOut])
+async def delegate_candidates(
+    _principal: ShiftApprover, session: Db, project_id: uuid.UUID
+) -> list[DelegateCandidateOut]:
+    return await costs.delegate_candidates(session, project_id=project_id)
 
 
 @router.post("/delegates", status_code=status.HTTP_201_CREATED, response_model=DelegateOut)

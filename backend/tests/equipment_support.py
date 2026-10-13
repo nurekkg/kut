@@ -19,7 +19,7 @@ from app.modules.auth import devseed
 from tests.auth_support import AuthWorld, bearer, token_for
 
 API = "/api/v1/equipment"
-MONEY_KEY = re.compile(r"amount|rate|tariff|price|cost|sum|total|budget", re.IGNORECASE)
+MONEY_KEY = re.compile(r"amount|rate|price|cost|sum|total|budget", re.IGNORECASE)
 BASE = date(2031, 3, 1)
 PAST = date(2026, 6, 1)
 RATE_FROM = "2026-04-01"

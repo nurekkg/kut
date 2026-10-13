@@ -16,7 +16,7 @@ from sqlalchemy import Connection, create_engine, text
 from app.core.config import get_settings
 from app.modules.auth.crypto import encrypt_totp_secret
 from app.modules.auth.security import MIN_PASSWORD_LENGTH, hash_password
-from app.modules.equipment.devseed import ensure_equipment, ensure_shifts
+from app.modules.equipment.devseed import SECOND_EAST, ensure_equipment, ensure_shifts
 from app.modules.equipment.service import bishkek_today
 from app.modules.objects.devseed import ensure_project_card, ensure_tree, ensure_works
 from app.modules.photos.devseed import ensure_photos
@@ -27,7 +27,7 @@ WEST = "ЖК «Запад» (dev)"
 LE_EAST = "ООО «Кут Девелопмент» (dev)"
 LE_WEST = "ОсОО «Кут Строй» (dev)"
 LEGAL_ENTITIES = (LE_EAST, LE_WEST)
-PROJECTS = ((EAST, LE_EAST), (WEST, LE_WEST))
+PROJECTS = ((EAST, LE_EAST), (WEST, LE_WEST), (SECOND_EAST, LE_EAST))
 SUB_A = "Субподрядчик А (dev)"
 SUB_B = "Субподрядчик Б (dev)"
 CUSTOMER = "Заказчик (dev)"
@@ -73,6 +73,13 @@ USERS = (
         legal_entities=(LE_EAST,),
         phone="+996555100001",
     ),
+    DevUser(
+        "foreman2",
+        "foreman",
+        "Прораб Восток-2 (dev)",
+        (SECOND_EAST,),
+        legal_entities=(LE_EAST,),
+    ),
     DevUser("master", "master", "Мастер Восток (dev)", (EAST,), phone="+996555100002"),
     DevUser("estimator", "estimator", "Сметчик (dev)", (EAST,)),
     DevUser("storekeeper", "storekeeper", "Кладовщик Восток (dev)", (EAST,)),
@@ -88,7 +95,13 @@ USERS = (
     # Техника (ADR-014, Q8): три роли модуля; машинист - штатный, с объектом и юрлицом.
     DevUser("equipment_head", "equipment_head", "Начальник отдела спецтехники (dev)"),
     DevUser("mechanic", "mechanic", "Механик парка (dev)"),
-    DevUser("machinist", "machinist", "Машинист Восток (dev)", (EAST,), legal_entities=(LE_EAST,)),
+    DevUser(
+        "machinist",
+        "machinist",
+        "Машинист Восток (dev)",
+        (EAST, SECOND_EAST),
+        legal_entities=(LE_EAST,),
+    ),
 )
 
 

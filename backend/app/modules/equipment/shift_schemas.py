@@ -196,6 +196,20 @@ class DelegateOut(BaseModel):
 # --- журнал затрат ------------------------------------------------------------------------------
 
 
+class QuantityUnitOut(BaseModel):
+    """Единица тарификации для ввода (часы, моточасы, рейсы, тонны, смена); ставки в ответе нет."""
+
+    tariff_unit: str
+
+
+class DelegateCandidateOut(BaseModel):
+    """Кандидат в делегаты подтверждения: имя и роль, без контактов."""
+
+    user_id: uuid.UUID
+    full_name: str
+    role_code: str
+
+
 class UsageOut(BaseModel):
     """Количества по технике, объекту и дню (вкладка «Техника»): без денег."""
 
@@ -242,12 +256,14 @@ class CostEntryOut(BaseModel):
 __all__ = [
     "CostEntryOut",
     "CostTotalOut",
+    "DelegateCandidateOut",
     "DelegateCreate",
     "DelegateOut",
     "FuelCreate",
     "FuelOut",
     "LineIn",
     "LineOut",
+    "QuantityUnitOut",
     "ReasonIn",
     "ReceiptConfirm",
     "ReceiptPresign",

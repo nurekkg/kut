@@ -32,10 +32,12 @@ from app.modules.equipment.models import (
 from app.modules.equipment.shift_schemas import (
     CostEntryOut,
     CostTotalOut,
+    DelegateCandidateOut,
     DelegateCreate,
     DelegateOut,
     FuelCreate,
     FuelOut,
+    QuantityUnitOut,
     ReceiptConfirm,
     ReceiptPresign,
     ReceiptUrlOut,
@@ -72,6 +74,39 @@ _USAGE = text(
 
 def _not_found() -> HTTPException:
     return HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
+
+
+async def quantity_unit(
+    session: AsyncSession, *, unit_id: uuid.UUID, operator_id: uuid.UUID, work_date: date
+) -> QuantityUnitOut:
+    """Единица тарификации для ввода (без ставки): видимость и тариф - в БД."""
+    async with db_rules(session):
+        tariff = await session.scalar(
+            text("SELECT app.equipment_quantity_unit(:u, :o, :d)"),
+            {"u": unit_id, "o": operator_id, "d": work_date},
+        )
+    return QuantityUnitOut(tariff_unit=tariff)
+
+
+async def delegate_candidates(
+    session: AsyncSession, *, project_id: uuid.UUID
+) -> list[DelegateCandidateOut]:
+    """Кандидаты в делегаты объекта: право approve:shift и объект проверяет БД (definer-функция)."""
+    async with db_rules(session):
+        rows = await session.execute(
+            text(
+                "SELECT o_user_id, o_full_name, o_role_code"
+                " FROM app.equipment_delegate_candidates(:p)"
+            ),
+            {"p": project_id},
+        )
+        found = [
+            DelegateCandidateOut(
+                user_id=row.o_user_id, full_name=row.o_full_name, role_code=row.o_role_code
+            )
+            for row in rows
+        ]
+    return found
 
 
 def delegate_out(row: EquipmentDelegate) -> DelegateOut:
