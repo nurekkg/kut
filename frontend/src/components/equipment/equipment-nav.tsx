@@ -24,6 +24,7 @@ export function EquipmentNav() {
     { href: "/equipment/maintenance", label: t("maintenance"), show: access.canRegistry },
     { href: "/equipment/contracts", label: t("contracts"), show: access.canContracts },
     { href: "/equipment/import", label: t("import"), show: access.canWrite },
+    { href: "/equipment/journal", label: t("journal"), show: access.canRates },
     { href: "/equipment/my", label: t("my"), show: access.isMachinist },
   ].filter((item) => item.show);
   if (items.length < 2) return null;

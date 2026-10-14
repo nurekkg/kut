@@ -12,6 +12,9 @@ export const ROLES = [
   "customer",
   "subcontractor",
   "supplier",
+  "equipment_head",
+  "mechanic",
+  "machinist",
 ] as const;
 
 export type RoleCode = (typeof ROLES)[number];
