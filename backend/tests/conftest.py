@@ -67,6 +67,12 @@ async def test_database() -> AsyncIterator[None]:
     await dispose_engine()
 
 
+@pytest.fixture(scope="session", autouse=True)
+async def schema_before_any_test(test_database: None) -> None:
+    """Схема поднимается до первого теста. Тест, который ходит в БД напрямую (проверка прав роли
+    приложения), при случайном порядке на пустой CI-базе иначе падает на отсутствующих таблицах."""
+
+
 @pytest.fixture(scope="session")
 async def owner_engine(test_database: None) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(require_test_url("TEST_DATABASE_OWNER_URL"))
