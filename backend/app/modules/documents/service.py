@@ -369,23 +369,26 @@ async def list_events(session: AsyncSession, document_id: uuid.UUID) -> list[Eve
     """Журнал переходов статуса по всем версиям документа (только внутренним, см. роутер)."""
     if await session.scalar(select(Document.id).where(Document.id == document_id)) is None:
         raise _not_found()
-    rows = await session.execute(
-        select(
-            DocumentVersion.version_no,
-            DocumentStatusEvent.id,
-            DocumentStatusEvent.from_status,
-            DocumentStatusEvent.to_status,
-            DocumentStatusEvent.comment,
-            DocumentStatusEvent.created_at,
-            User.full_name.label("actor_name"),
+    # Лимит отрезает самые старые строки только при выборке по убыванию: новые события не теряются.
+    rows = (
+        await session.execute(
+            select(
+                DocumentVersion.version_no,
+                DocumentStatusEvent.id,
+                DocumentStatusEvent.from_status,
+                DocumentStatusEvent.to_status,
+                DocumentStatusEvent.comment,
+                DocumentStatusEvent.created_at,
+                User.full_name.label("actor_name"),
+            )
+            .join(DocumentVersion, DocumentVersion.id == DocumentStatusEvent.document_version_id)
+            .outerjoin(User, User.id == DocumentStatusEvent.actor_id)
+            .where(DocumentVersion.document_id == document_id)
+            .order_by(DocumentStatusEvent.created_at.desc(), DocumentStatusEvent.id.desc())
+            .limit(EVENTS_LIMIT)
         )
-        .join(DocumentVersion, DocumentVersion.id == DocumentStatusEvent.document_version_id)
-        .outerjoin(User, User.id == DocumentStatusEvent.actor_id)
-        .where(DocumentVersion.document_id == document_id)
-        .order_by(DocumentStatusEvent.created_at, DocumentStatusEvent.id)
-        .limit(EVENTS_LIMIT)
-    )
-    return [EventOut.model_validate(row._asdict()) for row in rows]
+    ).all()
+    return [EventOut.model_validate(row._asdict()) for row in reversed(rows)]
 
 
 def _cell(value: Any) -> Any:
