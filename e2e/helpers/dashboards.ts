@@ -47,6 +47,7 @@ export function planKeysOf(value: unknown): string[] {
 }
 
 // Очередь «На согласовании» по всем объектам, видимым сессии: та же сумма, что у счётчика в навигации.
+// Счётчик прибавляет к фактам листы техники на подтверждение (ApprovalsCount в app-nav.tsx).
 export async function approvalsTotal(
   request: APIRequestContext,
   session: Session,
@@ -62,7 +63,11 @@ export async function approvalsTotal(
     );
     counts.push(facts.length);
   }
-  return approvalTotal(counts, APPROVAL_LIMIT);
+  const facts = approvalTotal(counts, APPROVAL_LIMIT);
+  const sheets = await get<unknown[]>(request, session, "/api/v1/equipment/shifts", {
+    status: "submitted",
+  });
+  return { total: facts.total + sheets.length, capped: facts.capped };
 }
 
 // Число из подписи вида «61,96 %» (русская запятая, неразрывные пробелы).
