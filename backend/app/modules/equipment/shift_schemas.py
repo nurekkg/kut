@@ -116,6 +116,8 @@ class ShiftOut(BaseModel):
     posting_version: int
     lines: list[LineOut]
     unplanned: bool
+    # Номер регистрации единицы: только в списке и карточке листа (для видимых листов, без реестра).
+    unit_registry_number: str | None = None
 
 
 class ShiftBatchOut(BaseModel):

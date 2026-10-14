@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -99,7 +99,11 @@ def _line_rows(
     ]
 
 
-def shift_out(row: EquipmentShift, lines: Sequence[EquipmentShiftLine]) -> ShiftOut:
+def shift_out(
+    row: EquipmentShift,
+    lines: Sequence[EquipmentShiftLine],
+    unit_registry_number: str | None = None,
+) -> ShiftOut:
     return ShiftOut(
         id=row.id,
         project_id=row.project_id,
@@ -133,6 +137,7 @@ def shift_out(row: EquipmentShift, lines: Sequence[EquipmentShiftLine]) -> Shift
             for line in lines
         ],
         unplanned=row.assignment_id is None,
+        unit_registry_number=unit_registry_number,
     )
 
 
@@ -181,10 +186,24 @@ async def create_batch(session: AsyncSession, body: ShiftBatchCreate) -> ShiftBa
     return ShiftBatchOut(items=[shift_out(row, lines[row.id]) for row in rows])
 
 
+async def _unit_labels(
+    session: AsyncSession, unit_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Номера регистрации единиц видимых листов: определитель БД, реестр для этого не нужен."""
+    if not unit_ids:
+        return {}
+    rows = await session.execute(
+        text("SELECT o_id, o_registry FROM app.equipment_unit_labels(CAST(:ids AS uuid[]))"),
+        {"ids": list(set(unit_ids))},
+    )
+    return {row.o_id: row.o_registry for row in rows}
+
+
 async def get_shift(session: AsyncSession, shift_id: uuid.UUID) -> ShiftOut:
     row = await _shift(session, shift_id)
     lines = await _lines(session, [row.id])
-    return shift_out(row, lines[row.id])
+    labels = await _unit_labels(session, [row.equipment_unit_id])
+    return shift_out(row, lines[row.id], labels.get(row.equipment_unit_id))
 
 
 async def list_shifts(
@@ -217,7 +236,8 @@ async def list_shifts(
         )
     )
     lines = await _lines(session, [row.id for row in rows])
-    return [shift_out(row, lines[row.id]) for row in rows]
+    labels = await _unit_labels(session, [row.equipment_unit_id for row in rows])
+    return [shift_out(row, lines[row.id], labels.get(row.equipment_unit_id)) for row in rows]
 
 
 async def update_shift(session: AsyncSession, shift_id: uuid.UUID, patch: ShiftPatch) -> ShiftOut:
