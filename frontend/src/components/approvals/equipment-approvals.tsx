@@ -50,7 +50,8 @@ export function EquipmentApprovals({
   const message = useEquipmentErrorMessage();
   const queryClient = useQueryClient();
   const today = todayIso();
-  const submitted = useShifts({ status: "submitted" });
+  // Только подтверждаемые листы: тот же отбор, что у счётчика в AppNav (решение PO, S5a STEP 0).
+  const submitted = useShifts({ status: "submitted", approvable: true });
   const confirmed = useShifts(
     { status: "confirmed", dateFrom: daysBefore(today, 7), dateTo: today },
     canEdit,
