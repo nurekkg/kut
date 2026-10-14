@@ -53,8 +53,19 @@ export async function signInHere(page: Page, user: string): Promise<void> {
 }
 
 export async function signIn(page: Page, user: string): Promise<void> {
-  await page.goto("/login");
+  await gotoLogin(page);
   await signInHere(page, user);
+}
+
+// Первая навигация в только что созданном контексте иногда обрывается браузером (ERR_ABORTED, ответа
+// сервера нет): повторяем её один раз. Остальные ошибки проходят без изменений.
+async function gotoLogin(page: Page): Promise<void> {
+  try {
+    await page.goto("/login");
+  } catch (error) {
+    if (!String(error).includes("ERR_ABORTED")) throw error;
+    await page.goto("/login");
+  }
 }
 
 // Телефон мастера: 375 px, касание, геолокация замокана (разрешение выдано заранее).
