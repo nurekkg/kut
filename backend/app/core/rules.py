@@ -101,6 +101,18 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "rate.has_postings": (409, "equipment.rate_has_postings"),
     "receipt.locked": (409, "equipment.receipt_locked"),
     "receipt.invalid": (422, "equipment.receipt_invalid"),
+    # Документы (ADR-015 часть 1): правила БД, которые проверяет функция или триггер.
+    "document.forbidden": (403, "forbidden"),
+    "document.not_found": (404, "not_found"),
+    "document.transition_forbidden": (403, "forbidden"),
+    "document.transition_invalid": (409, "document.transition_invalid"),
+    "document.comment_required": (422, "document.comment_required"),
+    "document.contract_invalid": (422, "document.contract_invalid"),
+    "document.version_invalid": (422, "document.version_invalid"),
+    "document.version_status_invalid": (422, "document.version_status_invalid"),
+    "document.link_invalid": (422, "document.link_invalid"),
+    "document.amount_not_financial": (422, "document.amount_not_financial"),
+    "document.event_immutable": (409, "document.event_immutable"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -209,6 +221,28 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "ck_equipment_fuel_shift_not_reversed": (409, "equipment.fuel_shift_bound"),
     "ck_equipment_fuel_shift_has_project": (422, "equipment.shift_invalid"),
     "fk_equipment_fuel_project_id_shift_id_equipment_shift": (422, "equipment.shift_invalid"),
+    # Документы: уникальности, проверки полей и составные внешние ключи.
+    "uq_document_legal_entity_id_registration_no": (409, "document.number_taken"),
+    "uq_document_version_document_id_version_no": (409, "document.version_conflict"),
+    "uq_document_version_s3_key": (409, "document.file_already_confirmed"),
+    "uq_document_amount_document_id": (409, "document.amount_exists"),
+    "uq_legal_entity_code": (409, "legal_entity.code_taken"),
+    "ck_document_kind_valid": (422, "document.kind_invalid"),
+    "ck_document_scope_valid": (422, "document.scope_invalid"),
+    "ck_document_counterparty_required": (422, "document.counterparty_required"),
+    "ck_document_contract_required": (422, "document.contract_required"),
+    "ck_document_title_not_blank": (422, "document.title_invalid"),
+    "ck_document_version_content_type_valid": (422, "document.type_not_allowed"),
+    "ck_document_version_size_valid": (422, "document.too_large"),
+    "ck_document_version_key_in_document": (422, "document.key_invalid"),
+    "ck_document_link_one_target": (422, "document.link_invalid"),
+    "ck_document_amount_amount_not_negative": (422, "document.amount_invalid"),
+    "fk_document_project_id_project": (422, "document.project_invalid"),
+    "fk_document_counterparty_id_counterparty": (422, "document.counterparty_invalid"),
+    "fk_document_contract_id_contract": (422, "document.contract_invalid"),
+    "fk_document_link_work_actual_id_work_actual": (422, "document.link_invalid"),
+    "fk_document_link_project_node_id_project_node": (422, "document.link_invalid"),
+    "fk_document_link_equipment_unit_id_equipment_unit": (422, "document.link_invalid"),
 }
 
 

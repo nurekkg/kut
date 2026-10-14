@@ -335,3 +335,11 @@ def settings_cleanup(worker_sync_engine: Engine) -> Iterator[None]:
     with worker_sync_engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Миграционный тест откатывает схему общей тестовой базы и поднимает её обратно пустой
+    (откат до a3f7c1d9e582 - это все таблицы техники и документов). Поэтому он идёт последним:
+    сидовые данные остальных тестов после него не пропадают, при любом порядке."""
+    items.sort(key=lambda item: "test_migration_schedule_dates" in item.nodeid)

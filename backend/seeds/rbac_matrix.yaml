@@ -267,3 +267,12 @@ extra:
   - {role: technical_director, permission: "equipment:write:maintenance"}
   - {role: equipment_head, permission: "equipment:write:maintenance"}
   - {role: mechanic, permission: "equipment:write:maintenance"}
+  # Документы (ADR-015 часть 2 раздел 6, решения PO по §14): суммы и файлы финансовых видов - по
+  # documents:read:financial (Q3: прораб и мастер не видят, сметчик-ПТО - видит); архив - владелец (ADR D2).
+  - {role: owner, permission: "documents:read:financial"}
+  - {role: finance_director, permission: "documents:read:financial"}
+  - {role: technical_director, permission: "documents:read:financial"}
+  - {role: accountant, permission: "documents:read:financial"}
+  - {role: lawyer, permission: "documents:read:financial"}
+  - {role: estimator, permission: "documents:read:financial"}
+  - {role: owner, permission: "documents:write:archive"}
