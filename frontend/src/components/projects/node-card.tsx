@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import type { ReactNode } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { NodeDocumentsTab } from "@/components/documents/node-documents-tab";
 import { NodeDatesTab } from "@/components/projects/node-dates-tab";
 import { NodeIcon } from "@/components/projects/node-icon";
 import { NodeMediaTab } from "@/components/projects/node-media-tab";
@@ -21,9 +22,9 @@ import { API, nodeKey } from "@/lib/projects/keys";
 import { ancestors, siblingsOf, type TreeIndex } from "@/lib/projects/tree";
 import { allowedChildren, isNodeType, type NodeDetail, type TreeNode } from "@/lib/projects/types";
 
-// Порядок вкладок по ТЗ §8.2. «Расходы», «Подрядчики» и «Документы» остаются заглушками (S5+).
+// Порядок вкладок по ТЗ §8.2. «Расходы» и «Подрядчики» остаются заглушками (S5+).
 const TABS = ["costs", "works", "contractors", "dates", "documents", "media"] as const;
-const STUB_TABS: readonly string[] = ["costs", "contractors", "documents"];
+const STUB_TABS: readonly string[] = ["costs", "contractors"];
 
 export type NodeActions = {
   onBack: () => void;
@@ -60,8 +61,10 @@ export function NodeCard({ projectId, node, index, internal, canWrite, actions }
   const { user } = useAuth();
   // ГПР и готовность видят роли с gpr:read; фото - только внутренние роли (внешним они не отдаются).
   const canSeeSchedule = user?.permissions.includes("gpr:read") ?? false;
+  const canSeeDocuments = user?.permissions.includes("documents:read") ?? false;
   const tabs = TABS.filter((tab) => {
     if (tab === "works" || tab === "dates") return canSeeSchedule;
+    if (tab === "documents") return canSeeDocuments;
     if (tab === "media") return internal;
     return true;
   });
@@ -243,6 +246,11 @@ export function NodeCard({ projectId, node, index, internal, canWrite, actions }
               />
             </TabsContent>
           </>
+        ) : null}
+        {canSeeDocuments ? (
+          <TabsContent value="documents" className="pt-1">
+            <NodeDocumentsTab projectId={projectId} />
+          </TabsContent>
         ) : null}
         {internal ? (
           <TabsContent value="media" className="pt-1">

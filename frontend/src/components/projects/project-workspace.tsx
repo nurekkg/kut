@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CalendarRange, ChevronDown, Pencil, Trash2, Truck } from "lucide-react";
+import { ArrowLeft, CalendarRange, ChevronDown, FileText, Pencil, Trash2, Truck } from "lucide-react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -57,6 +57,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const canEditCard = canWrite && user?.scope === "group";
   const canSeeSchedule = user?.permissions.includes("gpr:read") ?? false;
   const canSeeEquipment = user?.permissions.includes("equipment:read") ?? false;
+  const canSeeDocuments = user?.permissions.includes("documents:read") ?? false;
   const equipmentLabel = useTranslations("ProjectEquipment");
 
   const project = useQuery({
@@ -167,6 +168,16 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                     >
                       <Truck data-icon="inline-start" aria-hidden />
                       {equipmentLabel("tab")}
+                    </Link>
+                  ) : null}
+                  {canSeeDocuments ? (
+                    <Link
+                      href={`/projects/${projectId}/documents`}
+                      className={buttonVariants({ variant: "outline", size: "lg", className: "h-10" })}
+                      data-testid="project-documents-link"
+                    >
+                      <FileText data-icon="inline-start" aria-hidden />
+                      {t("documents")}
                     </Link>
                   ) : null}
                   {canSeeSchedule ? (

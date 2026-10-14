@@ -68,6 +68,8 @@ const KEYS = {
   "equipment.shift_invalid": "shiftInvalid",
   "equipment.project_invalid": "projectInvalid",
   "equipment.maintenance_close_forbidden": "maintenanceCloseForbidden",
+  "equipment.document_kind_mismatch": "documentKindMismatch",
+  "equipment.document_unit_mismatch": "documentUnitMismatch",
   forbidden: "forbidden",
   not_found: "notFound",
   validation: "validation",
