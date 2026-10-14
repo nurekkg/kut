@@ -15,14 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.modules.equipment.devseed import TAX_IDS
 from app.modules.equipment.imports import COLUMNS, OPTIONAL_COLUMNS
 from tests.auth_support import AuthWorld
-from tests.equipment_support import API, headers_for, idem
+from tests.equipment_support import API, headers_for, idem, new_type
 
 HEADER = "ИНН юрлица;Код типа;Владение;Номер;Номер договора аренды"
 TAX = TAX_IDS["east"]
 
 
-def good_row(prefix: str, index: int) -> list[str]:
-    return [TAX, "SAM", "own", f"{prefix}{index:05d}", ""]
+def good_row(prefix: str, index: int, code: str) -> list[str]:
+    return [TAX, code, "own", f"{prefix}{index:05d}", ""]
 
 
 def body(rows: list[list[str]]) -> bytes:
@@ -64,11 +64,12 @@ async def test_bad_rows_are_reported_by_line_and_nothing_is_loaded(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     head = await headers_for(api, "equipment_head")
+    code = await new_type(api, head)
     prefix = f"ERR{uuid.uuid4().hex[:6].upper()}"
-    rows = [good_row(prefix, index) for index in range(300)]
+    rows = [good_row(prefix, index, code) for index in range(300)]
     rows[2][1] = "XXX"  # строка 4 файла: нет такого типа
     rows[15][2] = "lease"  # строка 17: владение не распознано
-    rows[228] = [TAX, "SAM", "rented", f"{prefix}RENT", ""]  # строка 230: арендованная без договора
+    rows[228] = [TAX, code, "rented", f"{prefix}RENT", ""]  # строка 230: арендованная без договора
     data = body(rows)
     checked = (await check(api, head, data)).json()
     assert checked["status"] == "rejected"
@@ -89,8 +90,9 @@ async def test_a_fixed_file_loads_and_a_repeat_changes_nothing(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     head = await headers_for(api, "equipment_head")
+    code = await new_type(api, head)
     prefix = f"OK{uuid.uuid4().hex[:6].upper()}"
-    data = body([good_row(prefix, index) for index in range(40)])
+    data = body([good_row(prefix, index, code) for index in range(40)])
     loaded = await commit(api, head, data)
     assert loaded.status_code == 201, loaded.text
     assert (loaded.json()["created"], loaded.json()["updated"]) == (40, 0)
@@ -108,14 +110,15 @@ async def test_a_changed_number_updates_one_unit_and_a_duplicate_key_is_a_row_er
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     head = await headers_for(api, "equipment_head")
+    code = await new_type(api, head)
     prefix = f"CH{uuid.uuid4().hex[:6].upper()}"
-    rows = [good_row(prefix, index) for index in range(5)]
+    rows = [good_row(prefix, index, code) for index in range(5)]
     await commit(api, head, body(rows))
     rows[0][3] = rows[0][3].lower().replace("ch", "ch-")  # тот же ключ, другой написанный номер
     changed = await commit(api, head, body(rows))
     assert changed.status_code == 201, changed.text
     assert (changed.json()["updated"], changed.json()["unchanged"]) == (1, 4)
-    duplicate = [good_row(prefix, 1), [TAX, "SAM", "own", f"{prefix.lower()} 00001", ""]]
+    duplicate = [good_row(prefix, 1, code), [TAX, code, "own", f"{prefix.lower()} 00001", ""]]
     twin = (await check(api, head, body(duplicate))).json()
     assert [issue["code"] for issue in twin["errors"]] == ["duplicate_key"]
     assert twin["errors"][0]["row"] == 3
@@ -125,7 +128,8 @@ async def test_a_file_over_the_row_limit_is_refused_before_any_write(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     head = await headers_for(api, "equipment_head")
-    data = body([good_row("BIG", index) for index in range(5001)])
+    code = await new_type(api, head)
+    data = body([good_row("BIG", index, code) for index in range(5001)])
     checked = (await check(api, head, data)).json()
     assert checked["status"] == "rejected"
     assert checked["errors"][0]["code"] == "too_many_rows"
@@ -138,8 +142,9 @@ async def test_five_thousand_rows_are_checked_and_loaded_within_the_recorded_tim
 
     Единицы теста с уникальным префиксом мягко удаляются в любом исходе."""
     head = await headers_for(api, "equipment_head")
+    code = await new_type(api, head)
     prefix = f"BULK{uuid.uuid4().hex[:6].upper()}"
-    data = body([good_row(prefix, index) for index in range(5000)])
+    data = body([good_row(prefix, index, code) for index in range(5000)])
     try:
         started = time.perf_counter()
         checked = await check(api, head, data)
@@ -207,6 +212,7 @@ async def test_the_xlsx_template_is_filled_and_loaded_as_a_registry(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     head = await headers_for(api, "equipment_head")
+    code = await new_type(api, head)
     template = await api.get(f"{API}/import/template", params={"format": "xlsx"}, headers=head)
     assert template.status_code == 200
     assert template.content[:2] == b"PK"
@@ -215,7 +221,7 @@ async def test_the_xlsx_template_is_filled_and_loaded_as_a_registry(
     assert header == [title for _key, title in (*COLUMNS, *OPTIONAL_COLUMNS)]
     prefix = f"XL{uuid.uuid4().hex[:6].upper()}"
     rows = [header] + [
-        [TAX, "SAM", "own", f"{prefix}{index}", None, "Самосвал КАМАЗ", 2015] for index in range(3)
+        [TAX, code, "own", f"{prefix}{index}", None, "Самосвал КАМАЗ", 2015] for index in range(3)
     ]
     loaded = await api.post(
         f"{API}/import",
@@ -234,10 +240,11 @@ async def test_formulas_in_a_workbook_are_not_evaluated(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     head = await headers_for(api, "equipment_head")
+    code = await new_type(api, head)
     prefix = f"FM{uuid.uuid4().hex[:6].upper()}"
     rows = [
         [title for _key, title in COLUMNS],
-        [TAX, "SAM", "own", f'="{prefix}"&"1"', None],
+        [TAX, code, "own", f'="{prefix}"&"1"', None],
     ]
     checked = await api.post(
         f"{API}/import/check",
@@ -256,10 +263,11 @@ async def test_model_and_year_come_from_the_file_and_a_bad_year_is_a_row_error(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     head = await headers_for(api, "equipment_head")
+    code = await new_type(api, head)
     prefix = f"MY{uuid.uuid4().hex[:6].upper()}"
     header = HEADER + ";Марка и модель;Год выпуска"
-    good = [TAX, "SAM", "own", f"{prefix}1", "", "Komatsu HD785", "2012"]
-    bad = [TAX, "SAM", "own", f"{prefix}2", "", "Komatsu HD785", "1800"]
+    good = [TAX, code, "own", f"{prefix}1", "", "Komatsu HD785", "2012"]
+    bad = [TAX, code, "own", f"{prefix}2", "", "Komatsu HD785", "1800"]
     both = ("\n".join([header, ";".join(good), ";".join(bad)]) + "\n").encode("utf-8-sig")
     checked = (await check(api, head, both)).json()
     assert [(issue["row"], issue["code"]) for issue in checked["errors"]] == [(3, "year_invalid")]
