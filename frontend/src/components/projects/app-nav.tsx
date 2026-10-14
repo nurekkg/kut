@@ -12,11 +12,12 @@ import { cn } from "@/lib/utils";
 
 // Счётчик «на согласовании»: сумма очередей по всем видимым объектам. Те же запросы, что у очереди
 // (общий кэш), обновление раз в минуту. «N+» - только если хотя бы один объект упёрся в лимит выборки.
-function ApprovalsCount({ equipment }: { equipment: boolean }) {
+function ApprovalsCount({ approveFacts, equipment }: { approveFacts: boolean; equipment: boolean }) {
   const t = useTranslations("AppNav");
-  const { perProject } = useApprovalQueue(true);
-  // Листы техники, которые этот пользователь может подтвердить (сервер отдаёт только его объекты).
-  const shifts = useShifts({ status: "submitted" }, equipment);
+  // Факты считает только тот, кто их подтверждает (work_actual:approve); мастер счётчик фактов не видит.
+  const { perProject } = useApprovalQueue(approveFacts);
+  // Листы техники, которые пользователь может подтвердить: сервер отбирает по правилу гарда (approvable).
+  const shifts = useShifts({ status: "submitted", approvable: true }, equipment);
   const { total: facts, capped } = approvalTotal(perProject, APPROVAL_LIMIT);
   const total = facts + (equipment ? (shifts.data?.length ?? 0) : 0);
   if (total === 0) return null;
@@ -76,7 +77,12 @@ export function AppNav() {
             )}
           >
             {item.label}
-            {item.counter ? <ApprovalsCount equipment={equipmentListed} /> : null}
+            {item.counter ? (
+              <ApprovalsCount
+                approveFacts={can("work_actual:approve")}
+                equipment={equipmentListed}
+              />
+            ) : null}
           </Link>
         );
       })}

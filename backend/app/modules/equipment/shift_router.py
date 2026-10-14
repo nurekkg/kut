@@ -120,7 +120,9 @@ async def list_shifts(
     date_to: date | None = None,
     limit: Limit = 100,
     offset: Offset = 0,
+    approvable: bool = False,
 ) -> list[ShiftOut]:
+    """approvable=true: только листы, которые вызывающий может подтвердить (счётчик)."""
     return await shifts.list_shifts(
         session,
         project_id=project_id,
@@ -130,6 +132,7 @@ async def list_shifts(
         date_to=date_to,
         limit=limit,
         offset=offset,
+        approvable=approvable,
     )
 
 

@@ -464,7 +464,7 @@ async def visible_users(who: RequestContext, *, portal: bool = False) -> set[UUI
 
 
 async def test_user_policy_internal_roles_see_themselves_and_users_sharing_a_project(
-    auth_world: AuthWorld,
+    auth_world: AuthWorld, worker_sync_engine: Engine
 ) -> None:
     east, west = auth_world.projects["east"], auth_world.projects["west"]
     users = auth_world.users
@@ -486,7 +486,20 @@ async def test_user_policy_internal_roles_see_themselves_and_users_sharing_a_pro
     both = await visible_users(context(users["lawyer"], projects={east, west}))
     loner = await visible_users(context(users["foreman"], projects=set()))
 
-    assert foreman == east_team
+    # Команда объекта - обязательный минимум. Видимы все, у кого есть доступ к объекту сейчас:
+    # тесты в случайном порядке добавляют своих пользователей, поэтому полный набор берём из базы.
+    with worker_sync_engine.connect() as connection:
+        sharing = {
+            row[0]
+            for row in connection.execute(
+                text(
+                    "SELECT user_id FROM user_project_access"
+                    " WHERE project_id = :p AND deleted_at IS NULL"
+                ),
+                {"p": east},
+            ).all()
+        }
+    assert east_team <= foreman == sharing
     assert {users["procurement"], users["sub_b"]} <= both and users["owner"] not in both
     assert loner == {users["foreman"]}  # без объектов в контексте только сам
 
