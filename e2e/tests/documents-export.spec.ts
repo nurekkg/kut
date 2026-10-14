@@ -28,9 +28,12 @@ test("юрист: выгрузка реестра скачивается, в ф�
 
   const saved = await download.path();
   expect(saved).toBeTruthy();
+  // openpyxl пишет текст ячеек либо в sharedStrings, либо прямо в лист (inlineStr): смотрим оба места.
   const entries = readZip(readFileSync(saved!));
-  const strings = entries.get("xl/sharedStrings.xml")?.toString("utf8") ?? "";
-  expect(strings).toContain("Регистрационный номер");
-  expect(strings).toContain("Сумма");
+  const sheet = entries.get("xl/worksheets/sheet1.xml")?.toString("utf8") ?? "";
+  const shared = entries.get("xl/sharedStrings.xml")?.toString("utf8") ?? "";
+  const text = sheet + shared;
+  expect(text).toContain("Регистрационный номер");
+  expect(text).toContain("Сумма");
   expect(errors).toEqual([]);
 });
