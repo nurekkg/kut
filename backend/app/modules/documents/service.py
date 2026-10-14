@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import re
@@ -301,7 +302,7 @@ def _registry(principal: Principal) -> Select[Any]:
     )
 
 
-def _filtered(statement: Select[Any], filters: RegistryFilters) -> Select[Any]:
+def _filtered(statement: Select[Any], filters: RegistryFilters, *, internal: bool) -> Select[Any]:
     if filters.project_id is not None:
         statement = statement.where(Document.project_id == filters.project_id)
     if filters.kind is not None:
@@ -315,8 +316,10 @@ def _filtered(statement: Select[Any], filters: RegistryFilters) -> Select[Any]:
     if filters.date_to is not None:
         statement = statement.where(_local_date() <= filters.date_to)
     if filters.q:
+        # Внешним регистрационный номер не выдан (колоночный грант портала): ищут по названию.
+        column = Document.registration_no if internal else Document.title
         pattern = filters.q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        statement = statement.where(Document.registration_no.ilike(f"%{pattern}%", escape="\\"))
+        statement = statement.where(column.ilike(f"%{pattern}%", escape="\\"))
     if filters.equipment_unit_id is not None:
         linked = select(DocumentLink.document_id).where(
             DocumentLink.equipment_unit_id == filters.equipment_unit_id
@@ -336,7 +339,7 @@ async def list_documents(
     if filters.equipment_unit_id is not None and not principal.is_internal:
         # Связи документов внешним не отдаются (ADR часть 2 раздел 7.5): фильтр по технике - пусто.
         return []
-    statement = _filtered(_registry(principal), filters)
+    statement = _filtered(_registry(principal), filters, internal=principal.is_internal)
     rows = (
         await session.execute(
             statement.order_by(Document.created_at.desc(), Document.id).limit(limit).offset(offset)
@@ -391,10 +394,35 @@ async def list_events(session: AsyncSession, document_id: uuid.UUID) -> list[Eve
     return [EventOut.model_validate(row._asdict()) for row in reversed(rows)]
 
 
+# Символы, которые XLSX не принимает: openpyxl на них бросает IllegalCharacterError (выгрузка 500).
+ILLEGAL_XLSX = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
 def _cell(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
-        return f"'{value}"
+    if isinstance(value, str):
+        value = ILLEGAL_XLSX.sub("", value)
+        if value.startswith(FORMULA_PREFIXES):
+            return f"'{value}"
     return value
+
+
+def _workbook(headers: list[str], table: list[list[Any]], with_amount: bool) -> bytes:
+    """Сборка книги синхронная и тяжёлая: вызывается в потоке, не в цикле событий."""
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Документы"
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    sheet.freeze_panes = "A2"
+    for values in table:
+        sheet.append(values)
+    if with_amount:
+        for (cell,) in sheet.iter_rows(min_row=2, min_col=len(headers), max_col=len(headers)):
+            cell.number_format = "#,##0.00"
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
 
 
 async def export_xlsx(
@@ -403,7 +431,7 @@ async def export_xlsx(
     """Выгрузка реестра: те же фильтры и выборка, что у реестра. Сумма - только с правом
     documents:read:financial: без него колонки нет в файле."""
     statement = (
-        _filtered(_registry(principal), filters)
+        _filtered(_registry(principal), filters, internal=principal.is_internal)
         .order_by(Document.created_at.desc(), Document.id)
         .limit(EXPORT_MAX_ROWS + 1)
     )
@@ -412,14 +440,8 @@ async def export_xlsx(
         raise _unprocessable("document.export_too_large")
     documents = await _assemble(session, principal, rows)
     with_amount = principal.has(Module.DOCUMENTS, Action.READ, "financial")
-    book = Workbook()
-    sheet = book.active
-    sheet.title = "Документы"
     headers = [*XLSX_HEADERS, *(["Сумма"] if with_amount else [])]
-    sheet.append(headers)
-    for cell in sheet[1]:
-        cell.font = Font(bold=True)
-    sheet.freeze_panes = "A2"
+    table: list[list[Any]] = []
     for row, document in zip(rows, documents, strict=True):
         values: list[Any] = [
             document.registration_no,
@@ -432,12 +454,8 @@ async def export_xlsx(
         ]
         if with_amount:
             values.append(float(document.amount) if document.amount is not None else None)
-        sheet.append([_cell(value) for value in values])
-        if with_amount:
-            sheet.cell(row=sheet.max_row, column=len(headers)).number_format = "#,##0.00"
-    buffer = io.BytesIO()
-    book.save(buffer)
-    return buffer.getvalue()
+        table.append([_cell(value) for value in values])
+    return await asyncio.to_thread(_workbook, headers, table, with_amount)
 
 
 async def create_document(

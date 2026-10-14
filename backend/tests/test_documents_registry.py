@@ -3,6 +3,7 @@
 
 from collections.abc import AsyncIterator
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -149,3 +150,21 @@ async def test_the_author_of_a_version_is_named_for_internal_users(
     assert uploaded.json()["author_name"] == name
     detail = await api.get(f"{API}/documents/{doc['id']}", headers=desk.heads["foreman"])
     assert detail.json()["versions"][0]["author_name"] == name
+
+
+async def test_the_customer_searches_his_documents_by_title(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "customer")
+    customer = auth_world.counterparties[devseed.CUSTOMER]
+    title = f"Поиск заказчика {uuid4().hex[:8]}"
+    approved = await create(
+        api, desk, "estimator", {"kind": "ks2", "counterparty_id": str(customer), "title": title}
+    )
+    uploaded = await upload(api, s3, approved["id"], desk.heads["estimator"], PDF_OK, PDF)
+    assert uploaded.status_code == 201, uploaded.text
+    approve(worker_sync_engine, uploaded.json()["id"])
+
+    found = await listing(api, desk.heads["customer"], project_id=str(desk.project), q=title[:12])
+
+    assert [item["id"] for item in found] == [approved["id"]]

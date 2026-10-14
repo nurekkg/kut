@@ -211,3 +211,24 @@ async def test_the_export_takes_the_registry_filters(
     numbers = [item[0] for item in rows]
     assert draft["registration_no"] in numbers
     assert approved["registration_no"] not in numbers
+
+
+async def test_control_characters_in_a_title_do_not_break_the_file(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "accountant")
+    doc = await make(
+        api,
+        desk,
+        "estimator",
+        {"kind": "estimate_local", "title": "Акт\x0bКС-2"},
+        s3,
+        worker_sync_engine,
+    )
+
+    response = await export(api, desk.heads["accountant"], project_id=str(desk.project))
+
+    assert response.status_code == 200, response.text
+    _, rows = rows_of(response)
+    titles = {item[0]: item[2] for item in rows}
+    assert titles[doc["registration_no"]] == "АктКС-2"
