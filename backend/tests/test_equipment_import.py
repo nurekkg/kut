@@ -1,6 +1,7 @@
 """Импорт реестра техники: проверка по строкам, всё или ничего, повтор (ADR-014 часть 3 §9)."""
 
 import io
+import os
 import time
 import uuid
 import zipfile
@@ -133,25 +134,34 @@ async def test_a_file_over_the_row_limit_is_refused_before_any_write(
 async def test_five_thousand_rows_are_checked_and_loaded_within_the_recorded_time(
     api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine
 ) -> None:
+    """5000 строк: проверка и фиксация. Порог 3 с - только в CI (CI=true), локально информативно.
+
+    Единицы теста с уникальным префиксом мягко удаляются в любом исходе."""
     head = await headers_for(api, "equipment_head")
     prefix = f"BULK{uuid.uuid4().hex[:6].upper()}"
     data = body([good_row(prefix, index) for index in range(5000)])
-    started = time.perf_counter()
-    checked = await check(api, head, data)
-    check_seconds = time.perf_counter() - started
-    assert checked.status_code == 200 and checked.json()["status"] == "checked"
-    assert checked.json()["created"] == 5000
-    started = time.perf_counter()
-    loaded = await commit(api, head, data)
-    commit_seconds = time.perf_counter() - started
-    assert loaded.status_code == 201, loaded.text[:300]
-    print(f"\nimport 5000 rows: check {check_seconds:.2f}s, commit {commit_seconds:.2f}s")
-    assert commit_seconds <= 3.0, f"фиксация 5000 строк {commit_seconds:.2f} с больше 3 с"
-    async with worker_engine.begin() as connection:
-        await connection.execute(
-            text("UPDATE equipment_unit SET deleted_at = now() WHERE registry_key LIKE :pattern"),
-            {"pattern": f"{prefix}%"},
-        )
+    try:
+        started = time.perf_counter()
+        checked = await check(api, head, data)
+        check_seconds = time.perf_counter() - started
+        assert checked.status_code == 200 and checked.json()["status"] == "checked"
+        assert checked.json()["created"] == 5000
+        started = time.perf_counter()
+        loaded = await commit(api, head, data)
+        commit_seconds = time.perf_counter() - started
+        assert loaded.status_code == 201, loaded.text[:300]
+        print(f"\nimport 5000 rows: check {check_seconds:.2f}s, commit {commit_seconds:.2f}s")
+        if os.environ.get("CI") == "true":
+            assert commit_seconds <= 3.0, f"фиксация 5000 строк {commit_seconds:.2f} с больше 3 с"
+    finally:
+        async with worker_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE equipment_unit SET deleted_at = now()"
+                    " WHERE registry_key LIKE :pattern AND deleted_at IS NULL"
+                ),
+                {"pattern": f"{prefix}%"},
+            )
 
 
 async def test_a_workbook_with_macros_is_refused(api: AsyncClient, auth_world: AuthWorld) -> None:

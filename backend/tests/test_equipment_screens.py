@@ -12,7 +12,7 @@ from httpx import AsyncClient
 
 from app.modules.equipment.service import bishkek_today
 from tests.auth_support import AuthWorld
-from tests.equipment_support import API, east, headers_for, idem, new_unit
+from tests.equipment_support import API, east, headers_for, idem, new_type, new_unit, type_id
 
 
 def on(offset: int) -> str:
@@ -140,8 +140,10 @@ async def test_the_check_names_the_reason_and_writes_nothing(
 async def test_the_calendar_shows_maintenance_and_documents_that_expire_in_the_window(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
+    """Календарь фильтруется по собственному типу теста: число единиц в базе и limit не влияют."""
     head = await headers_for(api, "equipment_head")
-    unit = await new_unit(api, head, auth_world)
+    code = await new_type(api, head)
+    unit = await new_unit(api, head, auth_world, code=code)
     maintenance = await api.post(
         f"{API}/maintenance",
         json={
@@ -164,9 +166,15 @@ async def test_the_calendar_shows_maintenance_and_documents_that_expire_in_the_w
     calendar = await api.get(
         f"{API}/calendar",
         headers=head,
-        params={"date_from": on(-4), "date_to": on(10), "limit": 1000},
+        params={
+            "date_from": on(-4),
+            "date_to": on(10),
+            "limit": 1000,
+            "type_id": await type_id(api, head, code),
+        },
     )
     assert calendar.status_code == 200, calendar.text
+    assert [item["id"] for item in calendar.json()["units"]] == [unit["id"]]
     row = next(item for item in calendar.json()["units"] if item["id"] == unit["id"])
     assert [item["title"] for item in row["maintenance"]] == ["ТО-250"]
     assert [(item["kind"], item["valid_until"]) for item in row["warnings"]] == [
