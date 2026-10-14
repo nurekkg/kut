@@ -206,6 +206,18 @@ async def get_shift(session: AsyncSession, shift_id: uuid.UUID) -> ShiftOut:
     return shift_out(row, lines[row.id], labels.get(row.equipment_unit_id))
 
 
+# Лист, который вызывающий может подтвердить: то же правило, что гард переходов в БД (право
+# approve:shift или активный делегат на дату листа), но не свой лист и не лист, где он сам оператор.
+APPROVABLE_SHIFT = """
+    equipment_shift.created_by IS DISTINCT FROM app.user_id()
+    AND NOT EXISTS (
+        SELECT 1 FROM public.equipment_operator o
+        WHERE o.id = equipment_shift.operator_id AND o.user_id = app.user_id())
+    AND (app.has_permission('equipment', 'approve', 'shift')
+         OR app.equipment_delegated(equipment_shift.project_id, equipment_shift.work_date))
+"""
+
+
 async def list_shifts(
     session: AsyncSession,
     *,
@@ -216,8 +228,11 @@ async def list_shifts(
     date_to: date | None,
     limit: int,
     offset: int,
+    approvable: bool = False,
 ) -> list[ShiftOut]:
     query = select(EquipmentShift).where(EquipmentShift.deleted_at.is_(None))
+    if approvable:
+        query = query.where(text(APPROVABLE_SHIFT))
     if project_id is not None:
         query = query.where(EquipmentShift.project_id == project_id)
     if unit_id is not None:

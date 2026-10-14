@@ -142,6 +142,8 @@ export type ShiftScope = {
   unitId?: string;
   dateFrom?: string;
   dateTo?: string;
+  // Только листы, которые вызывающий может подтвердить (счётчик «На согласовании»).
+  approvable?: boolean;
 };
 
 export function shiftsKey(scope: ShiftScope) {
@@ -153,6 +155,7 @@ export function shiftsKey(scope: ShiftScope) {
     scope.unitId ?? "",
     scope.dateFrom ?? "",
     scope.dateTo ?? "",
+    scope.approvable ? "approvable" : "",
   ] as const;
 }
 
@@ -169,6 +172,7 @@ export function useShifts(scope: ShiftScope, enabled = true) {
             unit_id: scope.unitId,
             date_from: scope.dateFrom,
             date_to: scope.dateTo,
+            approvable: scope.approvable ? true : undefined,
             limit: PAGE,
             offset,
           }),
