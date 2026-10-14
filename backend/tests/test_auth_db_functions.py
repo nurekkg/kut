@@ -493,10 +493,8 @@ async def test_user_policy_internal_roles_see_themselves_and_users_sharing_a_pro
             row[0]
             for row in connection.execute(
                 text(
-                    "SELECT upa.user_id FROM user_project_access upa"
-                    ' JOIN "user" u ON u.id = upa.user_id'
-                    " WHERE upa.project_id = :p AND upa.deleted_at IS NULL"
-                    " AND u.deleted_at IS NULL"
+                    "SELECT user_id FROM user_project_access"
+                    " WHERE project_id = :p AND deleted_at IS NULL"
                 ),
                 {"p": east},
             ).all()
