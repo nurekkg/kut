@@ -56,6 +56,51 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     # Номер и контрагент договора после активации: сообщение триггера forbid_column_change.
     "contract.counterparty_id is immutable": (409, "equipment.contract_frozen"),
     "contract.number is immutable": (409, "equipment.contract_frozen"),
+    # Путевые листы (SE-2a, ADR-014 часть 1 §3 и §4): переходы, права, суточный лимит, тарифы.
+    "shift.forbidden": (403, "forbidden"),
+    "shift.transition_forbidden": (409, "equipment.shift_transition_forbidden"),
+    "shift.locked": (409, "equipment.shift_locked"),
+    "shift.not_found": (404, "not_found"),
+    "shift.date_in_future": (422, "equipment.shift_date_in_future"),
+    "shift.unit_invalid": (422, "equipment.unit_invalid"),
+    "shift.operator_invalid": (422, "equipment.operator_invalid"),
+    "shift.assignment_invalid": (422, "equipment.assignment_invalid"),
+    "shift.line_invalid": (422, "equipment.shift_line_invalid"),
+    "shift.day_hours_exceeded": (422, "equipment.day_hours_exceeded"),
+    "shift.quantity_missing": (422, "equipment.shift_quantity_missing"),
+    "shift.lines_mismatch": (422, "equipment.shift_lines_mismatch"),
+    "shift.rate_missing": (422, "equipment.rate_missing"),
+    "shift.rate_ambiguous": (422, "equipment.rate_ambiguous"),
+    "shift.rate_unit_invalid": (422, "equipment.rate_unit_invalid"),
+    # ГСМ, ремонт и журнал затрат.
+    "fuel.forbidden": (403, "forbidden"),
+    "fuel.not_found": (404, "not_found"),
+    "fuel.unit_invalid": (422, "equipment.unit_invalid"),
+    "fuel.date_in_future": (422, "equipment.shift_date_in_future"),
+    "fuel.reason_required": (422, "equipment.reason_required"),
+    "delegate.not_eligible": (422, "equipment.delegate_not_eligible"),
+    "maintenance.forbidden": (403, "forbidden"),
+    "maintenance.not_found": (404, "not_found"),
+    "maintenance.transition_forbidden": (409, "equipment.transition_forbidden"),
+    "maintenance.close_forbidden": (409, "equipment.maintenance_close_forbidden"),
+    "maintenance.amount_required": (422, "equipment.repair_amount_required"),
+    "maintenance.amount_invalid": (422, "equipment.amount_invalid"),
+    "maintenance.project_invalid": (422, "equipment.project_invalid"),
+    "cost_entry.immutable": (409, "equipment.cost_immutable"),
+    # SE-2b: тариф по уровню, ГСМ в листе, версии листа, объект в определителях, делегаты, удаление.
+    "rate.target_invalid": (422, "equipment.rate_target_invalid"),
+    "rate.level_conflict": (422, "equipment.rate_level_conflict"),
+    "shift.posting_forbidden": (403, "forbidden"),
+    "shift.approver_is_operator": (403, "equipment.approver_is_operator"),
+    "fuel.shift_bound": (409, "equipment.fuel_shift_bound"),
+    "fuel.shift_invalid": (422, "equipment.shift_invalid"),
+    "delegate.forbidden": (403, "forbidden"),
+    "delegate.in_past": (422, "equipment.delegate_in_past"),
+    "project.has_shifts": (409, "project_has_shifts"),
+    # Решения PO 2026-10-13: тариф с проводками, чек заправки, накладная без объекта, ремонт в done.
+    "rate.has_postings": (409, "equipment.rate_has_postings"),
+    "receipt.locked": (409, "equipment.receipt_locked"),
+    "receipt.invalid": (422, "equipment.receipt_invalid"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -86,7 +131,9 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "uq_contract_legal_entity_id_kind_number": (409, "equipment.contract_number_taken"),
     "uq_equipment_unit_legal_entity_id_registry_key": (409, "equipment.unit_key_taken"),
     "uq_equipment_own_rate_version": (409, "equipment.rate_version_exists"),
-    "uq_equipment_rate_version": (409, "equipment.rate_version_exists"),
+    "uq_equipment_rate_level_version": (409, "equipment.rate_version_exists"),
+    "ck_equipment_rate_one_level": (422, "equipment.rate_target_invalid"),
+    "ck_equipment_rate_valid_to_not_before_from": (422, "equipment.rate_period_invalid"),
     "uq_equipment_operator_user_id": (409, "equipment.operator_user_taken"),
     "uq_equipment_document_equipment_unit_id_kind_version": (
         409,
@@ -119,6 +166,49 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "fk_equipment_unit_contract_id_contract": (422, "equipment.contract_invalid"),
     "fk_equipment_assignment_operator_id_equipment_operator": (422, "equipment.operator_invalid"),
     "fk_equipment_maintenance_project_id_project": (422, "equipment.project_invalid"),
+    # Путевые листы, ГСМ, делегаты и журнал затрат (SE-2a).
+    "uq_equipment_shift_key": (409, "equipment.shift_key_taken"),
+    "uq_cost_entry_source_line": (409, "equipment.posting_conflict"),
+    "uq_cost_entry_reversal_of_id": (409, "equipment.posting_conflict"),
+    "ck_equipment_shift_hours_in_day": (422, "equipment.hours_invalid"),
+    "ck_equipment_shift_line_hours_in_day": (422, "equipment.hours_invalid"),
+    "ck_equipment_shift_reject_reason_required": (422, "equipment.reason_required"),
+    "ck_equipment_shift_downtime_valid": (422, "equipment.downtime_invalid"),
+    "ck_equipment_shift_downtime_reason_required": (422, "equipment.downtime_reason_required"),
+    "ck_equipment_shift_odometer_valid": (422, "equipment.odometer_invalid"),
+    "ck_equipment_shift_dates_in_range": (422, "equipment.dates_out_of_range"),
+    "ck_equipment_shift_trips_not_negative": (422, "equipment.quantity_invalid"),
+    "ck_equipment_shift_tonnes_not_negative": (422, "equipment.quantity_invalid"),
+    "ck_equipment_shift_line_trips_not_negative": (422, "equipment.quantity_invalid"),
+    "ck_equipment_shift_line_tonnes_not_negative": (422, "equipment.quantity_invalid"),
+    "ck_equipment_shift_confirmed_fields": (409, "equipment.shift_transition_forbidden"),
+    "ck_equipment_shift_confirmer_is_not_author": (409, "equipment.shift_transition_forbidden"),
+    "ck_equipment_fuel_amount_not_negative": (422, "equipment.amount_invalid"),
+    "ck_equipment_fuel_liters_not_negative": (422, "equipment.quantity_invalid"),
+    "ck_equipment_fuel_dates_in_range": (422, "equipment.dates_out_of_range"),
+    "ck_equipment_fuel_reversal_complete": (422, "equipment.fuel_invalid"),
+    "ck_equipment_fuel_reverse_reason_not_blank": (422, "equipment.reason_required"),
+    "ck_equipment_delegate_dates_ordered": (422, "equipment.dates_invalid"),
+    "ck_equipment_delegate_dates_in_range": (422, "equipment.dates_out_of_range"),
+    "ck_equipment_delegate_reason_not_blank": (422, "equipment.reason_required"),
+    "ck_equipment_delegate_revocation_complete": (422, "equipment.delegate_invalid"),
+    "fk_equipment_shift_project_id_project": (422, "equipment.project_invalid"),
+    "fk_equipment_shift_equipment_unit_id_equipment_unit": (422, "equipment.unit_invalid"),
+    "fk_equipment_shift_assignment_id_equipment_assignment": (422, "equipment.assignment_invalid"),
+    "fk_equipment_shift_operator_id_equipment_operator": (422, "equipment.operator_invalid"),
+    "fk_equipment_shift_line_project_id_equipment_shift": (422, "equipment.shift_invalid"),
+    "fk_equipment_shift_line_project_id_project_node": (422, "equipment.node_invalid"),
+    "fk_equipment_shift_line_project_id_schedule_item": (422, "equipment.schedule_item_invalid"),
+    "fk_equipment_fuel_project_id_project": (422, "equipment.project_invalid"),
+    "fk_equipment_fuel_equipment_unit_id_equipment_unit": (422, "equipment.unit_invalid"),
+    "fk_equipment_delegate_project_id_project": (422, "equipment.project_invalid"),
+    "fk_equipment_delegate_delegate_user_id_user": (422, "equipment.user_invalid"),
+    # ГСМ в листе: чек (пара ключ и тип), сторно у заправки в листе, объект заправки и листа.
+    "ck_equipment_fuel_receipt_pair": (422, "equipment.receipt_invalid"),
+    "ck_equipment_fuel_receipt_key_not_blank": (422, "equipment.receipt_invalid"),
+    "ck_equipment_fuel_shift_not_reversed": (409, "equipment.fuel_shift_bound"),
+    "ck_equipment_fuel_shift_has_project": (422, "equipment.shift_invalid"),
+    "fk_equipment_fuel_project_id_shift_id_equipment_shift": (422, "equipment.shift_invalid"),
 }
 
 
@@ -131,6 +221,9 @@ def rule_error(error: DBAPIError) -> HTTPException | None:
     if message in TRIGGER_RULES:
         status, code = TRIGGER_RULES[message]
         return HTTPException(status, code)
+    if message.startswith("new row violates row-level security policy"):
+        # Строка не проходит политику записи: отказ права (роль или чужой объект), не сбой сервера.
+        return HTTPException(403, "forbidden")
     constraint = getattr(diag, "constraint_name", None) or ""
     if constraint in CONSTRAINT_RULES:
         status, code = CONSTRAINT_RULES[constraint]

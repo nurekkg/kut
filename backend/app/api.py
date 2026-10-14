@@ -4,6 +4,7 @@ from app.modules.actuals.router import router as actuals_router
 from app.modules.auth.router import router as auth_router
 from app.modules.dashboards.router import router as dashboards_router
 from app.modules.equipment.router import router as equipment_router
+from app.modules.equipment.shift_router import router as shift_router
 from app.modules.photos.router import router as photos_router
 from app.modules.projects.router import router as projects_router
 from app.modules.readiness.router import router as readiness_router
@@ -24,3 +25,4 @@ api_v1_router.include_router(dashboards_router)
 api_v1_router.include_router(settings_router)
 api_v1_router.include_router(works_router)
 api_v1_router.include_router(equipment_router)
+api_v1_router.include_router(shift_router)

@@ -25,7 +25,7 @@ const ROW_HEIGHT = 44;
 const HEADER_HEIGHT = 40;
 const OWNERSHIP = ["own", "rented"] as const;
 
-// Реестр техники: строки видны по RLS (прораб - своих объектов, машинист - своих единиц). Денег в
+// Реестр техники: строки видны по RLS в пределах юрлица (реестр, ТО и документы); машинист видит только свои единицы. Денег в
 // реестре нет: тарифы и договоры живут в карточке и разделе договоров, за правом read:rates.
 export function RegistryView() {
   const t = useTranslations("Equipment.registry");

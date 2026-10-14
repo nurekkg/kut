@@ -129,8 +129,11 @@ class MaintenanceCreate(_Strict):
 
 
 class MaintenancePatch(_Strict):
+    """Закрытие (done) принимает сумму: она уходит в журнал затрат, в ответе её нет."""
+
     status: MaintenanceTarget
     project_id: uuid.UUID | None = None
+    amount: Money | None = None
 
 
 # --- нормативы, договоры, тарифы, машинисты ----------------------------------------------------
@@ -187,21 +190,35 @@ class ContractOut(BaseModel):
 
 
 class RateCreate(_Strict):
+    """Тариф договора. Привязка к единице или типу необязательна: без неё - тариф договора."""
+
     unit: UnitName
     with_operator: bool
     amount: Money
     min_quantity: MinQuantity | None = None
     valid_from: date
+    valid_to: date | None = None
+    equipment_unit_id: uuid.UUID | None = None
+    equipment_type_id: uuid.UUID | None = None
+
+
+class RatePatch(_Strict):
+    """Окончание тарифа: дата или null (без окончания). Поле обязательно."""
+
+    valid_to: date | None
 
 
 class RateOut(BaseModel):
     id: uuid.UUID
     contract_id: uuid.UUID
+    equipment_unit_id: uuid.UUID | None
+    equipment_type_id: uuid.UUID | None
     unit: str
     with_operator: bool
     amount: Decimal
     min_quantity: Decimal | None
     valid_from: date
+    valid_to: date | None
 
 
 class CounterpartyRef(BaseModel):

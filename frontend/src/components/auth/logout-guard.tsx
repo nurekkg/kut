@@ -9,6 +9,12 @@ import { useAuth } from "@/components/auth/auth-provider";
 import { Modal } from "@/components/settings/dialogs";
 import { Button } from "@/components/ui/button";
 import { countUnsent, detach, discardAll, flush } from "@/lib/field/outbox";
+import {
+  countUnsentShifts,
+  detachShiftQueue,
+  discardShifts,
+  flushShifts,
+} from "@/lib/equipment/field/queue";
 
 type Stage =
   | { kind: "closed" }
@@ -30,17 +36,21 @@ export function useLogout(): { request: () => Promise<void>; leaving: boolean; d
   const finish = useCallback(async () => {
     setLeaving(true);
     try {
-      if (userId) await discardAll(userId); // очистка очереди: после выхода на устройстве её быть не должно
+      if (userId) {
+        await discardAll(userId); // очистка очереди: после выхода на устройстве её быть не должно
+        await discardShifts(userId); // очередь техники (машинист) - та же проверка
+      }
       await signOut();
     } finally {
       detach();
+      detachShiftQueue();
       router.replace("/login");
     }
   }, [userId, signOut, router]);
 
   const request = useCallback(async () => {
     if (!userId) return;
-    const count = await countUnsent(userId);
+    const count = (await countUnsent(userId)) + (await countUnsentShifts(userId));
     if (count === 0) await finish();
     else setStage({ kind: "ask", count });
   }, [userId, finish]);
@@ -48,7 +58,9 @@ export function useLogout(): { request: () => Promise<void>; leaving: boolean; d
   async function sendNow() {
     if (!userId || stage.kind === "closed") return;
     setStage({ kind: "sending", count: stage.count });
-    const left = await flush(userId);
+    const fieldLeft = await flush(userId);
+    const shiftsLeft = await flushShifts(userId);
+    const left = fieldLeft + shiftsLeft;
     if (left === 0) await finish();
     else setStage({ kind: "left", count: left });
   }

@@ -158,7 +158,7 @@ def test_the_seed_covers_every_role_two_subcontractors_and_two_projects(
     assert roles == set(auth_world.roles)  # по пользователю на каждую из 13 ролей
     assert subs == 2 and sub_users == 2
     assert len(auth_world.projects) == 2
-    assert len(devseed.USERS) == 17 and len({user.login for user in devseed.USERS}) == 17
+    assert len(devseed.USERS) == 18 and len({user.login for user in devseed.USERS}) == 18
 
 
 def test_totp_is_seeded_for_owner_and_finance_director_but_not_the_accountant() -> None:

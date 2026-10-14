@@ -1,42 +1,27 @@
 """Роли, области видимости и граница денег модуля «Техника» (ADR-014 часть 2 §5)."""
 
-from uuid import UUID
-
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import text
 
-from app.core.context import RequestContext, use_context
-from app.core.db import get_sessionmaker
 from app.modules.auth import devseed
 from tests.auth_support import AuthWorld
-from tests.equipment_support import API, assign, day, east, headers_for, idem, new_unit, west
-
-
-def context(
-    auth_world: AuthWorld, who: str, projects: tuple[UUID, ...], entities: tuple[UUID, ...]
-) -> RequestContext:
-    return RequestContext(
-        user_id=auth_world.users[who],
-        is_internal=True,
-        project_ids=frozenset(projects),
-        legal_entity_ids=frozenset(entities),
-        counterparty_id=None,
-        request_id=None,
-        sees_all_users=False,
-    )
-
+from tests.equipment_support import (
+    API,
+    assign,
+    context,
+    day,
+    east,
+    headers_for,
+    idem,
+    new_unit,
+    rows,
+    west,
+)
 
 AUDIT_MONEY = (
     "SELECT count(*) FROM audit_log"
     " WHERE table_name IN ('equipment_own_rate', 'equipment_rate', 'contract')"
 )
-
-
-async def rows(sql: str, ctx: RequestContext) -> list[tuple[object, ...]]:
-    with use_context(ctx):
-        async with get_sessionmaker()() as session:
-            return [tuple(row) for row in await session.execute(text(sql))]
 
 
 async def test_the_foreman_gets_no_money_from_the_api(
@@ -220,7 +205,9 @@ async def test_the_mechanic_closes_a_repair_writes_a_document_and_sees_no_money(
     )
     assert started.status_code == 200, started.text
     closed = await api.patch(
-        f"{API}/maintenance/{maintenance}", json={"status": "done"}, headers=mechanic
+        f"{API}/maintenance/{maintenance}",
+        json={"status": "done", "amount": "1500.00"},
+        headers=mechanic,
     )
     assert closed.status_code == 200, closed.text
     assert closed.json()["done_at"] is not None

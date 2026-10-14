@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
 import { ApprovalCard } from "@/components/approvals/approval-card";
+import { EquipmentApprovals } from "@/components/approvals/equipment-approvals";
 import { RejectDialog } from "@/components/approvals/reject-dialog";
 import { PhotoLightbox } from "@/components/field/photo-lightbox";
 import { AppNav } from "@/components/projects/app-nav";
@@ -51,6 +52,16 @@ export function ApprovalsView() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const canApprove = user?.permissions.includes("work_actual:approve") ?? false;
+  // Техника: листы видят ведущие, подтверждают с правом approve:shift, правят после согласования.
+  const permissions = user?.permissions ?? [];
+  const canEquip = permissions.some(
+    (code) =>
+      code === "equipment:approve:shift" ||
+      code === "equipment:write:after_approval" ||
+      code === "equipment:write:shift",
+  );
+  const canEquipApprove = permissions.includes("equipment:approve:shift");
+  const canEquipEdit = permissions.includes("equipment:write:after_approval");
   const queue = useApprovalQueue(canApprove);
   const tally = approvalTotal(queue.perProject, APPROVAL_LIMIT);
   const message = useErrorMessage();
@@ -158,12 +169,13 @@ export function ApprovalsView() {
       <UserMenu />
       <AppNav />
       <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
-      {!canApprove ? (
+      {!canApprove && !canEquip ? (
         <div role="alert" className="space-y-1 rounded-xl border p-4" data-testid="approvals-forbidden">
           <p className="font-medium">{t("forbiddenTitle")}</p>
           <p className="text-sm text-muted-foreground">{t("forbiddenText")}</p>
         </div>
-      ) : (
+      ) : null}
+      {canApprove ? (
         <QueryState
           loading={queue.pending}
           error={queue.error}
@@ -255,7 +267,10 @@ export function ApprovalsView() {
             </>
           )}
         </QueryState>
-      )}
+      ) : null}
+      {canEquip && user ? (
+        <EquipmentApprovals userId={user.id} canApprove={canEquipApprove} canEdit={canEquipEdit} />
+      ) : null}
 
       {rejecting ? (
         <RejectDialog

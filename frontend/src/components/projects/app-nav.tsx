@@ -7,14 +7,18 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth/auth-provider";
 import { APPROVAL_LIMIT, useApprovalQueue } from "@/lib/approvals";
 import { approvalTotal } from "@/lib/approvals-count";
+import { useShifts } from "@/lib/equipment/shifts";
 import { cn } from "@/lib/utils";
 
 // Счётчик «на согласовании»: сумма очередей по всем видимым объектам. Те же запросы, что у очереди
 // (общий кэш), обновление раз в минуту. «N+» - только если хотя бы один объект упёрся в лимит выборки.
-function ApprovalsCount() {
+function ApprovalsCount({ equipment }: { equipment: boolean }) {
   const t = useTranslations("AppNav");
   const { perProject } = useApprovalQueue(true);
-  const { total, capped } = approvalTotal(perProject, APPROVAL_LIMIT);
+  // Листы техники, которые этот пользователь может подтвердить (сервер отдаёт только его объекты).
+  const shifts = useShifts({ status: "submitted" }, equipment);
+  const { total: facts, capped } = approvalTotal(perProject, APPROVAL_LIMIT);
+  const total = facts + (equipment ? (shifts.data?.length ?? 0) : 0);
   if (total === 0) return null;
   return (
     <span
@@ -36,6 +40,8 @@ export function AppNav() {
   const pathname = usePathname();
   const { user } = useAuth();
   const can = (permission: string) => user?.permissions.includes(permission) ?? false;
+  const equipmentApprover = can("equipment:approve:shift") || can("equipment:write:after_approval");
+  const equipmentListed = equipmentApprover || can("equipment:write:shift");
   const items = [
     { href: "/projects", label: t("projects"), show: can("objects:read"), counter: false },
     { href: "/dashboard", label: dash("nav"), show: user?.scope === "group" && can("objects:read"), counter: false },
@@ -43,12 +49,14 @@ export function AppNav() {
     {
       href: "/approvals",
       label: t("approvals"),
-      show: can("work_actual:approve"),
+      // Очередь читает список объектов (objects:read): без него раздела нет, счётчик не запрашивает /projects.
+      show: can("objects:read") && (can("work_actual:approve") || equipmentListed),
       counter: true,
     },
     { href: "/m", label: t("field"), show: can("work_actual:write"), counter: false },
     { href: "/equipment", label: t("equipment"), show: can("equipment:read") && user?.role !== "machinist", counter: false },
     { href: "/equipment/my", label: t("equipmentMy"), show: user?.role === "machinist", counter: false },
+    { href: "/m/equipment", label: t("equipmentField"), show: user?.role === "machinist", counter: false },
   ].filter((item) => item.show);
   if (items.length < 2) return null;
   return (
@@ -68,7 +76,7 @@ export function AppNav() {
             )}
           >
             {item.label}
-            {item.counter ? <ApprovalsCount /> : null}
+            {item.counter ? <ApprovalsCount equipment={equipmentListed} /> : null}
           </Link>
         );
       })}

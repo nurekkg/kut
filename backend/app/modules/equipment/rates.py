@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -22,6 +23,7 @@ from app.modules.equipment.schemas import (
     OwnRateOut,
     RateCreate,
     RateOut,
+    RatePatch,
 )
 from app.modules.equipment.service import not_found, transition_forbidden
 from app.modules.org.models import Counterparty
@@ -62,11 +64,14 @@ def rate_out(row: EquipmentRate) -> RateOut:
     return RateOut(
         id=row.id,
         contract_id=row.contract_id,
+        equipment_unit_id=row.equipment_unit_id,
+        equipment_type_id=row.equipment_type_id,
         unit=row.unit,
         with_operator=row.with_operator,
         amount=row.amount,
         min_quantity=row.min_quantity,
         valid_from=row.valid_from,
+        valid_to=row.valid_to,
     )
 
 
@@ -196,6 +201,41 @@ async def add_rate(session: AsyncSession, contract_id: uuid.UUID, data: RateCrea
         session.add(row)
         await session.flush()
     return rate_out(row)
+
+
+async def _rate(session: AsyncSession, contract_id: uuid.UUID, rate_id: uuid.UUID) -> EquipmentRate:
+    row = await session.scalar(
+        select(EquipmentRate).where(
+            EquipmentRate.id == rate_id,
+            EquipmentRate.contract_id == contract_id,
+            EquipmentRate.deleted_at.is_(None),
+        )
+    )
+    if row is None:
+        raise not_found()
+    return row
+
+
+async def patch_rate(
+    session: AsyncSession, contract_id: uuid.UUID, rate_id: uuid.UUID, data: RatePatch
+) -> RateOut:
+    """Окончание тарифа: выбор по дате работы его больше не берёт. Правка - при любых проводках."""
+    row = await _rate(session, contract_id, rate_id)
+    row.valid_to = data.valid_to
+    async with db_rules(session):
+        await session.flush()
+        await session.commit()
+    await session.refresh(row)
+    return rate_out(row)
+
+
+async def delete_rate(session: AsyncSession, contract_id: uuid.UUID, rate_id: uuid.UUID) -> None:
+    """Мягкое удаление тарифа. С проводками (rate.has_postings, 409) - отказ БД."""
+    row = await _rate(session, contract_id, rate_id)
+    row.deleted_at = datetime.now(UTC)
+    async with db_rules(session):
+        await session.flush()
+        await session.commit()
 
 
 # --- машинисты -----------------------------------------------------------------------------------
