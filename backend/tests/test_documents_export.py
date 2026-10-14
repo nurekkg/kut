@@ -22,6 +22,7 @@ from tests.documents_support import (
     Desk,
     approve,
     create_document,
+    leave_no_access_behind,  # noqa: F401
     open_desk,
     upload,
 )

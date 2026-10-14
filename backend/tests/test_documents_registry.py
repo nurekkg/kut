@@ -12,7 +12,16 @@ from sqlalchemy.engine import Engine
 
 from app.modules.auth import devseed
 from tests.auth_support import AuthWorld
-from tests.documents_support import PDF, PDF_OK, Desk, approve, create_document, open_desk, upload
+from tests.documents_support import (
+    PDF,
+    PDF_OK,
+    Desk,
+    approve,
+    create_document,
+    leave_no_access_behind,  # noqa: F401
+    open_desk,
+    upload,
+)
 
 API = "/api/v1"
 
