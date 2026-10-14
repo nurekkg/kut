@@ -1,5 +1,6 @@
 import uuid
-from typing import Annotated
+from datetime import date
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from app.modules.documents.schemas import (
     DocumentDetail,
     DocumentOut,
     DownloadOut,
+    EventOut,
     KindOut,
     PresignOut,
     PresignRequest,
@@ -28,6 +30,9 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 Db = Annotated[AsyncSession, Depends(get_db)]
 # Чтение доступно и внешним ролям: их видимость задаёт БД (ADR-015 часть 2 раздел 7).
 Reader = Annotated[Principal, Depends(require(Module.DOCUMENTS, Action.READ))]
+# Журнал статусов и выгрузка - только внутренние роли.
+Viewer = Annotated[Principal, Depends(internal_only(require(Module.DOCUMENTS, Action.READ)))]
+Exporter = Annotated[Principal, Depends(internal_only(require(Module.DOCUMENTS, Action.EXPORT)))]
 # Запись и архив - только внутренние роли.
 Writer = Annotated[Principal, Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE)))]
 FinancialWriter = Annotated[
@@ -38,11 +43,39 @@ Archiver = Annotated[
     Principal,
     Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="archive"))),
 ]
+VersionStatus = Literal["draft", "on_approval", "approved", "signed", "archived"]
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _no_store(response: Response) -> None:
     """Подписанные ссылки живут недолго: ответы с ними не должны оседать в кэше браузера."""
     response.headers["Cache-Control"] = "no-store"
+
+
+def registry_filters(
+    project_id: uuid.UUID | None = None,
+    kind: Annotated[str | None, Query(max_length=32)] = None,
+    status: VersionStatus | None = None,
+    counterparty_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    q: Annotated[str | None, Query(max_length=64)] = None,
+    equipment_unit_id: uuid.UUID | None = None,
+) -> service.RegistryFilters:
+    """Фильтры реестра и выгрузки: один набор параметров на оба маршрута."""
+    return service.RegistryFilters(
+        project_id=project_id,
+        kind=kind,
+        status=status,
+        counterparty_id=counterparty_id,
+        date_from=date_from,
+        date_to=date_to,
+        q=(q or "").strip() or None,
+        equipment_unit_id=equipment_unit_id,
+    )
+
+
+Filters = Annotated[service.RegistryFilters, Depends(registry_filters)]
 
 
 @router.get("/kinds", response_model=list[KindOut])
@@ -69,13 +102,24 @@ MAX_OFFSET = 1_000_000  # выше значения БД даёт ошибку 5
 async def list_documents(
     session: Db,
     principal: Reader,
-    project_id: uuid.UUID | None = None,
-    kind: Annotated[str | None, Query(max_length=32)] = None,
+    filters: Filters,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
 ) -> list[DocumentOut]:
-    return await service.list_documents(
-        session, principal, project_id=project_id, kind=kind, limit=limit, offset=offset
+    return await service.list_documents(session, principal, filters, limit=limit, offset=offset)
+
+
+@router.get("/export.xlsx")
+async def export_documents(session: Db, principal: Exporter, filters: Filters) -> Response:
+    """Реестр в XLSX (право documents:export). Суммы - только с documents:read:financial."""
+    content = await service.export_xlsx(session, principal, filters)
+    return Response(
+        content=content,
+        media_type=XLSX,
+        headers={
+            "Content-Disposition": 'attachment; filename="documents.xlsx"',
+            "Cache-Control": "no-store",
+        },
     )
 
 
@@ -105,6 +149,14 @@ async def create_document(
 @router.get("/{document_id}", response_model=DocumentDetail)
 async def get_document(document_id: uuid.UUID, session: Db, principal: Reader) -> DocumentDetail:
     return await service.get_document(session, principal, document_id)
+
+
+@router.get("/{document_id}/events", response_model=list[EventOut])
+async def document_events(
+    document_id: uuid.UUID, session: Db, _principal: Viewer
+) -> list[EventOut]:
+    """Журнал переходов статуса по версиям документа (только внутренним)."""
+    return await service.list_events(session, document_id)
 
 
 @router.put("/{document_id}/amount", status_code=status.HTTP_204_NO_CONTENT)

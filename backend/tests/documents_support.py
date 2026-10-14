@@ -6,6 +6,7 @@ import hashlib
 import io
 import zipfile
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,7 +17,7 @@ from sqlalchemy.engine import Engine
 
 from tests.auth_support import AuthWorld
 from tests.equipment_support import grant as _grant
-from tests.equipment_support import idem, second_project
+from tests.equipment_support import headers_for, idem, second_project
 
 API = "/api/v1"
 
@@ -148,6 +149,24 @@ def give_access(engine: Engine, users: list[UUID], projects: tuple[UUID, ...], l
 
 def user_id(auth_world: AuthWorld, who: str) -> UUID:
     return auth_world.users[who]
+
+
+@dataclass
+class Desk:
+    """Юрлицо, объект и заголовки входа одного теста (для реестра, выгрузки и техники)."""
+
+    legal: UUID
+    project: UUID
+    heads: dict[str, dict[str, str]] = field(default_factory=dict)
+
+
+async def open_desk(api: AsyncClient, auth_world: AuthWorld, engine: Engine, *who: str) -> Desk:
+    legal, _ = legal_entity(engine)
+    desk = Desk(legal=legal, project=project(engine, legal))
+    for name in who:
+        give_access(engine, [auth_world.users[name]], (desk.project,), legal)
+        desk.heads[name] = await headers_for(api, name)
+    return desk
 
 
 async def create_document(

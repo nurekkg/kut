@@ -276,3 +276,8 @@ extra:
   - {role: lawyer, permission: "documents:read:financial"}
   - {role: estimator, permission: "documents:read:financial"}
   - {role: owner, permission: "documents:write:archive"}
+  # Выгрузка реестра в XLSX (S5b): суммы в файле - только при documents:read:financial (сервер).
+  - {role: owner, permission: "documents:export"}
+  - {role: finance_director, permission: "documents:export"}
+  - {role: accountant, permission: "documents:export"}
+  - {role: lawyer, permission: "documents:export"}

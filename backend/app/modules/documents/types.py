@@ -104,3 +104,38 @@ MAX_FILE_BYTES: Final = 30 * 1024 * 1024
 
 VERSION_STATUSES: Final = ("draft", "on_approval", "approved", "signed", "archived")
 VISIBLE_TO_EXTERNAL: Final = ("approved", "signed")
+
+# Подписи для выгрузки XLSX (экран берёт свои из messages/ru.json).
+KIND_TITLES: Final[dict[str, str]] = {
+    "contract_customer": "Договор с заказчиком",
+    "contract_subcontract": "Договор субподряда",
+    "contract_supply": "Договор поставки",
+    "contract_rental": "Договор аренды техники",
+    "addendum": "Дополнительное соглашение",
+    "estimate_local": "Локальная смета",
+    "estimate_summary": "Сводная смета",
+    "ks2": "Акт КС-2",
+    "ks3": "Справка КС-3",
+    "ks6": "Журнал КС-6",
+    "hidden_works_act": "Акт скрытых работ",
+    "ird": "Исполнительная документация",
+    "waybill_torg12": "Накладная ТОРГ-12",
+    "waybill_m15": "Накладная М-15",
+    "waybill_internal": "Внутреннее перемещение",
+    "invoice_esf": "Счёт-фактура (ЭСФ)",
+    "m7_act": "Акт М-7",
+    "material_request": "Заявка на материалы",
+    "commissioning_act": "Акт ввода в эксплуатацию",
+    "equipment_passport": "Паспорт техники",
+    "equipment_technical_inspection": "Техосмотр",
+    "equipment_insurance": "Страхование техники",
+    "equipment_permit": "Разрешение",
+    "equipment_other": "Прочий документ техники",
+}
+STATUS_TITLES: Final[dict[str, str]] = {
+    "draft": "Черновик",
+    "on_approval": "На согласовании",
+    "approved": "Утверждён",
+    "signed": "Подписан",
+    "archived": "В архиве",
+}

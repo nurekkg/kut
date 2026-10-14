@@ -217,6 +217,10 @@ ADR_DOCUMENT_GRANTS = {
     ("lawyer", "documents", "read", "financial"),
     ("estimator", "documents", "read", "financial"),
     ("owner", "documents", "write", "archive"),
+    ("owner", "documents", "export", None),
+    ("finance_director", "documents", "export", None),
+    ("accountant", "documents", "export", None),
+    ("lawyer", "documents", "export", None),
 }
 
 
@@ -231,7 +235,7 @@ async def test_qualified_rights_are_exactly_the_documented_ones(
             ("technical_director", "materials", "approve", "limit_override"),
         }
         | {grant for grant in ADR_EQUIPMENT_GRANTS if grant[3] is not None}
-        | ADR_DOCUMENT_GRANTS
+        | {grant for grant in ADR_DOCUMENT_GRANTS if grant[3] is not None}
     )
 
 

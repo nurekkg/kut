@@ -62,6 +62,17 @@ class VersionOut(BaseModel):
     created_at: datetime
     comment: str | None = None
     checksum_sha256: str | None = None
+    author_name: str | None = None
+
+
+class EventOut(BaseModel):
+    id: uuid.UUID
+    version_no: int
+    from_status: str | None
+    to_status: str
+    comment: str | None
+    actor_name: str | None
+    created_at: datetime
 
 
 class DocumentOut(BaseModel):
@@ -79,6 +90,10 @@ class DocumentOut(BaseModel):
     contract_id: uuid.UUID | None = None
     archived_at: datetime | None = None
     current_version: VersionOut | None = None
+    # Последняя видимая версия (не обязательно утверждённая): для колонки реестра.
+    latest_version_no: int | None = None
+    latest_status: str | None = None
+    counterparty_name: str | None = None
     amount: Decimal | None = None
     links: list[LinkOut] = Field(default_factory=list)
 

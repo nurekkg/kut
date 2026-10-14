@@ -342,6 +342,10 @@ class EquipmentDocument(BusinessBase):
     number: Mapped[str]
     valid_until: Mapped[date]
     version: Mapped[int] = mapped_column(Integer)
+    # Связь с документом S5a (ADR-015 часть 3, Q8): вид и привязку к единице проверяет сервис.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("document.id"), default=None, index=True
+    )
 
     __table_args__ = (
         UniqueConstraint(
