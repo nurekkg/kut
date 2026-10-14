@@ -228,15 +228,12 @@ async def test_qualified_rights_are_exactly_the_documented_ones(
     owner_engine: AsyncEngine,
 ) -> None:
     qualified = {grant for grant in await db_grants(owner_engine) if grant[3] is not None}
-    assert (
-        qualified
-        == {
-            ("technical_director", "work_actual", "write", "after_approval"),
-            ("technical_director", "materials", "approve", "limit_override"),
-        }
-        | {grant for grant in ADR_EQUIPMENT_GRANTS if grant[3] is not None}
-        | {grant for grant in ADR_DOCUMENT_GRANTS if grant[3] is not None}
-    )
+    assert qualified == {
+        ("technical_director", "work_actual", "write", "after_approval"),
+        ("technical_director", "materials", "approve", "limit_override"),
+    } | {grant for grant in ADR_EQUIPMENT_GRANTS if grant[3] is not None} | {
+        grant for grant in ADR_DOCUMENT_GRANTS if grant[3] is not None
+    }
 
 
 async def test_external_roles_are_read_only(owner_engine: AsyncEngine) -> None:
