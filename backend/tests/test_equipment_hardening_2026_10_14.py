@@ -109,6 +109,8 @@ async def test_the_approvals_count_lists_only_the_sheets_the_user_can_confirm(
                 project_id=project,
                 work_date=today,
                 operator_id=operator_id,
+                # Лимит 24 ч в сутки на единицу: четыре листа по 5 ч.
+                hours="5",
             ),
         )
         assert created.status_code == 201, created.text
@@ -144,12 +146,27 @@ async def test_the_approvals_count_lists_only_the_sheets_the_user_can_confirm(
         ),
     )
 
+    # Оператор - учётка делегата: лист мастера с таким оператором делегат подтвердить не может.
+    linked = await api.post(
+        f"{API}/operators",
+        json={
+            "legal_entity_id": str(le_east(auth_world)),
+            "full_name": "Оператор-делегат",
+            "employment": "staff",
+            "user_id": str(delegate_id),
+        },
+        headers={**head, **idem()},
+    )
+    assert linked.status_code == 201, linked.text
+    by_master_for_delegate = await submitted_sheet(master, linked.json()["id"])
+
     # Мастер без делегирования не подтверждает ничего: ни своих, ни чужих листов.
     assert await approvable(master) == set()
     # Прораб подтверждает листы других, свой не считает.
     foreman_sheets = await approvable(foreman)
     assert by_master in foreman_sheets and by_delegate in foreman_sheets
     assert by_foreman not in foreman_sheets
+    assert by_master_for_delegate in foreman_sheets  # лист мастера: прораб подтверждает
 
     # Делегат до назначения не подтверждает; после назначения - листы объекта, кроме своих.
     assert await approvable(delegate) == set()
@@ -168,6 +185,7 @@ async def test_the_approvals_count_lists_only_the_sheets_the_user_can_confirm(
     delegated = await approvable(delegate)
     assert {by_foreman, by_master} <= delegated
     assert by_delegate not in delegated
+    assert by_master_for_delegate not in delegated  # делегат не подтверждает лист, где он оператор
     revoked = await api.post(f"{API}/delegates/{created.json()['id']}/revoke", headers=foreman)
     assert revoked.status_code == 200, revoked.text
     assert await approvable(delegate) == set()
