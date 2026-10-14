@@ -26,6 +26,8 @@ dependencies = [
 dev = [
     "pytest>=9",
     "pytest-asyncio>=1.4",
+    # Случайный порядок тестов (урок se2-hardening): CI печатает seed, им воспроизводится сбой.
+    "pytest-randomly>=3.16",
     "httpx>=0.28",
     "ruff>=0.16",
     "mypy>=2.3",
