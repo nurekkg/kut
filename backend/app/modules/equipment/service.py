@@ -346,6 +346,11 @@ async def add_document(
 ) -> DocumentOut:
     """Новая версия строкой: старые не меняются и не удаляются (ТЗ §2.2)."""
     unit = await _unit(session, unit_id)
+    # Блокировка строки техники: параллельные добавления ждут друг друга, поэтому номер версии
+    # идёт без пропусков и не сталкивается с уникальным индексом (F2, ADR-015 часть 3 раздел 13).
+    await session.execute(
+        select(EquipmentUnit.id).where(EquipmentUnit.id == unit_id).with_for_update()
+    )
     last_version = await session.scalar(
         select(func.coalesce(func.max(EquipmentDocument.version), 0)).where(
             EquipmentDocument.equipment_unit_id == unit_id,

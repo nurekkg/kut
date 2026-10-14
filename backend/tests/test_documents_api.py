@@ -6,7 +6,7 @@ import datetime
 import hashlib
 import zlib
 from collections.abc import AsyncIterator
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -238,7 +238,7 @@ async def test_the_same_idempotency_key_returns_the_same_document(
     legal, _code, identifier, heads = await _setup(
         api, auth_world, worker_sync_engine, ("estimator",)
     )
-    headers = {**heads["estimator"], "Idempotency-Key": "8f1d1c6e-5a7e-4f7c-9f11-1d7c0e6f2a10"}
+    headers = {**heads["estimator"], "Idempotency-Key": str(uuid4())}
     body = {
         "kind": "estimate_summary",
         "legal_entity_id": str(legal),
