@@ -16,7 +16,7 @@ import { documentErrorKey } from "../../frontend/src/lib/documents/errors";
 import { formatAmount, formatDay, parseAmount } from "../../frontend/src/lib/documents/format";
 import { equipmentDocumentKind } from "../../frontend/src/lib/documents/equipment-kinds";
 import { creatableKinds, isKindCode } from "../../frontend/src/lib/documents/kinds";
-import type { KindOut } from "../../frontend/src/lib/documents/types";
+import type { KindOut, VersionOut } from "../../frontend/src/lib/documents/types";
 import {
   contentTypeOf,
   isRetryable,
@@ -63,6 +63,11 @@ test("ссылка на файл финансового вида только с
   expect(canDownload({ financial: true }, ["documents:read:financial"])).toBe(true);
   expect(canDownload({ financial: false }, [])).toBe(true);
   expect(canReadFinancial(["documents:read:financial"])).toBe(true);
+});
+
+test("внешним ссылку на финансовый файл отдаёт сервер по их видимости, внутреннему - по праву", () => {
+  expect(canDownload({ financial: true }, [], false)).toBe(true);
+  expect(canDownload({ financial: true }, [], true)).toBe(false);
 });
 
 test("суммы: внутреннему без documents:read:financial не показываем, внешнему - то, что отдал сервер", () => {
@@ -189,7 +194,11 @@ test("код вида: известный принимается, произво
 });
 
 // Версии: ссылка presign и ключ идемпотентности переживают сбой, поэтому повтор не удваивает версию.
-function fakeTransport(puts: ("stored" | "exists" | "expired")[], confirmFailures = 0) {
+function fakeTransport(
+  puts: ("stored" | "exists" | "expired")[],
+  confirmFailures = 0,
+  found: VersionOut | null = null,
+) {
   const log: string[] = [];
   const presignBodies: unknown[] = [];
   const confirmKeys: string[] = [];
@@ -213,6 +222,10 @@ function fakeTransport(puts: ("stored" | "exists" | "expired")[], confirmFailure
       const result = puts[putIndex] ?? "stored";
       putIndex += 1;
       return result;
+    },
+    find: async () => {
+      log.push("find");
+      return found;
     },
     confirm: async (body, idempotencyKey) => {
       log.push("confirm");
@@ -267,6 +280,27 @@ test("истёкшая ссылка (403) перевыпускается оди�
   await uploadVersion(work, fake.transport, { comment: null });
   expect(fake.presignBodies).toHaveLength(2);
   expect(fake.confirmBodies[0]?.key).toBe("doc/2.pdf");
+});
+
+test("истёкшая ссылка после сбоя confirm: версия находится по контрольной сумме, дубля нет", async () => {
+  const work = await prepareUpload(new File(["abc"], "a.pdf"), "key-F");
+  const found: VersionOut = {
+    id: "v-found",
+    document_id: "d1",
+    version_no: 1,
+    status: "draft",
+    content_type: "application/pdf",
+    size_bytes: 3,
+    created_at: "2026-10-15T00:00:00Z",
+    comment: null,
+    checksum_sha256: null,
+    author_name: null,
+  };
+  const fake = fakeTransport(["stored"], 1, found);
+  await expect(uploadVersion(work, fake.transport, { comment: null, now: () => 0 })).rejects.toThrow("network");
+  const version = await uploadVersion(work, fake.transport, { comment: null, now: () => 10_000_000 });
+  expect(version.id).toBe("v-found");
+  expect(fake.log).toEqual(["presign", "put", "confirm", "find"]);
 });
 
 test("если и вторая ссылка истекла, версия не подтверждается", async () => {

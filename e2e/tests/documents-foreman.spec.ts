@@ -39,9 +39,9 @@ test("прораб: суммы нет в DOM, скачивания файла ф
   await expect(page.getByTestId("document-amount")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText(AMOUNT);
 
+  // Сид утверждает версии видов КС-2, договоров и других финансовых видов (не сметы): берём любой такой документ.
   const approved = (await get<DocumentRow[]>(request, techdir, "/api/v1/documents", {
     project_id: east.id,
-    kind: "estimate_local",
     limit: 50,
   })).find((row) => row.financial && row.current_version !== null);
   expect(approved, "в демо-данных нет утверждённой финансовой версии").toBeDefined();

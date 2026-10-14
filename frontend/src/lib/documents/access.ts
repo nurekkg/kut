@@ -20,10 +20,15 @@ export function canReadFinancial(permissions: readonly string[]): boolean {
   return permissions.includes("documents:read:financial");
 }
 
-// Файл финансового вида несёт суммы и условия: ссылку на него получает только право documents:read:financial
-// (DoD ADR-015, часть 3, раздел 12: прораб не получает ссылку на файл финансового вида).
-export function canDownload(doc: { financial: boolean }, permissions: readonly string[]): boolean {
-  return !doc.financial || canReadFinancial(permissions);
+// Файл финансового вида несёт суммы и условия: внутреннему читателю ссылку даёт только documents:read:financial
+// (DoD ADR-015, часть 3, раздел 12). Внешним ссылку выдаёт сервер по их видимости (Q4): заказчик видит свои
+// утверждённые документы с суммами и файлами.
+export function canDownload(
+  doc: { financial: boolean },
+  permissions: readonly string[],
+  internal = true,
+): boolean {
+  return !internal || !doc.financial || canReadFinancial(permissions);
 }
 
 // Контрагенты берутся из справочника техники: его видят те же роли, что и форму договора.

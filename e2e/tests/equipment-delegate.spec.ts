@@ -71,11 +71,15 @@ test("делегат подтверждает в период; прораб-оп
   await submitShift(request, secondForeman, own.id);
   const ownPage = await newPageFor(browser);
   await openApprovals(ownPage, "foreman2");
-  await shiftRow(ownPage, day.unitSecond).getByTestId("shift-confirm").click();
-  await expect(shiftRow(ownPage, day.unitSecond)).toContainText("Этот переход статуса листа недоступен", {
-    timeout: 40_000,
+  // S5a, решение F1: в очереди согласований только подтверждаемые листы. Свой лист прораб-оператор там не видит,
+  // поэтому кнопки подтверждения нет; отказ сервера проверяем запросом, без экрана.
+  await expect(ownPage.getByTestId("equipment-approvals")).toBeVisible({ timeout: 40_000 });
+  await expect(shiftRow(ownPage, day.unitSecond)).toHaveCount(0);
+  await shot(ownPage, "approvals-own-sheet-hidden");
+  const refused = await request.post(`/api/v1/equipment/shifts/${own.id}/confirm`, {
+    headers: { Authorization: `Bearer ${secondForeman.token}` },
   });
-  await shot(ownPage, "approvals-own-sheet-refused");
+  expect(refused.ok()).toBeFalsy();
 });
 
 // Идентификатор пользователя из токена входа (поле sub).

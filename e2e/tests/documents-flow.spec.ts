@@ -45,9 +45,10 @@ test("документ: создать, загрузить версию, ска�
   await expect(page.getByTestId("document-version-row")).toHaveCount(1);
   await shot(page, "document-version-uploaded");
 
+  // Черновик не текущая версия: ссылку даёт кнопка в строке версии, а не блок текущей версии.
   const [link] = await Promise.all([
     page.waitForResponse((response) => /\/versions\/[0-9a-f-]{36}\/download-url$/.test(response.url())),
-    page.getByTestId("document-download").click(),
+    page.getByTestId("document-version-download").first().click(),
   ]);
   const { url, expires_in } = (await link.json()) as { url: string; expires_in: number };
   expect(expires_in).toBe(120);

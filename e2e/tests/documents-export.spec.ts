@@ -6,15 +6,16 @@ import { WEST_NAME, projectNamed } from "../helpers/equipment";
 import { desktopContext, signIn, watchErrors } from "../helpers/ui";
 import { readZip } from "../helpers/zip";
 
-// Сценарий 6 (DoD S5b, экспорт): бухгалтер (право documents:export и документы с суммами) скачивает
-// реестр XLSX; в общих строках файла есть заголовок суммы и регистрационный номер.
-test("бухгалтер: выгрузка реестра скачивается, в файле есть колонка суммы", async ({ browser, request }) => {
-  const accountant = await apiLogin(request, "accountant");
-  const west = await projectNamed(request, accountant, WEST_NAME);
+// Сценарий 6 (DoD S5b, экспорт): юрист (право documents:export и документы с суммами; бухгалтер и финдиректор
+// входят с 2FA, поэтому здесь не используются) скачивает реестр XLSX; в общих строках файла есть заголовок суммы
+// и регистрационный номер.
+test("юрист: выгрузка реестра скачивается, в файле есть колонка суммы", async ({ browser, request }) => {
+  const lawyer = await apiLogin(request, "lawyer");
+  const west = await projectNamed(request, lawyer, WEST_NAME);
   const desktop = await desktopContext(browser);
   const page = await desktop.newPage();
   const errors = watchErrors(page);
-  await signIn(page, "accountant");
+  await signIn(page, "lawyer");
 
   await page.goto(`/projects/${west.id}/documents`);
   await expect(page.getByTestId("documents-registry")).toBeVisible({ timeout: 40_000 });

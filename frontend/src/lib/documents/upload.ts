@@ -70,6 +70,8 @@ export type UploadWork = {
   checksum: string;
   idempotencyKey: string;
   presign: IssuedPresign | null;
+  // confirm уже уходил: ответ мог потеряться, версия могла записаться.
+  confirmSent: boolean;
 };
 
 export async function prepareUpload(file: File, idempotencyKey: string): Promise<UploadWork> {
@@ -78,7 +80,15 @@ export async function prepareUpload(file: File, idempotencyKey: string): Promise
   if (file.size === 0) throw new UploadError("empty");
   if (file.size > UPLOAD_MAX_BYTES) throw new UploadError("too_large");
   const checksum = await sha256Base64(file);
-  return { name: file.name, file, contentType, checksum, idempotencyKey, presign: null };
+  return {
+    name: file.name,
+    file,
+    contentType,
+    checksum,
+    idempotencyKey,
+    presign: null,
+    confirmSent: false,
+  };
 }
 
 // Результат PUT: "stored" - записано, "exists" - ключ уже записан прошлой попыткой (412, файл на месте),
@@ -118,6 +128,8 @@ export type VersionTransport = {
   presign: (body: PresignBody) => Promise<PresignOut>;
   confirm: (body: ConfirmBody, idempotencyKey: string) => Promise<VersionOut>;
   put: typeof putObject;
+  // Версия того же содержимого, уже записанная документом (по контрольной сумме SHA-256 в base64).
+  find: (checksum: string) => Promise<VersionOut | null>;
 };
 
 export type UploadOptions = {
@@ -132,6 +144,8 @@ function isUsable(presign: IssuedPresign | null, now: number): presign is Issued
 
 // presign -> PUT -> confirm. Повтор после сбоя берёт ту же ссылку и тот же ключ: PUT на уже записанный
 // ключ даёт 412, а confirm с тем же ключом вернёт прежний ответ. Истёкшая ссылка (403) - один новый круг.
+// Если confirm уже уходил и ссылка истекла, сначала ищем версию по контрольной сумме: ответ могли потерять,
+// и новая загрузка дала бы дубль версии.
 export async function uploadVersion(
   work: UploadWork,
   transport: VersionTransport,
@@ -141,6 +155,10 @@ export async function uploadVersion(
   let stored: IssuedPresign | null = null;
   for (let attempt = 0; attempt < 2 && stored === null; attempt += 1) {
     if (!isUsable(work.presign, now())) {
+      if (work.confirmSent) {
+        const existing = await transport.find(work.checksum);
+        if (existing !== null) return existing;
+      }
       const issued = await transport.presign({
         content_type: work.contentType,
         size_bytes: work.file.size,
@@ -154,5 +172,6 @@ export async function uploadVersion(
     else stored = current;
   }
   if (stored === null) throw new UploadError("not_uploaded");
+  work.confirmSent = true;
   return transport.confirm({ key: stored.key, comment: options.comment }, work.idempotencyKey);
 }

@@ -105,11 +105,21 @@ export const documentsApi = {
     api.get<DownloadOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/download-url`),
 };
 
+// Сервер отдаёт контрольную сумму версии в hex, у клиента она в base64 (как в ChecksumSHA256 ссылки).
+function base64ToHex(value: string): string {
+  return Array.from(atob(value), (char) => char.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+}
+
 export function versionTransport(documentId: string): VersionTransport {
   return {
     presign: (body) => api.post<PresignOut>(`${DOCUMENTS_API}/${documentId}/versions/presign`, body),
     confirm: (body, key) =>
       api.post<VersionOut>(`${DOCUMENTS_API}/${documentId}/versions/confirm`, body, key),
     put: putObject,
+    find: async (checksum) => {
+      const detail = await api.get<DocumentDetail>(`${DOCUMENTS_API}/${documentId}`);
+      const hex = base64ToHex(checksum);
+      return detail.versions.find((version) => version.checksum_sha256 === hex) ?? null;
+    },
   };
 }

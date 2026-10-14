@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import {
   canArchive,
+  canCreate,
   canDownload,
   canReadFinancial,
   canShowAmounts,
@@ -89,9 +90,11 @@ export function DocumentCard({ documentId }: { documentId: string }) {
   const d = doc.data;
   const canUpload = internal && d.archived_at === null && canUploadVersion(permissions);
   const canArchiveNow = internal && d.archived_at === null && canArchive(permissions);
-  const canSetAmount = internal && d.financial && d.archived_at === null && canReadFinancial(permissions);
+  // Сумму пишет API по documents:write (документ - по праву записи) и documents:read:financial.
+  const canSetAmount =
+    internal && d.financial && d.archived_at === null && canCreate(permissions) && canReadFinancial(permissions);
   const current = d.current_version;
-  const downloadable = canDownload(d, permissions);
+  const downloadable = canDownload(d, permissions, internal);
   const versions = [...d.versions].sort((a, b) => b.version_no - a.version_no);
   const legalName = legalEntities.data?.find((item) => item.id === d.legal_entity_id)?.name ?? "—";
 
