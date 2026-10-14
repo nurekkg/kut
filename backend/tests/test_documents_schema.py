@@ -150,16 +150,17 @@ async def test_the_number_counter_is_invisible_to_the_application(
         await rows("SELECT count(*) FROM document_number_counter", context)
 
 
-async def test_a_user_cannot_move_a_version_through_the_transition_function(
+async def test_the_application_cannot_move_a_version_through_the_transition_function(
     api: AsyncClient, worker_sync_engine: Engine, auth_world: AuthWorld, s3: httpx.AsyncClient
 ) -> None:
+    """Переход статуса - путь воркера: приложению EXECUTE не выдан, даже в системной сессии."""
     legal, _code, identifier, heads = await _setup(
         api, auth_world, worker_sync_engine, ("estimator",)
     )
     document_id = await _draft(api, heads["estimator"], legal, identifier)
     version_id = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
     context = in_context(auth_world.users["estimator"], (identifier,), (legal,))
-    with pytest.raises(DBAPIError, match=r"document\.transition_forbidden"):
+    with pytest.raises(DBAPIError, match="permission denied"):
         await rows(
             "SELECT app.document_version_transition(CAST(:v AS uuid), 'on_approval', NULL)",
             context,
@@ -167,7 +168,7 @@ async def test_a_user_cannot_move_a_version_through_the_transition_function(
         )
 
 
-async def test_the_system_path_follows_the_route_of_the_statuses(
+async def test_the_worker_path_follows_the_route_of_the_statuses(
     api: AsyncClient, worker_sync_engine: Engine, auth_world: AuthWorld, s3: httpx.AsyncClient
 ) -> None:
     legal, _code, identifier, heads = await _setup(
@@ -175,30 +176,27 @@ async def test_the_system_path_follows_the_route_of_the_statuses(
     )
     document_id = await _draft(api, heads["estimator"], legal, identifier)
     version_id = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
-    with system_context():
-        async with get_sessionmaker()() as session:
-            with pytest.raises(DBAPIError, match=r"document\.transition_invalid"):
-                await session.execute(
-                    text(
-                        "SELECT app.document_version_transition(CAST(:v AS uuid), 'approved', NULL)"
-                    ),
-                    {"v": version_id},
-                )
-            await session.rollback()
-    with system_context():
-        async with get_sessionmaker()() as session:
-            await session.execute(
-                text(
-                    "SELECT app.document_version_transition(CAST(:v AS uuid), 'on_approval', NULL)"
-                ),
-                {"v": version_id},
-            )
-            with pytest.raises(DBAPIError, match=r"document\.comment_required"):
-                await session.execute(
-                    text("SELECT app.document_version_transition(CAST(:v AS uuid), 'draft', ' ')"),
-                    {"v": version_id},
-                )
-            await session.rollback()
+    with (
+        pytest.raises(DBAPIError, match=r"document\.transition_invalid"),
+        worker_sync_engine.begin() as connection,
+    ):
+        connection.execute(
+            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'approved', NULL)"),
+            {"v": version_id},
+        )
+    with worker_sync_engine.begin() as connection:
+        connection.execute(
+            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'on_approval', NULL)"),
+            {"v": version_id},
+        )
+    with (
+        pytest.raises(DBAPIError, match=r"document\.comment_required"),
+        worker_sync_engine.begin() as connection,
+    ):
+        connection.execute(
+            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'draft', ' ')"),
+            {"v": version_id},
+        )
 
 
 async def test_a_new_approval_makes_the_version_current_and_archives_the_previous(
@@ -210,8 +208,8 @@ async def test_a_new_approval_makes_the_version_current_and_archives_the_previou
     document_id = await _draft(api, heads["estimator"], legal, identifier)
     first = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
     second = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
-    await approve(first)
-    await approve(second)
+    approve(worker_sync_engine, first)
+    approve(worker_sync_engine, second)
     with worker_sync_engine.connect() as connection:
         statuses = dict(
             connection.execute(

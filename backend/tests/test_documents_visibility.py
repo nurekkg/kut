@@ -95,7 +95,7 @@ class Office:
     async def publish(self, s3: httpx.AsyncClient, author: str, document_id: str) -> dict[str, Any]:
         response = await upload(self.api, s3, document_id, self.heads[author], PDF_OK, PDF)
         assert response.status_code == 201, response.text
-        await approve(response.json()["id"])
+        approve(self.engine, response.json()["id"])
         return response.json()
 
 
@@ -184,6 +184,8 @@ async def test_the_customer_sees_his_approved_contract_with_its_sum_and_nothing_
         {"kind": "contract_customer", "counterparty_id": str(customer), "amount": "5000000.00"},
     )
     published = await office.publish(s3, "estimator", ours["id"])
+    newer = await upload(api, s3, ours["id"], office.heads["estimator"], PDF_OK, PDF)
+    assert newer.status_code == 201, newer.text  # черновик второй версии утверждённого документа
     draft = await office.create(
         "estimator", {"kind": "contract_customer", "counterparty_id": str(customer)}
     )
@@ -207,6 +209,11 @@ async def test_the_customer_sees_his_approved_contract_with_its_sum_and_nothing_
         headers=office.heads["customer"],
     )
     assert link.status_code == 200, link.text
+    hidden = await api.get(
+        f"{API}/documents/{ours['id']}/versions/{newer.json()['id']}/download-url",
+        headers=office.heads["customer"],
+    )
+    assert hidden.status_code == 404, hidden.text  # черновик версии - заказчику не виден
     assert (await office.get("customer", draft["id"])).status_code == 404
     assert (await office.get("customer", internal_estimate["id"])).status_code == 404
     assert (await office.get("customer", subcontract_act["id"])).status_code == 404

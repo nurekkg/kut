@@ -4,6 +4,7 @@
 import asyncio
 import datetime
 import hashlib
+import zlib
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -397,3 +398,76 @@ async def test_an_equipment_passport_is_linked_to_its_unit_and_keeps_its_kind(
     assert response.status_code == 201, response.text
     assert response.json()["registration_no"].startswith("ПСП-")
     assert response.json()["links"] == [{"kind": "equipment_unit", "id": unit["id"]}]
+
+
+async def test_a_pdf_with_an_escaped_script_name_is_refused(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    """Имя /JavaScript записано с #xx: проверка видит раскодированное имя."""
+    legal, _code, identifier, heads = await _setup(
+        api, auth_world, worker_sync_engine, ("estimator",)
+    )
+    document_id = await _draft(api, heads["estimator"], legal, identifier)
+    escaped = b"%PDF-1.4\n1 0 obj << /OpenAction << /S /J#61vaScript >> >> endobj\n%%EOF\n"
+    refused = await upload(api, s3, document_id, heads["estimator"], escaped, PDF)
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == "document.active_content"
+
+
+async def test_a_script_inside_a_compressed_object_stream_is_refused(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    """Словарь скрипта сжат FlateDecode, как объектный поток: проверка смотрит распакованное."""
+    legal, _code, identifier, heads = await _setup(
+        api, auth_world, worker_sync_engine, ("estimator",)
+    )
+    document_id = await _draft(api, heads["estimator"], legal, identifier)
+    payload = zlib.compress(b"<< /Type /ObjStm /S /JavaScript /JS (app.alert(1)) >>")
+    header = b"%PDF-1.5\n1 0 obj << /Type /ObjStm /Filter /FlateDecode /Length "
+    pdf = header + str(len(payload)).encode() + b" >>\nstream\n" + payload
+    pdf += b"\nendstream\nendobj\n%%EOF\n"
+    refused = await upload(api, s3, document_id, heads["estimator"], pdf, PDF)
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == "document.active_content"
+
+
+async def test_an_ordinary_compressed_pdf_passes(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    legal, _code, identifier, heads = await _setup(
+        api, auth_world, worker_sync_engine, ("estimator",)
+    )
+    document_id = await _draft(api, heads["estimator"], legal, identifier)
+    payload = zlib.compress(b"BT /F1 12 Tf 72 712 Td (Akt No 1) Tj ET")
+    header = b"%PDF-1.5\n1 0 obj << /Filter /FlateDecode /Length "
+    pdf = header + str(len(payload)).encode() + b" >>\nstream\n" + payload
+    pdf += b"\nendstream\nendobj\n%%EOF\n"
+    accepted = await upload(api, s3, document_id, heads["estimator"], pdf, PDF)
+    assert accepted.status_code == 201, accepted.text
+
+
+async def test_the_office_macro_check_ignores_the_case_of_the_part_names(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    legal, _code, identifier, heads = await _setup(
+        api, auth_world, worker_sync_engine, ("estimator",)
+    )
+    document_id = await _draft(api, heads["estimator"], legal, identifier)
+    upper = zip_bytes(
+        {
+            "[Content_Types].xml": b"<Types/>",
+            "XL/WORKBOOK.XML": b"<workbook/>",
+            "XL/VBAPROJECT.BIN": b"macro",
+        }
+    )
+    refused = await upload(api, s3, document_id, heads["estimator"], upper, XLSX)
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == "document.macros_forbidden"
+    declared_type = (
+        b'<Types><Override ContentType="application/vnd.ms-excel.sheet.macroenabled.main+xml"/>'
+        b"</Types>"
+    )
+    declared = zip_bytes({"[Content_Types].xml": declared_type, "xl/workbook.xml": b"<workbook/>"})
+    refused_type = await upload(api, s3, document_id, heads["estimator"], declared, XLSX)
+    assert refused_type.status_code == 422
+    assert refused_type.json()["detail"] == "document.macros_forbidden"

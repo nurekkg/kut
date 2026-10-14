@@ -14,8 +14,6 @@ from httpx import AsyncClient, Response
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from app.core.context import system_context
-from app.core.db import get_sessionmaker
 from tests.auth_support import AuthWorld
 from tests.equipment_support import grant as _grant
 from tests.equipment_support import idem, second_project
@@ -192,13 +190,12 @@ async def upload(
     )
 
 
-async def approve(version_id: str) -> None:
-    """Утверждение без маршрута (маршруты - S6a): переход системной сессией, как у сида."""
-    with system_context():
-        async with get_sessionmaker()() as db:
-            for target in ("on_approval", "approved"):
-                await db.execute(
-                    text("SELECT app.document_version_transition(:v, :to, NULL)"),
-                    {"v": version_id, "to": target},
-                )
-            await db.commit()
+def approve(engine: Engine, version_id: str) -> None:
+    """Утверждение без маршрута (маршруты - S6a): переходы системной сессией воркера, как у сида.
+    Приложение (kut_app) переходов статуса не выполняет: у него нет EXECUTE на функцию."""
+    for target in ("on_approval", "approved"):
+        with engine.begin() as connection:
+            connection.execute(
+                text("SELECT app.document_version_transition(CAST(:v AS uuid), :to, NULL)"),
+                {"v": version_id, "to": target},
+            )

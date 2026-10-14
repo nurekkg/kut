@@ -1,13 +1,17 @@
 """Проверка содержимого загруженного файла при подтверждении (ADR-015 часть 2 раздел 8.4).
 
-Тип из HEAD сверяется с сигнатурой первых байтов; у OOXML проверяются состав архива и макросы;
-у PDF ищутся активные элементы (JavaScript, Launch, EmbeddedFile). Файл читается из S3 диапазонами
-или потоком: целиком в память не грузится.
+Тип из HEAD сверяется с сигнатурой первых байтов; у OOXML проверяются состав архива и макросы
+(регистр имён не важен); у PDF ищутся активные элементы (JavaScript, Launch, EmbeddedFile) в
+исходных байтах и в распакованных FlateDecode-потоках (объектные потоки сжаты). Это эвристика,
+не разбор PDF: потоки с другими фильтрами (LZW, ASCIIHex, ASCII85) и шифрованные PDF она не
+раскрывает; полный разбор или антивирус - до пилота (вопрос PO 6).
 """
 
 import asyncio
 import re
 import zipfile
+import zlib
+from collections.abc import Iterator
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, status
@@ -18,9 +22,13 @@ PDF = "application/pdf"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-# Токены, которые PDF не должен содержать: скрипт, запуск внешней программы, вложенный файл.
-_ACTIVE_PDF = re.compile(rb"/(JavaScript|JS(?![A-Za-z])|Launch|EmbeddedFile)")
-_OVERLAP = 64  # длиннее любого токена: токен, разрезанный границей кусков, всё равно найдётся
+# Токены, которых в PDF быть не должно: скрипт, запуск внешней программы, вложенный файл.
+_ACTIVE_PDF = re.compile(rb"/(JavaScript|JS(?![A-Za-z])|Launch|EmbeddedFile)", re.IGNORECASE)
+# PDF записывает имена с #xx (/J#61vaScript): раскодируем перед поиском.
+_HEX_ESCAPE = re.compile(rb"#([0-9A-Fa-f]{2})")
+_STREAM = re.compile(rb"stream\r?\n")
+# Распакованные потоки одного файла: сверх бюджета файл не проверить - значит, отказ.
+_INFLATE_BUDGET = 256 * 1024 * 1024
 _MAX_TABLE_BYTES = 1024 * 1024  # [Content_Types].xml не бывает большим; больше - подозрительно
 
 
@@ -45,32 +53,50 @@ def _signature_matches(head: bytes, content_type: str) -> bool:
 
 
 def _ooxml_check(key: str, size: int, content_type: str) -> None:
-    """Состав OOXML: нужная часть есть, макросов нет (ни в архиве, ни в объявленных типах)."""
+    """Состав OOXML: нужная часть есть, макросов нет. Имена частей OPC регистронезависимы."""
     try:
         archive = zipfile.ZipFile(storage.S3RangeFile(key, size))
     except zipfile.BadZipFile as error:
         raise _refuse("document.type_mismatch") from error
-    names = set(archive.namelist())
-    if any(name.endswith("vbaProject.bin") for name in names):
+    original = {name.lower(): name for name in archive.namelist()}
+    if any(name.endswith("vbaproject.bin") for name in original):
         raise _refuse("document.macros_forbidden")
     marker = "xl/workbook.xml" if content_type == XLSX else "word/document.xml"
-    if marker not in names or "[Content_Types].xml" not in names:
+    if marker not in original or "[content_types].xml" not in original:
         raise _refuse("document.type_mismatch")
-    table = archive.getinfo("[Content_Types].xml")
+    table = archive.getinfo(original["[content_types].xml"])
     if table.file_size > _MAX_TABLE_BYTES:
         raise _refuse("document.type_mismatch")
-    if b"macroEnabled" in archive.read("[Content_Types].xml"):
+    if b"macroenabled" in archive.read(original["[content_types].xml"]).lower():
         raise _refuse("document.macros_forbidden")
+
+
+def _names_unescaped(data: bytes) -> bytes:
+    return _HEX_ESCAPE.sub(lambda match: bytes([int(match.group(1), 16)]), data)
+
+
+def _inflated_streams(data: bytes) -> Iterator[bytes]:
+    """Распакованные FlateDecode-потоки. Не распаковывается - поток не FlateDecode, его пропускаем.
+    Если распакованное не помещается в бюджет файла, проверить его нельзя: отказ."""
+    view = memoryview(data)
+    budget = _INFLATE_BUDGET
+    for match in _STREAM.finditer(data):
+        decompressor = zlib.decompressobj()
+        try:
+            chunk = decompressor.decompress(view[match.end() :], budget + 1)
+        except zlib.error:
+            continue
+        if len(chunk) > budget:
+            raise _refuse("document.pdf_unreadable")
+        budget -= len(chunk)
+        yield chunk
 
 
 def _pdf_has_active_content(key: str) -> bool:
-    tail = b""
-    for chunk in storage.iter_object(key):
-        window = tail + chunk
-        if _ACTIVE_PDF.search(window):
-            return True
-        tail = window[-_OVERLAP:]
-    return False
+    data = b"".join(storage.iter_object(key))
+    if _ACTIVE_PDF.search(_names_unescaped(data)):
+        return True
+    return any(_ACTIVE_PDF.search(_names_unescaped(chunk)) for chunk in _inflated_streams(data))
 
 
 async def inspect(key: str, size: int, content_type: str) -> None:
