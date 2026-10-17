@@ -69,9 +69,9 @@ export function canEnterAmount(
   return internal && doc.financial && canSeeMoney(doc.kind, permissions);
 }
 
-// Контрагенты для выбора: справочник отдаёт внутренним с правом на документы (GET /documents/counterparties).
-export function canUseCounterparties(permissions: readonly string[]): boolean {
-  return permissions.includes("documents:read");
+// Контрагенты для выбора: справочник отдаёт только внутренним с правом на документы (GET /documents/counterparties).
+export function canUseCounterparties(permissions: readonly string[], internal = true): boolean {
+  return internal && permissions.includes("documents:read");
 }
 
 // Колонка суммы нужна, только если сервер отдал хоть одну сумму: без неё колонки в DOM нет.

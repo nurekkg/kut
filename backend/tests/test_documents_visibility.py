@@ -6,7 +6,7 @@
 
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -235,6 +235,21 @@ async def test_the_customer_sees_his_approved_contract_with_its_sum_and_nothing_
     assert seen["amount"] == "5000000.00"
     assert seen["registration_no"] is None and seen["legal_entity_id"] is None
     assert seen["legal_entity_name"] is None
+    # Связь документа есть, но заказчику её не отдают: внутренний видит её, заказчик - нет.
+    with worker_sync_engine.begin() as connection:
+        node = connection.scalar(
+            text(
+                "INSERT INTO project_node (project_id, legal_entity_id, type, name)"
+                " VALUES (:p, :le, 'building', :n) RETURNING id"
+            ),
+            {"p": office.project, "le": office.legal, "n": f"Узел связи {uuid4()}"},
+        )
+        connection.execute(
+            text("INSERT INTO document_link (document_id, project_node_id) VALUES (:d, :n)"),
+            {"d": ours["id"], "n": node},
+        )
+    internal_view = (await office.get("estimator", ours["id"])).json()
+    assert [item["kind"] for item in internal_view["links"]] == ["project_node"]
     assert seen["links"] == []
     assert [item["id"] for item in seen["versions"]] == [published["id"]]
     assert seen["versions"][0]["amount"] == "5000000.00"
@@ -283,6 +298,8 @@ async def test_a_subcontractor_sees_only_its_own_approved_documents(
         "estimator",
         {"kind": "waybill_torg12", "counterparty_id": str(office.counterparty(devseed.SUB_A))},
     )
+    # Накладная утверждена и принадлежит субподрядчику: 404 даёт правило вида, а не нет версии.
+    await office.publish(s3, "estimator", supply["id"])
     listed = {item["id"] for item in await office.listing("sub_a")}
     assert listed == {own["id"]}
     seen = (await office.get("sub_a", own["id"])).json()
@@ -375,16 +392,30 @@ async def test_the_audit_journal_shows_the_sum_only_to_the_documents_financial_r
             "amount": "3.00",
         },
     )
-    await office.publish(s3, "estimator", ks3["id"])
-    counted = "SELECT count(*) FROM audit_log WHERE table_name = 'document_version_amount'"
+    # Черновик с суммой и её правка: в журнале две строки - вставка и UPDATE (журнал пишет только
+    # изменённые колонки, поэтому право проверяет строка по row_id, а не по JSON).
+    uploaded = await upload(
+        api, s3, ks3["id"], office.heads["estimator"], PDF_OK, PDF, amount="3.00"
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    edited = await api.put(
+        f"{API}/documents/{ks3['id']}/versions/{uploaded.json()['id']}/amount",
+        json={"amount": "4.00"},
+        headers=office.heads["estimator"],
+    )
+    assert edited.status_code == 204, edited.text
+    counted = (
+        "SELECT count(*) FROM audit_log WHERE table_name = 'document_version_amount'"
+        " AND action = :action"
+    )
     assert await rows(
-        counted, in_context(office.users["foreman"], (office.project,), (office.legal,))
+        counted,
+        in_context(office.users["foreman"], (office.project,), (office.legal,)),
+        {"action": "update"},
     ) == [(0,)]
-    assert (
-        await rows(
-            counted, in_context(office.users["estimator"], (office.project,), (office.legal,))
-        )
-    )[0][0] >= 1
+    estimator = in_context(office.users["estimator"], (office.project,), (office.legal,))
+    assert await rows(counted, estimator, {"action": "insert"}) == [(1,)]
+    assert await rows(counted, estimator, {"action": "update"}) == [(1,)]
 
 
 async def test_the_portal_login_cannot_read_the_storage_key_the_comment_or_the_number(

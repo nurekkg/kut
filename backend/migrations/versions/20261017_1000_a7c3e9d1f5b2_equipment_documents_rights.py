@@ -75,7 +75,7 @@ CREATE FUNCTION app.document_kind_writable(p_kind text, p_project uuid, p_legal_
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
     SELECT COALESCE(app.is_internal() AND CASE
         WHEN app.document_kind_equipment(p_kind) THEN
-            p_legal_entity = ANY(app.legal_entity_ids())
+            p_project IS NULL AND p_legal_entity = ANY(app.legal_entity_ids())
             AND (app.has_permission('equipment', 'write', 'documents')
                  OR (p_kind = 'equipment_technical_inspection'
                      AND app.has_permission('equipment', 'write', 'maintenance')))
@@ -106,14 +106,14 @@ BEGIN
     IF app.is_internal() THEN
         IF app.document_kind_equipment(d.kind) THEN
             -- Документы техники: право техники и юрлицо; денежные виды видны и по тарифам (R3).
-            RETURN (app.has_permission('equipment', 'read', 'documents')
+            RETURN COALESCE((app.has_permission('equipment', 'read', 'documents')
                     OR (app.document_kind_money(d.kind)
                         AND app.has_permission('equipment', 'read', 'rates')))
-                AND d.project_id IS NULL AND d.legal_entity_id = ANY(app.legal_entity_ids());
+                AND d.project_id IS NULL AND d.legal_entity_id = ANY(app.legal_entity_ids()), false);
         END IF;
-        RETURN app.has_permission('documents', 'read') AND (
+        RETURN COALESCE(app.has_permission('documents', 'read') AND (
             d.project_id = ANY(app.project_ids())
-            OR (d.project_id IS NULL AND d.legal_entity_id = ANY(app.legal_entity_ids())));
+            OR (d.project_id IS NULL AND d.legal_entity_id = ANY(app.legal_entity_ids()))), false);
     END IF;
     IF NOT app.has_permission('documents', 'read') OR d.archived_at IS NOT NULL
        OR d.counterparty_id IS NULL OR d.counterparty_id IS DISTINCT FROM app.counterparty_id()
@@ -139,7 +139,7 @@ DECLARE
     d public.document;
 BEGIN
     SELECT * INTO v FROM public.document_version WHERE id = p_version;
-    IF NOT FOUND OR NOT app.document_allowed(v.document_id) THEN
+    IF NOT FOUND OR NOT COALESCE(app.document_allowed(v.document_id), false) THEN
         RETURN NULL;
     END IF;
     IF NOT app.is_internal() AND v.status NOT IN ('approved', 'signed') THEN
@@ -187,7 +187,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
         FROM public.document d WHERE d.id = p_document), false)
 $$
 """
-OLD_DOCUMENT_ALLOWED = f"""
+HARDENED_DOCUMENT_ALLOWED = f"""
 CREATE OR REPLACE FUNCTION app.document_allowed(p_document uuid) RETURNS boolean
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
@@ -198,9 +198,9 @@ BEGIN
         RETURN false;
     END IF;
     IF app.is_internal() THEN
-        RETURN app.has_permission('documents', 'read') AND (
+        RETURN COALESCE(app.has_permission('documents', 'read') AND (
             d.project_id = ANY(app.project_ids())
-            OR (d.project_id IS NULL AND d.legal_entity_id = ANY(app.legal_entity_ids())));
+            OR (d.project_id IS NULL AND d.legal_entity_id = ANY(app.legal_entity_ids()))), false);
     END IF;
     IF NOT app.has_permission('documents', 'read') OR d.archived_at IS NOT NULL
        OR d.counterparty_id IS NULL OR d.counterparty_id IS DISTINCT FROM app.counterparty_id()
@@ -218,9 +218,31 @@ BEGIN
         WHERE v.id = d.current_version_id AND v.status IN ('approved', 'signed'));
 END $$
 """
+
+HARDENED_STORAGE_KEY = """
+CREATE OR REPLACE FUNCTION app.document_version_storage_key(p_version uuid) RETURNS text
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE
+    v public.document_version;
+    d public.document;
+BEGIN
+    SELECT * INTO v FROM public.document_version WHERE id = p_version;
+    IF NOT FOUND OR NOT COALESCE(app.document_allowed(v.document_id), false) THEN
+        RETURN NULL;
+    END IF;
+    IF NOT app.is_internal() AND v.status NOT IN ('approved', 'signed') THEN
+        RETURN NULL;
+    END IF;
+    SELECT * INTO d FROM public.document WHERE id = v.document_id;
+    IF app.is_internal() AND d.financial AND NOT app.has_permission('documents', 'read', 'financial') THEN
+        RETURN NULL;
+    END IF;
+    RETURN v.s3_key;
+END $$
+"""
+
 OLD_NEXT_NUMBER = """
-CREATE OR REPLACE FUNCTION app.next_document_number(
-    p_legal_entity uuid, p_kind text, p_year integer)
+CREATE OR REPLACE FUNCTION app.next_document_number(p_legal_entity uuid, p_kind text, p_year integer)
 RETURNS integer
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
@@ -236,27 +258,6 @@ BEGIN
     ON CONFLICT (legal_entity_id, kind, year) DO UPDATE SET last_no = c.last_no + 1
     RETURNING c.last_no INTO v_no;
     RETURN v_no;
-END $$
-"""
-OLD_STORAGE_KEY = """
-CREATE OR REPLACE FUNCTION app.document_version_storage_key(p_version uuid) RETURNS text
-LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
-DECLARE
-    v public.document_version;
-    d public.document;
-BEGIN
-    SELECT * INTO v FROM public.document_version WHERE id = p_version;
-    IF NOT FOUND OR NOT app.document_allowed(v.document_id) THEN
-        RETURN NULL;
-    END IF;
-    IF NOT app.is_internal() AND v.status NOT IN ('approved', 'signed') THEN
-        RETURN NULL;
-    END IF;
-    SELECT * INTO d FROM public.document WHERE id = v.document_id;
-    IF app.is_internal() AND d.financial AND NOT app.has_permission('documents', 'read', 'financial') THEN
-        RETURN NULL;
-    END IF;
-    RETURN v.s3_key;
 END $$
 """
 
@@ -308,6 +309,12 @@ def upgrade() -> None:
         "CREATE POLICY document_select_app ON document FOR SELECT TO kut_app"
         f" USING ({DOCUMENT_SELECT_NEW})"
     )
+    op.execute("DROP POLICY document_update_app ON document")
+    op.execute(
+        "CREATE POLICY document_update_app ON document FOR UPDATE TO kut_app"
+        " USING (app.document_kind_writable(kind, project_id, legal_entity_id))"
+        " WITH CHECK (app.document_kind_writable(kind, project_id, legal_entity_id))"
+    )
 
     _set_financial("true", MONEY_KINDS, NEW_FINANCIAL)
 
@@ -324,11 +331,17 @@ def downgrade() -> None:
         "CREATE POLICY document_select_app ON document FOR SELECT TO kut_app"
         f" USING ({DOCUMENT_SELECT_OLD})"
     )
+    op.execute("DROP POLICY document_update_app ON document")
+    op.execute(
+        "CREATE POLICY document_update_app ON document FOR UPDATE TO kut_app"
+        " USING (app.document_scope_writable(project_id, legal_entity_id))"
+        " WITH CHECK (app.document_scope_writable(project_id, legal_entity_id))"
+    )
     # Функции принадлежат kut_auth: восстановление и удаление - от его имени.
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute(OLD_DOCUMENT_WRITABLE)
-    op.execute(OLD_DOCUMENT_ALLOWED)
-    op.execute(OLD_STORAGE_KEY)
+    op.execute(HARDENED_DOCUMENT_ALLOWED)
+    op.execute(HARDENED_STORAGE_KEY)
     op.execute(OLD_NEXT_NUMBER)
     op.execute("DROP FUNCTION IF EXISTS app.document_kind_writable(text, uuid, uuid)")
     op.execute("DROP FUNCTION IF EXISTS app.document_kind_money(text)")

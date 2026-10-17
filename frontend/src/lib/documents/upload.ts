@@ -70,8 +70,8 @@ export type UploadWork = {
   checksum: string;
   idempotencyKey: string;
   presign: IssuedPresign | null;
-  // confirm уже уходил: ответ мог потеряться, версия могла записаться.
-  confirmSent: boolean;
+  // Ключ объекта в хранилище после успешного PUT: повтор подтверждает именно его, новой загрузки не нужно.
+  storedKey: string | null;
 };
 
 export async function prepareUpload(file: File, idempotencyKey: string): Promise<UploadWork> {
@@ -87,7 +87,7 @@ export async function prepareUpload(file: File, idempotencyKey: string): Promise
     checksum,
     idempotencyKey,
     presign: null,
-    confirmSent: false,
+    storedKey: null,
   };
 }
 
@@ -128,8 +128,6 @@ export type VersionTransport = {
   presign: (body: PresignBody) => Promise<PresignOut>;
   confirm: (body: ConfirmBody, idempotencyKey: string) => Promise<VersionOut>;
   put: typeof putObject;
-  // Версия того же содержимого, уже записанная документом (по контрольной сумме SHA-256 в base64).
-  find: (checksum: string) => Promise<VersionOut | null>;
 };
 
 export type UploadOptions = {
@@ -144,23 +142,16 @@ function isUsable(presign: IssuedPresign | null, now: number): presign is Issued
   return presign !== null && now < presign.issuedAt + (presign.expires_in - PRESIGN_MARGIN_SECONDS) * 1000;
 }
 
-// presign -> PUT -> confirm. Повтор после сбоя берёт ту же ссылку и тот же ключ: PUT на уже записанный
-// ключ даёт 412, а confirm с тем же ключом вернёт прежний ответ. Истёкшая ссылка (403) - один новый круг.
-// Если confirm уже уходил и ссылка истекла, сначала ищем версию по контрольной сумме: ответ могли потерять,
-// и новая загрузка дала бы дубль версии.
-export async function uploadVersion(
+// Файл в хранилище: presign и PUT. Истёкшая ссылка (403) перевыпускается один раз; ключ S3 возвращается.
+async function storeFile(
   work: UploadWork,
   transport: VersionTransport,
   options: UploadOptions,
-): Promise<VersionOut> {
-  const now = options.now ?? Date.now;
+  now: () => number,
+): Promise<string> {
   let stored: IssuedPresign | null = null;
   for (let attempt = 0; attempt < 2 && stored === null; attempt += 1) {
     if (!isUsable(work.presign, now())) {
-      if (work.confirmSent) {
-        const existing = await transport.find(work.checksum);
-        if (existing !== null) return existing;
-      }
       const issued = await transport.presign({
         content_type: work.contentType,
         size_bytes: work.file.size,
@@ -174,9 +165,23 @@ export async function uploadVersion(
     else stored = current;
   }
   if (stored === null) throw new UploadError("not_uploaded");
-  work.confirmSent = true;
+  return stored.key;
+}
+
+// presign -> PUT -> confirm. Повтор после сбоя подтверждает тот же ключ S3 и тот же ключ идемпотентности:
+// PUT второй раз не нужен, ссылка может истечь - ключ объекта от неё не зависит. Сервер возвращает прежний
+// ответ, если первое подтверждение записалось, и создаёт версию, если нет: дубля нет, сумма попытки не
+// теряется (раньше повтор искал версию по контрольной сумме и мог вернуть версию другой попытки).
+export async function uploadVersion(
+  work: UploadWork,
+  transport: VersionTransport,
+  options: UploadOptions,
+): Promise<VersionOut> {
+  const now = options.now ?? Date.now;
+  const key = work.storedKey ?? (await storeFile(work, transport, options, now));
+  work.storedKey = key;
   return transport.confirm(
-    { key: stored.key, comment: options.comment, amount: options.amount },
+    { key, comment: options.comment, amount: options.amount },
     work.idempotencyKey,
   );
 }

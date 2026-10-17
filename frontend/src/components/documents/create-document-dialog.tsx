@@ -21,13 +21,12 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { newIdempotencyKey } from "@/lib/api";
 import { isKindCode } from "@/lib/documents/kinds";
 import { documentsApi, useInvalidateDocuments } from "@/lib/documents/queries";
-import type { CreateBody, KindOut } from "@/lib/documents/types";
-import { useLegalEntities } from "@/lib/equipment/queries";
+import type { CounterpartyOut, CreateBody, KindOut } from "@/lib/documents/types";
 
 // Создание документа: из реестра объекта (projectId) или из карточки техники (unitId, связь с единицей
 // задаётся сразу). Ключ идемпотентности один на открытие диалога: повтор после сбоя не заведёт второй номер.
 // Закрыть диалог во время отправки нельзя: исход запроса неизвестен, а новый ключ дал бы дубль.
-// Юрлицо и номер - от сервера (юрлицо объекта или единицы); сумма в создании не вводится (R1).
+// Юрлицо и номер присваивает сервер (юрлицо объекта или единицы); сумма в создании не вводится (R1).
 export function CreateDocumentDialog({
   projectId,
   legalEntityId,
@@ -52,11 +51,8 @@ export function CreateDocumentDialog({
   const [key] = useState(newIdempotencyKey);
   const [kindCode, setKindCode] = useState("");
   const [title, setTitle] = useState("");
-  const [counterpartyId, setCounterpartyId] = useState("");
+  const [counterparty, setCounterparty] = useState<CounterpartyOut | null>(null);
 
-  const legalEntities = useLegalEntities();
-  const legalName =
-    legalEntities.data?.find((item) => item.id === legalEntityId)?.name ?? common("noValue");
   const kind = kinds.find((item) => item.code === kindCode) ?? null;
   const needsCounterparty = kind?.counterparty_required ?? false;
 
@@ -64,7 +60,7 @@ export function CreateDocumentDialog({
     kind !== null &&
     legalEntityId !== undefined &&
     title.trim() !== "" &&
-    (!needsCounterparty || counterpartyId !== "");
+    (!needsCounterparty || counterparty !== null);
   const body: CreateBody | null = ready
     ? {
         kind: kind.code,
@@ -72,7 +68,7 @@ export function CreateDocumentDialog({
         ...(projectId !== undefined ? { project_id: projectId } : {}),
         title: title.trim(),
         links: unitId !== undefined ? [{ kind: "equipment_unit", id: unitId }] : [],
-        ...(needsCounterparty ? { counterparty_id: counterpartyId } : {}),
+        ...(needsCounterparty && counterparty !== null ? { counterparty_id: counterparty.id } : {}),
       }
     : null;
 
@@ -102,10 +98,6 @@ export function CreateDocumentDialog({
           <DialogDescription>{unitId !== undefined ? t("unitHint") : t("description")}</DialogDescription>
         </DialogHeader>
         <form className="grid gap-3" onSubmit={submit}>
-          <div className="grid gap-0.5" data-testid="documents-create-legal-entity">
-            <span className="text-sm font-medium">{t("legalEntity")}</span>
-            <span className="text-sm text-muted-foreground">{legalName}</span>
-          </div>
           {legalEntityId === undefined ? <p className="text-sm text-muted-foreground">{t("loadingProject")}</p> : null}
           {canCounterparty ? null : <p className="text-sm text-muted-foreground">{t("counterpartyUnavailable")}</p>}
           {kinds.length === 0 ? (
@@ -143,11 +135,11 @@ export function CreateDocumentDialog({
                   <CounterpartyPicker
                     id="create-counterparty"
                     label={t("counterparty")}
-                    value={counterpartyId}
+                    selected={counterparty}
                     placeholder={t("chooseCounterparty")}
                     required
                     testId="documents-create-counterparty"
-                    onChange={setCounterpartyId}
+                    onChange={setCounterparty}
                   />
                 </Field>
               ) : null}

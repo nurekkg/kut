@@ -32,7 +32,7 @@ import {
   useDocumentKinds,
   useDocuments,
 } from "@/lib/documents/queries";
-import { DOCUMENT_STATUSES, type DocumentOut } from "@/lib/documents/types";
+import { DOCUMENT_STATUSES, type CounterpartyOut, type DocumentOut } from "@/lib/documents/types";
 import { fetchBlob, saveBlob } from "@/lib/equipment/download";
 import { api } from "@/lib/api";
 import { API, projectKey } from "@/lib/projects/keys";
@@ -57,7 +57,7 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
 
   const [kind, setKind] = useState("");
   const [status, setStatus] = useState("");
-  const [counterpartyId, setCounterpartyId] = useState("");
+  const [counterparty, setCounterparty] = useState<CounterpartyOut | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
@@ -70,17 +70,17 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
       projectId,
       kind: kind || undefined,
       status: status || undefined,
-      counterpartyId: counterpartyId || undefined,
+      counterpartyId: counterparty?.id,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
       q: query || undefined,
     }),
-    [projectId, kind, status, counterpartyId, dateFrom, dateTo, query],
+    [projectId, kind, status, counterparty?.id, dateFrom, dateTo, query],
   );
   const list = useDocuments(filters, { limit: PAGE_SIZE, offset: page * PAGE_SIZE });
   const rows = useMemo<DocumentOut[]>(() => list.data ?? [], [list.data]);
   const kinds = useDocumentKinds();
-  const counterpartySource = canUseCounterparties(permissions);
+  const counterpartySource = canUseCounterparties(permissions, internal);
   // Юрлицо для создания берётся из объекта; внешним ролям карточка объекта не нужна.
   const project = useQuery({
     queryKey: projectKey(projectId),
@@ -263,11 +263,11 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
           <CounterpartyPicker
             id="documents-filter-counterparty"
             label={t("counterpartyLabel")}
-            value={counterpartyId}
+            selected={counterparty}
             placeholder={t("allCounterparties")}
             testId="documents-filter-counterparty"
             onChange={(next) => {
-              setCounterpartyId(next);
+              setCounterparty(next);
               setPage(0);
             }}
           />

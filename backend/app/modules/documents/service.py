@@ -252,6 +252,16 @@ async def _writable(session: AsyncSession, document_id: uuid.UUID) -> _Doc:
     return _Doc(row.id, row.project_id, row.legal_entity_id, row.kind, row.financial)
 
 
+async def _lock_live(session: AsyncSession, document_id: uuid.UUID) -> None:
+    """Блокировка строки документа до конца транзакции. Архивация ждёт, статус читается
+    после блокировки: архивный документ не принимает версии и суммы, даже в гонке с архивацией."""
+    archived = await session.scalar(
+        select(Document.archived_at).where(Document.id == document_id).with_for_update()
+    )
+    if archived is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "document.archived")
+
+
 async def _assemble(
     session: AsyncSession, principal: Principal, rows: list[Any]
 ) -> list[DocumentOut]:
@@ -317,9 +327,11 @@ async def _assemble(
                     "legal_entity_name": legal_names.get(row.legal_entity_id) if internal else None,
                     "current_version": current_version,
                     "amount": current_row.amount if current_row is not None else None,
-                    "amount_version_no": current_row.version_no
-                    if current_row is not None
-                    else None,
+                    "amount_version_no": (
+                        current_row.version_no
+                        if current_row is not None and current_row.amount is not None
+                        else None
+                    ),
                     "effective_version_no": (
                         effective_row.version_no if effective_row is not None else None
                     ),
@@ -540,7 +552,9 @@ async def export_xlsx(
     if len(rows) > EXPORT_MAX_ROWS:
         raise _unprocessable("document.export_too_large")
     documents = await _assemble(session, principal, rows)
-    with_amount = principal.has(Module.DOCUMENTS, Action.READ, "financial")
+    with_amount = principal.has(Module.DOCUMENTS, Action.READ, "financial") or principal.has(
+        Module.EQUIPMENT, Action.READ, "rates"
+    )
     headers = [*XLSX_HEADERS, *(XLSX_AMOUNT_HEADERS if with_amount else ())]
     table: list[list[Any]] = []
     for row, document in zip(rows, documents, strict=True):
@@ -600,11 +614,13 @@ async def create_document(
         raise _not_found()
     if legal.code is None:
         raise _unprocessable("document.legal_entity_code_missing")
-    year = await session.scalar(text("SELECT EXTRACT(YEAR FROM app.local_today())::int"))
-    seq = await session.scalar(
-        text("SELECT app.next_document_number(:legal, :kind, :year)"),
-        {"legal": body.legal_entity_id, "kind": body.kind, "year": year},
-    )
+    # Отказ БД (право на вид, юрлицо) переводим в 403, а не в 500: счётчик номера - внутри db_rules.
+    async with db_rules(session):
+        year = await session.scalar(text("SELECT EXTRACT(YEAR FROM app.local_today())::int"))
+        seq = await session.scalar(
+            text("SELECT app.next_document_number(:legal, :kind, :year)"),
+            {"legal": body.legal_entity_id, "kind": body.kind, "year": year},
+        )
     document = Document(
         legal_entity_id=body.legal_entity_id,
         project_id=body.project_id,
@@ -684,6 +700,7 @@ async def confirm(
     if stored.checksum_sha256 is None:
         raise _unprocessable("document.checksum_missing")
     await files.inspect(body.key, stored.size, stored.content_type)
+    await _lock_live(session, document_id)
     version_no = await session.scalar(
         text("SELECT app.document_next_version(:document)"), {"document": document_id}
     )
@@ -746,6 +763,7 @@ async def set_version_amount(
     if version.archived_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "document.archived")
     async with db_rules(session):
+        await _lock_live(session, document_id)
         existing = await session.scalar(
             select(DocumentVersionAmount.id).where(DocumentVersionAmount.version_id == version_id)
         )
@@ -797,8 +815,14 @@ async def download_url(
     return DownloadOut(url=url, expires_in=DOWNLOAD_TTL_SECONDS)
 
 
-async def archive(session: AsyncSession, document_id: uuid.UUID) -> None:
-    """Снятие с действия: архивная дата. Документ и версии не удаляются (ТЗ §5.4)."""
+async def archive(session: AsyncSession, principal: Principal, document_id: uuid.UUID) -> None:
+    """Снятие с действия: архивная дата. Документ и версии не удаляются (ТЗ §5.4).
+    Вид техники снимает с действия только право записи в документы техники (R2)."""
+    kind = await session.scalar(select(Document.kind).where(Document.id == document_id))
+    if kind is None:
+        raise _not_found()
+    if kind in EQUIPMENT_KINDS and not principal.has(Module.EQUIPMENT, Action.WRITE, "documents"):
+        raise _forbidden()
     async with db_rules(session):
         await session.execute(
             text("SELECT app.document_archive(:document)"), {"document": document_id}

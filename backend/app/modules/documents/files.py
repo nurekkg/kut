@@ -67,7 +67,11 @@ def _ooxml_check(key: str, size: int, content_type: str) -> None:
     table = archive.getinfo(original["[content_types].xml"])
     if table.file_size > _MAX_TABLE_BYTES:
         raise _refuse("document.type_mismatch")
-    if b"macroenabled" in archive.read(original["[content_types].xml"]).lower():
+    try:
+        table_xml = archive.read(original["[content_types].xml"])
+    except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError) as error:
+        raise _refuse("document.type_mismatch") from error
+    if b"macroenabled" in table_xml.lower():
         raise _refuse("document.macros_forbidden")
 
 

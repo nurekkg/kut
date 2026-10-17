@@ -176,3 +176,18 @@ async def test_an_archived_document_keeps_its_draft_sum(
 
     assert changed.status_code == 409, changed.text
     assert changed.json()["detail"] == "document.archived"
+    # Сумма черновика не изменилась: отказ стоит до записи.
+    kept = await api.get(f"{API}/documents/{document['id']}", headers=desk.heads["owner"])
+    assert kept.json()["versions"][0]["amount"] == "7.00"
+
+
+async def test_a_version_without_a_sum_has_no_sum_number(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
+    document = await ks2(api, desk, auth_world)
+    await upload(api, s3, document["id"], desk.heads["estimator"], PDF_OK, PDF)
+
+    listed = await detail(api, desk, "foreman", document["id"])
+
+    assert (listed["amount"], listed["amount_version_no"]) == (None, None)

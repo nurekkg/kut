@@ -61,7 +61,8 @@ export function NodeCard({ projectId, node, index, internal, canWrite, actions }
   const { user } = useAuth();
   // ГПР и готовность видят роли с gpr:read; фото - только внутренние роли (внешним они не отдаются).
   const canSeeSchedule = user?.permissions.includes("gpr:read") ?? false;
-  const canSeeDocuments = user?.permissions.includes("documents:read") ?? false;
+  // Документы узла отдаёт сервер только внутренним: внешним вкладка была бы пустой.
+  const canSeeDocuments = internal && (user?.permissions.includes("documents:read") ?? false);
   const tabs = TABS.filter((tab) => {
     if (tab === "works" || tab === "dates") return canSeeSchedule;
     if (tab === "documents") return canSeeDocuments;

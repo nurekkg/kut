@@ -242,6 +242,6 @@ async def download_url(
 
 
 @router.post("/{document_id}/archive", status_code=status.HTTP_204_NO_CONTENT)
-async def archive(document_id: uuid.UUID, session: Db, _principal: Archiver) -> Response:
-    await service.archive(session, document_id)
+async def archive(document_id: uuid.UUID, session: Db, principal: Archiver) -> Response:
+    await service.archive(session, principal, document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

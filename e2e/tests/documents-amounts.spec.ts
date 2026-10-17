@@ -13,9 +13,12 @@ test("сумма версии: вносится при загрузке, пра�
   browser,
   request,
 }) => {
+  // Документ заводит руководитель с правом на юрлицо (в демо-данных у сметчика нет доступа к юрлицу, и
+  // номер документа ему не присвоить); сметчик вносит сумму и правит её - это проверяет сценарий.
+  const techdir = await apiLogin(request, "techdir");
   const estimator = await apiLogin(request, "estimator");
-  const east = await projectNamed(request, estimator, EAST_NAME);
-  const document = await createDocument(request, estimator, {
+  const east = await projectNamed(request, techdir, EAST_NAME);
+  const document = await createDocument(request, techdir, {
     kind: "estimate_local",
     legal_entity_id: east.legal_entity_id,
     project_id: east.id,
@@ -47,7 +50,7 @@ test("сумма версии: вносится при загрузке, пра�
   await shot(page, "document-amount-draft");
 
   // Переход из черновика делает система (фикстура): дальше правки нет ни в интерфейсе, ни в API.
-  const version = (await documentById(request, estimator, document.id)).versions[0];
+  const version = (await documentById(request, techdir, document.id)).versions[0];
   expect(version, "версия загружена").toBeDefined();
   await transitionVersion(version!.id, "on_approval");
   await transitionVersion(version!.id, "approved");

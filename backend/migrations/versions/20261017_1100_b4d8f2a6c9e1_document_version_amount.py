@@ -58,13 +58,16 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
 $$
 """,
     """
-CREATE FUNCTION app.audit_amount_visible(p_data jsonb) RETURNS boolean
+CREATE FUNCTION app.audit_amount_visible(p_row uuid, p_data jsonb) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
     SELECT COALESCE((
         SELECT CASE WHEN app.document_kind_money(d.kind)
                     THEN app.has_permission('equipment', 'read', 'rates')
                     ELSE app.has_permission('documents', 'read', 'financial') END
-        FROM public.document d WHERE d.id = (p_data->>'document_id')::uuid), false)
+        FROM public.document d
+        WHERE d.id = COALESCE((p_data->>'document_id')::uuid,
+                              (SELECT a.document_id FROM public.document_version_amount a
+                               WHERE a.id = p_row))), false)
 $$
 """,
     """
@@ -80,11 +83,14 @@ BEGIN
     IF NEW.deleted_at IS NOT NULL THEN
         RAISE EXCEPTION 'amount.delete_forbidden';
     END IF;
+    IF app.user_id() IS NOT NULL AND NOT app.version_amount_writable(NEW.version_id) THEN
+        RAISE EXCEPTION 'document.forbidden';
+    END IF;
     IF TG_OP = 'UPDATE' AND (NEW.version_id IS DISTINCT FROM OLD.version_id
                              OR NEW.document_id IS DISTINCT FROM OLD.document_id) THEN
         RAISE EXCEPTION 'amount.version_not_draft';
     END IF;
-    SELECT * INTO v FROM public.document_version WHERE id = NEW.version_id;
+    SELECT * INTO v FROM public.document_version WHERE id = NEW.version_id FOR SHARE;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'document.not_found';
     END IF;
@@ -186,7 +192,7 @@ def upgrade() -> None:
     for signature in (
         "version_money_right(uuid)",
         "version_amount_writable(uuid)",
-        "audit_amount_visible(jsonb)",
+        "audit_amount_visible(uuid, jsonb)",
     ):
         op.execute(f"REVOKE ALL ON FUNCTION app.{signature} FROM PUBLIC")
         op.execute(f"GRANT EXECUTE ON FUNCTION app.{signature} TO kut_app, kut_auth")
@@ -237,7 +243,7 @@ def upgrade() -> None:
     op.execute(
         "CREATE POLICY audit_log_version_amount ON audit_log AS RESTRICTIVE FOR SELECT TO kut_app"
         " USING (table_name IS DISTINCT FROM 'document_version_amount'"
-        " OR app.audit_amount_visible(COALESCE(new, old)))"
+        " OR app.audit_amount_visible(row_id, COALESCE(new, old)))"
     )
 
     # Перенос dev-данных: сумма документа - на его последнюю версию. Гард на время переноса отключён (версия
@@ -263,6 +269,7 @@ def upgrade() -> None:
     )
     op.execute("RESET ROLE")
     op.execute("ALTER TABLE document_version_amount ENABLE TRIGGER document_version_amount_guard")
+    op.execute("REVOKE INSERT ON document_version_amount FROM kut_auth")
 
     # Старый путь записи: политики «никому», гард и функции записи убираются, таблица остаётся для отката.
     for name in (
@@ -287,12 +294,25 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Суммы версий возвращаются в document_amount до удаления таблицы: сумма последней версии документа.
+    # Строки старой таблицы обновляются, не дублируются (уникальность по документу). kut_auth - BYPASSRLS.
+    op.execute("SET LOCAL ROLE kut_auth")
+    op.execute(
+        "INSERT INTO document_amount (document_id, project_id, legal_entity_id, amount)"
+        " SELECT a.document_id, a.project_id, a.legal_entity_id, a.amount"
+        " FROM document_version_amount a JOIN document_version v ON v.id = a.version_id"
+        " WHERE a.deleted_at IS NULL AND v.deleted_at IS NULL"
+        " AND v.version_no = (SELECT max(last.version_no) FROM document_version last"
+        " WHERE last.document_id = a.document_id)"
+        " ON CONFLICT (document_id) DO UPDATE SET amount = EXCLUDED.amount, updated_at = now()"
+    )
+    op.execute("RESET ROLE")
     # Порядок: сначала журнал и таблица (на ней висят триггер и политики), потом функции, потом старый путь.
     op.execute("DROP POLICY IF EXISTS audit_log_version_amount ON audit_log")
     op.execute("DROP TABLE document_version_amount")
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute("DROP FUNCTION IF EXISTS app.version_amount_guard()")
-    op.execute("DROP FUNCTION IF EXISTS app.audit_amount_visible(jsonb)")
+    op.execute("DROP FUNCTION IF EXISTS app.audit_amount_visible(uuid, jsonb)")
     op.execute("DROP FUNCTION IF EXISTS app.version_amount_writable(uuid)")
     op.execute("DROP FUNCTION IF EXISTS app.version_money_right(uuid)")
     op.execute(OLD_AMOUNT_WRITABLE)

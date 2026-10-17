@@ -180,6 +180,20 @@ async def test_the_insurance_sum_and_file_are_for_the_rate_holders_only(
         assert response.status_code == 404, (who, response.text)
 
 
+async def test_the_owner_cannot_archive_an_equipment_document_without_the_right_to_write_it(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+) -> None:
+    legal, unit, heads = await world(api, auth_world, worker_sync_engine)
+    passport = await create_ok(api, heads["equipment_head"], legal, unit, "equipment_passport")
+
+    refused = await api.post(f"{API}/documents/{passport}/archive", headers=heads["owner"])
+    assert refused.status_code == 403, refused.text
+    kept = await api.get(f"{DOCS}/{passport}", headers=heads["equipment_head"])
+    assert kept.json()["archived_at"] is None
+
+
 async def test_the_inspection_of_the_mechanic_is_read_by_the_equipment_readers_only(
     api: AsyncClient,
     auth_world: AuthWorld,
