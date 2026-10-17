@@ -27,7 +27,7 @@ from tests.documents_support import (
     open_desk,
     upload,
 )
-from tests.equipment_support import in_context
+from tests.equipment_support import in_context, rows
 
 
 @pytest.fixture
@@ -135,6 +135,55 @@ async def test_the_application_cannot_change_a_sum_once_its_version_has_left_the
                     {"v": version},
                 )
             await session.rollback()
+
+
+async def test_a_writer_without_the_money_right_cannot_insert_a_sum_row_directly(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    # Прораб пишет в документ, но денег не видит: строку суммы не вставит и SQL мимо сервиса.
+    # Вставку проверяет политика вставки и гард версии; ответ PUT этого не показывает.
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
+    document = await ks2(api, desk, auth_world)
+    uploaded = await upload(api, s3, document["id"], desk.heads["estimator"], PDF_OK, PDF)
+    assert uploaded.status_code == 201, uploaded.text
+    version = uploaded.json()["id"]
+
+    context = in_context(auth_world.users["foreman"], (desk.project,), (desk.legal,))
+    may_write, money = (
+        await rows(
+            "SELECT app.document_writable(CAST(:d AS uuid)),"
+            " app.version_money_right(CAST(:v AS uuid))",
+            context,
+            {"d": document["id"], "v": version},
+        )
+    )[0]
+    assert (may_write, money) == (True, False)
+    with use_context(context):
+        async with get_sessionmaker()() as session:
+            with pytest.raises(DBAPIError, match=r"document\.forbidden|row-level security"):
+                await session.execute(
+                    text(
+                        "INSERT INTO document_version_amount"
+                        " (version_id, document_id, legal_entity_id, project_id, amount)"
+                        " VALUES (CAST(:v AS uuid), CAST(:d AS uuid), CAST(:le AS uuid),"
+                        " CAST(:p AS uuid), 1)"
+                    ),
+                    {
+                        "v": version,
+                        "d": document["id"],
+                        "le": str(desk.legal),
+                        "p": str(desk.project),
+                    },
+                )
+            await session.rollback()
+    with worker_sync_engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                "SELECT count(*) FROM document_version_amount WHERE version_id = CAST(:v AS uuid)"
+            ),
+            {"v": version},
+        ).scalar_one()
+    assert stored == 0
 
 
 async def test_the_current_sum_of_an_unapproved_document_is_the_last_visible_version(
