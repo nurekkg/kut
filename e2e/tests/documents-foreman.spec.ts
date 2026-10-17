@@ -1,6 +1,7 @@
 import { expect, test } from "../helpers/test";
 import { apiLogin, get } from "../helpers/api";
 import { createDocument, documentById, uploadVersion, type DocumentRow } from "../helpers/documents";
+import { transitionVersion } from "../helpers/db";
 import { EAST_NAME, newUnit, projectNamed, typeByCode } from "../helpers/equipment";
 import { desktopContext, shot, signIn } from "../helpers/ui";
 
@@ -56,12 +57,10 @@ test("прораб: суммы нет в DOM, скачивания финанс�
   await expect(page.getByTestId("document-version-download")).toHaveCount(0);
 });
 
-// В демо-данных у прораба нет доступа к юрлицу «Восток» (доступ к юрлицу - явный, RLS): документы техники
-// юрлица ему не видны вовсе, ни документ, ни сумма, ни файл. Право на деньги вида проверяют backend-тесты.
-test("прораб без доступа к юрлицу: страховка техники не видна, ни карточки, ни суммы (R2, R3)", async ({
-  browser,
-  request,
-}) => {
+// Прораб видит страховку техники юрлица «Восток» (доступ к юрлицу есть), но без суммы и без файла: право на
+// деньги вида - equipment:read:rates, у прораба его нет (R2, R3). Версию утверждает система (фикстура), чтобы
+// карточка показала текущую версию; проверку отказа на файл и сумму в API ведут backend-тесты.
+test("прораб: страховка техники видна, но без суммы и без файла (R2, R3)", async ({ browser, request }) => {
   const head = await apiLogin(request, "equipment_head");
   const east = await projectNamed(request, head, EAST_NAME);
   const type = await typeByCode(request, head, "SAM");
@@ -72,19 +71,28 @@ test("прораб без доступа к юрлицу: страховка т�
     title: `E2E страховка ${Date.now()}`,
     links: [{ kind: "equipment_unit", id: unit.id }],
   });
-  await uploadVersion(request, head, insurance.id, PDF, "application/pdf", "4321.00");
+  const version = await uploadVersion(request, head, insurance.id, PDF, "application/pdf", "4321.00");
+  await transitionVersion(version.id, "on_approval");
+  await transitionVersion(version.id, "approved");
   const foreman = await apiLogin(request, "foreman");
-  const hidden = await request.get(`/api/v1/documents/${insurance.id}`, {
+  const seen = await request.get(`/api/v1/documents/${insurance.id}`, {
     headers: { Authorization: `Bearer ${foreman.token}` },
   });
-  expect(hidden.status()).toBe(404);
+  expect(seen.status()).toBe(200);
+  const body = (await seen.json()) as { amount: string | null; versions: { amount: string | null }[] };
+  expect(body.amount).toBeNull();
+  expect(body.versions[0]?.amount).toBeNull();
   const desktop = await desktopContext(browser);
   const page = await desktop.newPage();
   await signIn(page, "foreman");
 
   await page.goto(`/documents/${insurance.id}`);
-  await expect(page.getByRole("alert")).toContainText("Документ не найден", { timeout: 40_000 });
+  await expect(page.getByTestId("document-card")).toBeVisible({ timeout: 40_000 });
+  await expect(page.getByTestId("document-current-version")).toBeVisible();
   await expect(page.getByTestId("document-amount")).toHaveCount(0);
+  await expect(page.getByTestId("document-version-amount")).toHaveCount(0);
+  await expect(page.getByTestId("document-download")).toHaveCount(0);
+  await expect(page.getByTestId("document-version-download")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText(/4\s321,00/);
   await shot(page, "document-insurance-foreman");
 });
