@@ -56,9 +56,13 @@ export type VersionOut = {
   comment: string | null;
   checksum_sha256: string | null;
   author_name: string | null;
+  // Сумма принадлежит версии (R1): внутренним с правом на вид, внешним - утверждённой версии; иначе null.
+  amount: string | null;
 };
 
 export type DocumentLink = { kind: string; id: string };
+
+export type CounterpartyOut = { id: string; name: string };
 
 export type DocumentOut = {
   id: string;
@@ -73,10 +77,14 @@ export type DocumentOut = {
   latest_status: string | null;
   registration_no: string | null;
   legal_entity_id: string | null;
+  legal_entity_name: string | null;
   contract_id: string | null;
   archived_at: string | null;
   current_version: VersionOut | null;
+  // Текущая сумма - сумма действующей версии (утверждённой или подписанной), иначе последней видимой.
   amount: string | null;
+  amount_version_no: number | null;
+  effective_version_no: number | null;
   links: DocumentLink[];
 };
 
@@ -103,15 +111,15 @@ export type DownloadOut = { url: string; expires_in: number };
 
 export type PresignBody = { content_type: string; size_bytes: number; checksum_sha256: string };
 
-export type ConfirmBody = { key: string; comment: string | null };
+export type ConfirmBody = { key: string; comment: string | null; amount: string | null };
 
 // Создание: поля вне контракта бэкенд отвергает (extra=forbid), поэтому тело собирается по полям.
+// Сумма в создании не передаётся: она принадлежит версии и вносится при загрузке (R1).
 export type CreateBody = {
   kind: string;
   legal_entity_id: string;
   project_id?: string;
   counterparty_id?: string;
   title: string;
-  links: never[];
-  amount?: string;
+  links: DocumentLink[];
 };

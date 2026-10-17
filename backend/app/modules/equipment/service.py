@@ -405,10 +405,13 @@ async def add_document(
 ) -> DocumentOut:
     """Новая версия строкой: старые не меняются и не удаляются (ТЗ §2.2)."""
     unit = await _unit(session, unit_id)
-    # Блокировка строки техники: параллельные добавления ждут друг друга, поэтому номер версии
-    # идёт без пропусков и не сталкивается с уникальным индексом (F2, ADR-015 часть 3 раздел 13).
+    # Блокировка на время транзакции: параллельные добавления этой единицы ждут друг друга, поэтому
+    # номер версии идёт без пропусков и не сталкивается с уникальным индексом (F2, ADR-015 часть 3
+    # раздел 13). Блокировка строки FOR UPDATE здесь не годится: политика записи техники (RLS)
+    # скрывает строку от механика, и лок не берётся; advisory-лок от прав не зависит.
     await session.execute(
-        select(EquipmentUnit.id).where(EquipmentUnit.id == unit_id).with_for_update()
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"equipment_document:{unit_id}"},
     )
     last_version = await session.scalar(
         select(func.coalesce(func.max(EquipmentDocument.version), 0)).where(

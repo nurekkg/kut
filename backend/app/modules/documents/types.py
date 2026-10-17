@@ -67,12 +67,16 @@ KINDS: Final[dict[str, KindSpec]] = {
     "equipment_technical_inspection": KindSpec(
         "ТОС", LEGAL, False, links=frozenset({Link.EQUIPMENT_UNIT})
     ),
-    "equipment_insurance": KindSpec("СТР", LEGAL, False, links=frozenset({Link.EQUIPMENT_UNIT})),
+    # Денежные виды (PO 2026-10-17, R3): файл и сумма - только по equipment:read:rates.
+    "equipment_insurance": KindSpec("СТР", LEGAL, True, links=frozenset({Link.EQUIPMENT_UNIT})),
     "equipment_permit": KindSpec("РАЗ", LEGAL, False, links=frozenset({Link.EQUIPMENT_UNIT})),
-    "equipment_other": KindSpec("ПРЧ", LEGAL, False, links=frozenset({Link.EQUIPMENT_UNIT})),
+    "equipment_other": KindSpec("ПРЧ", LEGAL, True, links=frozenset({Link.EQUIPMENT_UNIT})),
 }
 
 FINANCIAL_KINDS: Final = frozenset(kind for kind, spec in KINDS.items() if spec.financial)
+EQUIPMENT_KINDS: Final = frozenset(kind for kind in KINDS if kind.startswith("equipment_"))
+MONEY_EQUIPMENT_KINDS: Final = frozenset({"equipment_insurance", "equipment_other"})
+INSPECTION_KIND: Final = "equipment_technical_inspection"
 OBJECT_KINDS: Final = frozenset(kind for kind, spec in KINDS.items() if spec.scope is OBJECT)
 LEGAL_KINDS: Final = frozenset(kind for kind, spec in KINDS.items() if spec.scope is LEGAL)
 COUNTERPARTY_KINDS: Final = frozenset(kind for kind, spec in KINDS.items() if spec.counterparty)

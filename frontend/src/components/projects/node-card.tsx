@@ -249,7 +249,7 @@ export function NodeCard({ projectId, node, index, internal, canWrite, actions }
         ) : null}
         {canSeeDocuments ? (
           <TabsContent value="documents" className="pt-1">
-            <NodeDocumentsTab projectId={projectId} />
+            <NodeDocumentsTab projectId={projectId} nodeId={node.id} />
           </TabsContent>
         ) : null}
         {internal ? (

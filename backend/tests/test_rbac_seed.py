@@ -123,6 +123,23 @@ ADR_EQUIPMENT_GRANTS = {
     },
     ("technical_director", "equipment", "write", None),
     ("equipment_head", "equipment", "write", None),
+    # Документы техники (PO 2026-10-17, R2): видят девять ролей, загружают техдир и начальник.
+    *{
+        (role, "equipment", "read", "documents")
+        for role in (
+            "owner",
+            "finance_director",
+            "technical_director",
+            "equipment_head",
+            "mechanic",
+            "estimator",
+            "foreman",
+            "master",
+            "accountant",
+        )
+    },
+    ("technical_director", "equipment", "write", "documents"),
+    ("equipment_head", "equipment", "write", "documents"),
     # Начальник отдела видит объекты (решение PO, SE-2a): реестр и назначения по объекту. Бюджет,
     # заказчик и адрес остаются закрыты: их даёт finance:read, а у начальника его нет.
     ("equipment_head", "objects", "read", None),

@@ -45,7 +45,7 @@ export function UnitCardView({ unitId }: { unitId: string }) {
       <UnitAssignmentsSection unitId={card.id} />
       <UnitMaintenanceSection unit={card} />
       <UnitDocumentsSection unit={card} />
-      <UnitDocumentRegistrySection unitId={card.id} />
+      <UnitDocumentRegistrySection unitId={card.id} legalEntityId={card.legal_entity_id} />
       {access.canRates && card.contract_id ? <UnitContractSection unit={card} /> : null}
       {access.canRates || access.canWrite ? <UnitRatesSection unit={card} access={access} /> : null}
       {access.canRates ? <UnitCostsSection unitId={unitId} /> : null}

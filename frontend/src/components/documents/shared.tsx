@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/auth/api";
+import { effectiveDiffers } from "@/lib/documents/access";
 import { documentErrorKey } from "@/lib/documents/errors";
 import { isKindCode } from "@/lib/documents/kinds";
 import {
@@ -64,6 +65,21 @@ export function StatusBadge({ status }: { status: string | null }) {
     >
       {label(status)}
     </Badge>
+  );
+}
+
+// Отметка «действует vN»: действующая версия (утверждённая или подписанная) не последняя (R1).
+export function EffectiveMark({
+  doc,
+}: {
+  doc: { effective_version_no: number | null; latest_version_no: number | null };
+}) {
+  const t = useTranslations("Documents.common");
+  if (doc.effective_version_no === null || !effectiveDiffers(doc)) return null;
+  return (
+    <span className="text-xs text-muted-foreground tabular-nums" data-testid="document-effective-mark">
+      {t("effectiveMark", { version: doc.effective_version_no })}
+    </span>
   );
 }
 

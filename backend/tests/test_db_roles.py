@@ -158,6 +158,7 @@ PORTAL_COLUMNS = {
     "document_version": BASE_COLUMNS
     | {"document_id", "version_no", "status", "content_type", "size_bytes"},
     "document_amount": BASE_COLUMNS | {"document_id", "amount"},
+    "document_version_amount": BASE_COLUMNS | {"version_id", "document_id", "amount"},
     "user": BASE_COLUMNS
     | {"phone", "email", "full_name", "role_id", "counterparty_id", "is_active", "role_ver"},
     "project": BASE_COLUMNS | {"legal_entity_id", "name", "status"},

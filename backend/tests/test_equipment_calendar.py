@@ -4,6 +4,7 @@ import statistics
 import time
 from datetime import date, timedelta
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -49,6 +50,7 @@ async def test_the_calendar_lists_assignments_with_hours_per_day(
     assert row["assignments"][0]["project_name"] == "ЖК «Восток» (dev)"
 
 
+@pytest.mark.perf
 async def test_the_calendar_for_eight_weeks_over_three_hundred_units(
     api: AsyncClient, auth_world: AuthWorld, worker_engine: AsyncEngine
 ) -> None:

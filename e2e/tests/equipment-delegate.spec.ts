@@ -79,7 +79,9 @@ test("делегат подтверждает в период; прораб-оп
   const refused = await request.post(`/api/v1/equipment/shifts/${own.id}/confirm`, {
     headers: { Authorization: `Bearer ${secondForeman.token}` },
   });
-  expect(refused.ok()).toBeFalsy();
+  // Своё подтверждение запрещает БД (ck_equipment_shift_confirmer_is_not_author): 409 с кодом причины.
+  expect(refused.status()).toBe(409);
+  expect(await refused.json()).toEqual({ detail: "equipment.shift_transition_forbidden" });
 });
 
 // Идентификатор пользователя из токена входа (поле sub).

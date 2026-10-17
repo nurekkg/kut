@@ -34,6 +34,9 @@ test("юрист: выгрузка реестра скачивается, в ф�
   const shared = entries.get("xl/sharedStrings.xml")?.toString("utf8") ?? "";
   const text = sheet + shared;
   expect(text).toContain("Регистрационный номер");
-  expect(text).toContain("Сумма");
+  expect(text).toContain("Текущая сумма");
+  // Суммы по версиям - на отдельном листе (R1): имя листа в книге.
+  const workbook = entries.get("xl/workbook.xml")?.toString("utf8") ?? "";
+  expect(workbook).toContain('name="Суммы версий"');
   expect(errors).toEqual([]);
 });

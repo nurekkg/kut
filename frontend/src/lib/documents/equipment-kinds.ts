@@ -11,3 +11,23 @@ const EQUIPMENT_DOCUMENT_KIND: Readonly<Record<string, string>> = {
 export function equipmentDocumentKind(kind: string): string | null {
   return Object.hasOwn(EQUIPMENT_DOCUMENT_KIND, kind) ? EQUIPMENT_DOCUMENT_KIND[kind] : null;
 }
+
+// Виды документов техники и денежные виды (R2, R3): их право - equipment:*, а не documents:*.
+// Совпадает с backend/app/modules/documents/types.py (EQUIPMENT_KINDS, MONEY_EQUIPMENT_KINDS).
+export const EQUIPMENT_DOCUMENT_KINDS: readonly string[] = [
+  "equipment_passport",
+  "equipment_technical_inspection",
+  "equipment_insurance",
+  "equipment_permit",
+  "equipment_other",
+];
+export const MONEY_EQUIPMENT_DOCUMENT_KINDS: readonly string[] = ["equipment_insurance", "equipment_other"];
+export const INSPECTION_DOCUMENT_KIND = "equipment_technical_inspection";
+
+export function isEquipmentDocumentKind(kind: string): boolean {
+  return EQUIPMENT_DOCUMENT_KINDS.includes(kind);
+}
+
+export function isMoneyEquipmentDocumentKind(kind: string): boolean {
+  return MONEY_EQUIPMENT_DOCUMENT_KINDS.includes(kind);
+}

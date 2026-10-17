@@ -14,6 +14,7 @@ export type VersionRow = {
   content_type: string;
   size_bytes: number;
   author_name: string | null;
+  amount: string | null;
 };
 
 export type DocumentRow = {
@@ -22,7 +23,11 @@ export type DocumentRow = {
   title: string;
   financial: boolean;
   registration_no: string | null;
+  legal_entity_name: string | null;
   amount: string | null;
+  amount_version_no: number | null;
+  effective_version_no: number | null;
+  latest_version_no: number | null;
   latest_status: string | null;
   current_version: VersionRow | null;
   versions: VersionRow[];
@@ -40,13 +45,15 @@ export async function createDocument(
   return post<DocumentRow>(request, session, DOCUMENTS, body);
 }
 
-// Загрузка как в браузере: presign с контрольной суммой, PUT напрямую в S3, подтверждение.
+// Загрузка как в браузере: presign с контрольной суммой, PUT напрямую в S3, подтверждение. Сумма версии -
+// в подтверждении (R1); без неё поле уходит пустым.
 export async function uploadVersion(
   request: APIRequestContext,
   session: Session,
   documentId: string,
   content: Buffer,
   contentType: string,
+  amount?: string,
 ): Promise<VersionRow> {
   const presigned = await post<{ key: string; upload_url: string; headers: Record<string, string> }>(
     request,
@@ -58,6 +65,21 @@ export async function uploadVersion(
   expect(stored.ok(), `PUT в хранилище: ${stored.status()}`).toBeTruthy();
   return post<VersionRow>(request, session, `${DOCUMENTS}/${documentId}/versions/confirm`, {
     key: presigned.key,
+    amount: amount ?? null,
+  });
+}
+
+// Сумма версии правится только у черновика: ответ отдаём целиком, чтобы сценарий сверил отказ.
+export async function setVersionAmount(
+  request: APIRequestContext,
+  session: Session,
+  documentId: string,
+  versionId: string,
+  amount: string,
+) {
+  return request.put(`${DOCUMENTS}/${documentId}/versions/${versionId}/amount`, {
+    headers: { Authorization: `Bearer ${session.token}` },
+    data: { amount },
   });
 }
 

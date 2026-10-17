@@ -27,6 +27,10 @@ from tests.support import World
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "perf: временной порог, выполняется только в CI")
+
+
 def require_test_url(variable: str) -> URL:
     """URL тестовой БД из окружения. Тесты сбрасывают схему, поэтому только *_test."""
     url = make_url(os.environ[variable])
@@ -344,8 +348,15 @@ def settings_cleanup(worker_sync_engine: Engine) -> Iterator[None]:
 
 
 @pytest.hookimpl(trylast=True)
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Миграционный тест откатывает схему общей тестовой базы и поднимает её обратно пустой
     (откат до a3f7c1d9e582 - это все таблицы техники и документов). Поэтому он идёт последним:
-    сидовые данные остальных тестов после него не пропадают, при любом порядке."""
+    сидовые данные остальных тестов после него не пропадают, при любом порядке. Пороги времени
+    (маркер perf) локально пропускаются: они зависят от нагрузки машины и проверяются в CI."""
     items.sort(key=lambda item: "test_migration_schedule_dates" in item.nodeid)
+    if os.environ.get("CI"):
+        return
+    skip = pytest.mark.skip(reason="perf: временной порог проверяется только в CI")
+    for item in items:
+        if item.get_closest_marker("perf") is not None:
+            item.add_marker(skip)

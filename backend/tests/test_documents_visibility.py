@@ -54,6 +54,7 @@ class Office:
         self.project = project(engine, self.legal)
         self.heads: dict[str, dict[str, str]] = {}
         self.users: dict[str, UUID] = {}
+        self.amounts: dict[str, str] = {}
 
     async def open(self, *who: str) -> "Office":
         for name in who:
@@ -69,6 +70,8 @@ class Office:
         return self.world.counterparties[name]
 
     async def create(self, who: str, body: dict[str, Any]) -> dict[str, Any]:
+        body = dict(body)
+        amount = body.pop("amount", None)  # сумма принадлежит версии (R1): уходит в подтверждение
         response = await create_document(
             self.api,
             self.heads[who],
@@ -80,7 +83,10 @@ class Office:
             },
         )
         assert response.status_code == 201, response.text
-        return response.json()
+        document = response.json()
+        if amount is not None:
+            self.amounts[document["id"]] = amount
+        return document
 
     async def get(self, who: str, document_id: str) -> httpx.Response:
         return await self.api.get(f"{API}/documents/{document_id}", headers=self.heads[who])
@@ -93,7 +99,15 @@ class Office:
         return response.json()
 
     async def publish(self, s3: httpx.AsyncClient, author: str, document_id: str) -> dict[str, Any]:
-        response = await upload(self.api, s3, document_id, self.heads[author], PDF_OK, PDF)
+        response = await upload(
+            self.api,
+            s3,
+            document_id,
+            self.heads[author],
+            PDF_OK,
+            PDF,
+            amount=self.amounts.get(document_id),
+        )
         assert response.status_code == 201, response.text
         approve(self.engine, response.json()["id"])
         return response.json()
@@ -111,7 +125,15 @@ async def test_the_foreman_sees_a_financial_document_without_its_sum_or_file(
             "amount": "98000.00",
         },
     )
-    uploaded = await upload(api, s3, ks2["id"], office.heads["estimator"], PDF_OK, PDF)
+    uploaded = await upload(
+        api,
+        s3,
+        ks2["id"],
+        office.heads["estimator"],
+        PDF_OK,
+        PDF,
+        amount=office.amounts.get(ks2["id"]),
+    )
     assert uploaded.status_code == 201, uploaded.text
     version = uploaded.json()["id"]
 
@@ -119,6 +141,7 @@ async def test_the_foreman_sees_a_financial_document_without_its_sum_or_file(
     assert seen["registration_no"].startswith("КС2-")
     assert seen["amount"] is None
     assert [item["version_no"] for item in seen["versions"]] == [1]
+    assert seen["versions"][0]["amount"] is None
     assert len(seen["versions"][0]["checksum_sha256"]) == 64  # внутренним - хэш версии
     file_link = await api.get(
         f"{API}/documents/{ks2['id']}/versions/{version}/download-url",
@@ -126,14 +149,16 @@ async def test_the_foreman_sees_a_financial_document_without_its_sum_or_file(
     )
     assert file_link.status_code == 403
     amount = await api.put(
-        f"{API}/documents/{ks2['id']}/amount", json={"amount": "1"}, headers=office.heads["foreman"]
+        f"{API}/documents/{ks2['id']}/versions/{version}/amount",
+        json={"amount": "1"},
+        headers=office.heads["foreman"],
     )
     assert amount.status_code == 403
 
     sums = await rows(
-        "SELECT count(*) FROM document_amount WHERE document_id = CAST(:d AS uuid)",
+        "SELECT count(*) FROM document_version_amount WHERE version_id = CAST(:v AS uuid)",
         in_context(office.users["foreman"], (office.project,), (office.legal,)),
-        {"d": ks2["id"]},
+        {"v": version},
     )
     assert sums == [(0,)]
 
@@ -150,7 +175,15 @@ async def test_the_estimator_reads_the_sum_and_the_file_of_a_financial_document(
             "amount": "98000.00",
         },
     )
-    uploaded = await upload(api, s3, ks2["id"], office.heads["estimator"], PDF_OK, PDF)
+    uploaded = await upload(
+        api,
+        s3,
+        ks2["id"],
+        office.heads["estimator"],
+        PDF_OK,
+        PDF,
+        amount=office.amounts.get(ks2["id"]),
+    )
     link = await api.get(
         f"{API}/documents/{ks2['id']}/versions/{uploaded.json()['id']}/download-url",
         headers=office.heads["estimator"],
@@ -201,8 +234,10 @@ async def test_the_customer_sees_his_approved_contract_with_its_sum_and_nothing_
     seen = (await office.get("customer", ours["id"])).json()
     assert seen["amount"] == "5000000.00"
     assert seen["registration_no"] is None and seen["legal_entity_id"] is None
+    assert seen["legal_entity_name"] is None
     assert seen["links"] == []
     assert [item["id"] for item in seen["versions"]] == [published["id"]]
+    assert seen["versions"][0]["amount"] == "5000000.00"
     assert seen["versions"][0]["checksum_sha256"] is None
     link = await api.get(
         f"{API}/documents/{ours['id']}/versions/{published['id']}/download-url",
@@ -329,10 +364,10 @@ async def test_a_user_cannot_create_a_document_in_an_object_outside_his_access(
 
 
 async def test_the_audit_journal_shows_the_sum_only_to_the_documents_financial_right(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
 ) -> None:
     office = await Office(api, auth_world, worker_sync_engine).open("estimator", "foreman")
-    await office.create(
+    ks3 = await office.create(
         "estimator",
         {
             "kind": "ks3",
@@ -340,7 +375,8 @@ async def test_the_audit_journal_shows_the_sum_only_to_the_documents_financial_r
             "amount": "3.00",
         },
     )
-    counted = "SELECT count(*) FROM audit_log WHERE table_name = 'document_amount'"
+    await office.publish(s3, "estimator", ks3["id"])
+    counted = "SELECT count(*) FROM audit_log WHERE table_name = 'document_version_amount'"
     assert await rows(
         counted, in_context(office.users["foreman"], (office.project,), (office.legal,))
     ) == [(0,)]

@@ -103,14 +103,13 @@ async def test_a_draft_is_numbered_with_the_legal_entity_code_and_the_year(
             "project_id": str(identifier),
             "counterparty_id": str(auth_world.counterparties[devseed.CUSTOMER]),
             "title": "КС-2 за октябрь",
-            "amount": "1250000.50",
         },
     )
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["registration_no"] == f"КС2-{code}-{datetime.date.today().year}-0001"
     assert body["financial"] is True
-    assert body["amount"] == "1250000.50"
+    assert body["amount"] is None
     assert body["versions"] == []
 
 
@@ -118,22 +117,29 @@ async def test_a_creation_that_breaks_a_scope_or_link_rule_is_refused_with_its_c
     api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
 ) -> None:
     legal, _code, identifier, heads = await _setup(
-        api, auth_world, worker_sync_engine, ("estimator",)
+        api, auth_world, worker_sync_engine, ("estimator", "equipment_head")
     )
     customer = str(auth_world.counterparties[devseed.CUSTOMER])
     base = {"legal_entity_id": str(legal), "title": "Тест"}
     cases = [
-        ({"kind": "ks2", "counterparty_id": customer}, "document.scope_invalid"),
-        ({"kind": "ks2", "project_id": str(identifier)}, "document.counterparty_required"),
-        ({"kind": "addendum"}, "document.contract_required"),
-        ({"kind": "ird", "project_id": str(identifier)}, "document.link_required"),
-        ({"kind": "equipment_passport"}, "document.link_required"),
-        ({"kind": "unknown_kind"}, "document.kind_invalid"),
+        ("estimator", {"kind": "ks2", "counterparty_id": customer}, "document.scope_invalid"),
+        (
+            "estimator",
+            {"kind": "ks2", "project_id": str(identifier)},
+            "document.counterparty_required",
+        ),
+        ("estimator", {"kind": "addendum"}, "document.contract_required"),
+        ("estimator", {"kind": "ird", "project_id": str(identifier)}, "document.link_required"),
+        ("equipment_head", {"kind": "equipment_passport"}, "document.link_required"),
+        ("estimator", {"kind": "unknown_kind"}, "document.kind_invalid"),
     ]
-    for extra, code in cases:
-        response = await create_document(api, heads["estimator"], {**base, **extra})
+    for who, extra, code in cases:
+        response = await create_document(api, heads[who], {**base, **extra})
         assert response.status_code == 422, (extra, response.text)
         assert response.json()["detail"] == code, extra
+    # Виды техники создаёт право техники (R2): сметчику документ паспорта не открыть.
+    refused = await create_document(api, heads["estimator"], {**base, "kind": "equipment_passport"})
+    assert refused.status_code == 403, refused.text
 
 
 async def test_a_legal_entity_without_a_code_cannot_issue_numbers(
@@ -374,10 +380,10 @@ async def test_an_unknown_document_is_not_found(api: AsyncClient, auth_world: Au
     assert response.status_code == 404
 
 
-async def test_a_user_without_the_documents_right_is_refused_at_the_registry(
+async def test_a_user_without_any_document_right_is_refused_at_the_registry(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
-    response = await api.get(f"{API}/documents", headers=await headers_for(api, "equipment_head"))
+    response = await api.get(f"{API}/documents", headers=await headers_for(api, "machinist"))
     assert response.status_code == 403
 
 

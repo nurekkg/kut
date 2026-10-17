@@ -7,6 +7,7 @@ import { API } from "@/lib/projects/keys";
 
 import { putObject, type VersionTransport } from "./upload";
 import type {
+  CounterpartyOut,
   CreateBody,
   DocumentDetail,
   DocumentOut,
@@ -30,6 +31,7 @@ export type DocumentFilters = {
   dateTo?: string;
   q?: string;
   equipmentUnitId?: string;
+  projectNodeId?: string;
 };
 
 export type Page = { limit: number; offset: number };
@@ -45,6 +47,7 @@ export function filterParams(filters: DocumentFilters): Record<string, string | 
     date_to: filters.dateTo,
     q: filters.q,
     equipment_unit_id: filters.equipmentUnitId,
+    project_node_id: filters.projectNodeId,
   };
 }
 
@@ -77,6 +80,17 @@ export function useDocuments(filters: DocumentFilters, page: Page, enabled = tru
   });
 }
 
+// Контрагенты для выбора: только id и название, не больше 50 совпадений; уточняется поиском q.
+export function useDocumentCounterparties(search: string, enabled = true) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "counterparties", search],
+    queryFn: () => api.get<CounterpartyOut[]>(`${DOCUMENTS_API}/counterparties`, { q: search || undefined }),
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+    enabled,
+  });
+}
+
 export function useDocument(id: string) {
   return useQuery({
     queryKey: [...DOCUMENTS_KEY, "detail", id],
@@ -100,7 +114,8 @@ export function useInvalidateDocuments(): () => Promise<void> {
 export const documentsApi = {
   create: (body: CreateBody, key: string) => api.post<DocumentDetail>(DOCUMENTS_API, body, key),
   archive: (id: string) => api.post<void>(`${DOCUMENTS_API}/${id}/archive`),
-  setAmount: (id: string, amount: string) => api.put<void>(`${DOCUMENTS_API}/${id}/amount`, { amount }),
+  setVersionAmount: (id: string, versionId: string, amount: string) =>
+    api.put<void>(`${DOCUMENTS_API}/${id}/versions/${versionId}/amount`, { amount }),
   downloadUrl: (id: string, versionId: string) =>
     api.get<DownloadOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/download-url`),
 };

@@ -45,6 +45,9 @@ QUALIFIED_PERMISSIONS: Final[tuple[tuple[Module, Action, str], ...]] = (
     (Module.EQUIPMENT, Action.APPROVE, "rate"),
     (Module.EQUIPMENT, Action.READ, "rates"),
     (Module.EQUIPMENT, Action.WRITE, "maintenance"),
+    # Документы техники (PO 2026-10-17, R2): видимость и загрузка видов equipment_*, кроме денежных.
+    (Module.EQUIPMENT, Action.READ, "documents"),
+    (Module.EQUIPMENT, Action.WRITE, "documents"),
     # Документы (ADR-015 часть 2 раздел 6): финансовые виды и архив.
     (Module.DOCUMENTS, Action.READ, "financial"),
     (Module.DOCUMENTS, Action.WRITE, "archive"),

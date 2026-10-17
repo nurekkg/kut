@@ -2,14 +2,15 @@ import uuid
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.deps import get_db, internal_only, require
+from app.modules.auth.deps import get_db, get_principal, internal_only, require
 from app.modules.auth.principal import Principal
 from app.modules.documents import service
 from app.modules.documents.schemas import (
     AmountIn,
+    CounterpartyOut,
     DocumentCreate,
     DocumentDetail,
     DocumentOut,
@@ -28,17 +29,26 @@ from app.modules.rbac.enums import Action, Module
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 Db = Annotated[AsyncSession, Depends(get_db)]
+
+
+async def _reader(principal: Principal = Depends(get_principal)) -> Principal:
+    """Чтение: право на документы или на документы техники (R2, equipment:read:documents). Вид
+    отбирает БД: без документного права видны только виды техники."""
+    if principal.has(Module.DOCUMENTS, Action.READ) or principal.has(
+        Module.EQUIPMENT, Action.READ, "documents"
+    ):
+        return principal
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+
+
 # Чтение доступно и внешним ролям: их видимость задаёт БД (ADR-015 часть 2 раздел 7).
-Reader = Annotated[Principal, Depends(require(Module.DOCUMENTS, Action.READ))]
-# Журнал статусов и выгрузка - только внутренние роли.
+Reader = Annotated[Principal, Depends(_reader)]
+# Журнал статусов - только внутренним; право на конкретный вид проверяет сервис и БД.
 Viewer = Annotated[Principal, Depends(internal_only(require(Module.DOCUMENTS, Action.READ)))]
 Exporter = Annotated[Principal, Depends(internal_only(require(Module.DOCUMENTS, Action.EXPORT)))]
-# Запись и архив - только внутренние роли.
-Writer = Annotated[Principal, Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE)))]
-FinancialWriter = Annotated[
-    Principal,
-    Depends(internal_only(require(Module.DOCUMENTS, Action.READ, qualifier="financial"))),
-]
+# Запись: любой внутренний пользователь; право на вид (документы или техника) проверяет сервис, а
+# БД - политика.
+Internal = Annotated[Principal, Depends(internal_only(get_principal))]
 Archiver = Annotated[
     Principal,
     Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="archive"))),
@@ -61,6 +71,7 @@ def registry_filters(
     date_to: date | None = None,
     q: Annotated[str | None, Query(max_length=64)] = None,
     equipment_unit_id: uuid.UUID | None = None,
+    project_node_id: uuid.UUID | None = None,
 ) -> service.RegistryFilters:
     """Фильтры реестра и выгрузки: один набор параметров на оба маршрута."""
     return service.RegistryFilters(
@@ -72,10 +83,12 @@ def registry_filters(
         date_to=date_to,
         q=(q or "").strip() or None,
         equipment_unit_id=equipment_unit_id,
+        project_node_id=project_node_id,
     )
 
 
 Filters = Annotated[service.RegistryFilters, Depends(registry_filters)]
+MAX_OFFSET = 1_000_000  # выше значения БД даёт ошибку 500, а не пустой список
 
 
 @router.get("/kinds", response_model=list[KindOut])
@@ -95,7 +108,12 @@ async def kinds(_principal: Reader) -> list[KindOut]:
     ]
 
 
-MAX_OFFSET = 1_000_000  # выше значения БД даёт ошибку 500, а не пустой список
+@router.get("/counterparties", response_model=list[CounterpartyOut])
+async def counterparties(
+    session: Db, _principal: Viewer, q: Annotated[str | None, Query(max_length=64)] = None
+) -> list[CounterpartyOut]:
+    """Контрагенты для выбора в документах: id и название (RLS справочника)."""
+    return await service.list_counterparties(session, q)
 
 
 @router.get("", response_model=list[DocumentOut])
@@ -128,7 +146,7 @@ async def create_document(
     body: DocumentCreate,
     request: Request,
     key: IdempotencyKeyHeader,
-    principal: Writer,
+    principal: Internal,
     session: Db,
 ) -> Response:
     """Черновик документа (номер присваивается сразу); повтор с тем же ключом - тот же ответ."""
@@ -159,11 +177,17 @@ async def document_events(
     return await service.list_events(session, document_id)
 
 
-@router.put("/{document_id}/amount", status_code=status.HTTP_204_NO_CONTENT)
-async def set_amount(
-    document_id: uuid.UUID, body: AmountIn, session: Db, principal: FinancialWriter
+@router.put("/{document_id}/versions/{version_id}/amount", status_code=status.HTTP_204_NO_CONTENT)
+async def set_version_amount(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    body: AmountIn,
+    session: Db,
+    principal: Internal,
 ) -> Response:
-    await service.set_amount(session, principal, document_id, body)
+    """Сумма черновой версии (PO 2026-10-17, R1). После выхода из черновика - 409
+    document.version_not_draft."""
+    await service.set_version_amount(session, principal, document_id, version_id, body)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -171,7 +195,7 @@ async def set_amount(
     "/{document_id}/versions/presign", response_model=PresignOut, dependencies=[Depends(_no_store)]
 )
 async def presign(
-    document_id: uuid.UUID, body: PresignRequest, session: Db, _principal: Writer
+    document_id: uuid.UUID, body: PresignRequest, session: Db, _principal: Internal
 ) -> PresignOut:
     """Ссылка на загрузку: файл уходит прямо в S3 с контрольной суммой SHA-256."""
     return await service.presign(session, document_id, body)
@@ -187,13 +211,13 @@ async def confirm(
     body: VersionConfirm,
     request: Request,
     key: IdempotencyKeyHeader,
-    principal: Writer,
+    principal: Internal,
     session: Db,
 ) -> Response:
     """Подтверждение версии: проверка файла в S3 и запись версии (повтор - тот же ответ)."""
 
     async def handler() -> tuple[int, VersionOut]:
-        created = await service.confirm(session, document_id, body)
+        created = await service.confirm(session, principal, document_id, body)
         return status.HTTP_201_CREATED, created
 
     result = await run_idempotent(

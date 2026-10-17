@@ -231,11 +231,11 @@ export function DocumentDialog({ unitId, onClose }: { unitId: string; onClose: D
   const [documentId, setDocumentId] = useState("");
   const { user } = useAuth();
   // Связать можно только документ реестра того же вида, что и строка срока: сервер проверяет это ещё раз.
-  const documents = useDocuments(
-    { equipmentUnitId: unitId },
-    { limit: 100, offset: 0 },
-    user?.permissions.includes("documents:read") ?? false,
-  );
+  // Документы техники видны по праву техники (equipment:read:documents), без документного права тоже.
+  const canReadDocuments =
+    (user?.permissions.includes("documents:read") || user?.permissions.includes("equipment:read:documents")) ??
+    false;
+  const documents = useDocuments({ equipmentUnitId: unitId }, { limit: 100, offset: 0 }, canReadDocuments);
   const linkable = (documents.data ?? []).filter((item) => item.kind === equipmentDocumentKind(kind));
   const save = useMutation({
     mutationFn: () =>

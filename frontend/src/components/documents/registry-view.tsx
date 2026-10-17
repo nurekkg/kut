@@ -9,21 +9,23 @@ import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
+import { CounterpartyPicker } from "@/components/documents/counterparty-picker";
 import { CreateDocumentDialog } from "@/components/documents/create-document-dialog";
-import { StatusBadge, useDocumentErrorMessage, useKindLabel, useStatusLabel } from "@/components/documents/shared";
+import {
+  EffectiveMark,
+  StatusBadge,
+  useDocumentErrorMessage,
+  useKindLabel,
+  useStatusLabel,
+} from "@/components/documents/shared";
 import { useDebounced } from "@/components/settings/shared";
 import { AppNav } from "@/components/projects/app-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import {
-  canCreate,
-  canExport,
-  canSeeAmountColumn,
-  canShowAmounts,
-  canUseCounterparties,
-} from "@/lib/documents/access";
+import { canCreate, canExport, canSeeAmountColumn, canUseCounterparties } from "@/lib/documents/access";
 import { formatAmount, formatDay } from "@/lib/documents/format";
+import { creatableKinds } from "@/lib/documents/kinds";
 import {
   exportPath,
   type DocumentFilters,
@@ -32,7 +34,6 @@ import {
 } from "@/lib/documents/queries";
 import { DOCUMENT_STATUSES, type DocumentOut } from "@/lib/documents/types";
 import { fetchBlob, saveBlob } from "@/lib/equipment/download";
-import { useCounterparties } from "@/lib/equipment/queries";
 import { api } from "@/lib/api";
 import { API, projectKey } from "@/lib/projects/keys";
 import type { Project } from "@/lib/projects/types";
@@ -80,7 +81,6 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
   const rows = useMemo<DocumentOut[]>(() => list.data ?? [], [list.data]);
   const kinds = useDocumentKinds();
   const counterpartySource = canUseCounterparties(permissions);
-  const counterparties = useCounterparties(counterpartySource);
   // Юрлицо для создания берётся из объекта; внешним ролям карточка объекта не нужна.
   const project = useQuery({
     queryKey: projectKey(projectId),
@@ -92,7 +92,8 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
     onSuccess: (blob) => saveBlob(blob, `documents-${todayIso()}.xlsx`),
   });
 
-  const showAmount = canSeeAmountColumn(rows) && canShowAmounts(permissions, internal);
+  // Сумму отдаёт сервер только тем, кому она положена: колонка есть, если есть хоть одна сумма (R1, R3).
+  const showAmount = canSeeAmountColumn(rows);
   const columns = useMemo<ColumnDef<DocumentOut>[]>(() => {
     const base: ColumnDef<DocumentOut>[] = [
       {
@@ -121,7 +122,12 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
       {
         id: "status",
         header: () => t("columns.status"),
-        cell: ({ row }) => <StatusBadge status={row.original.latest_status} />,
+        cell: ({ row }) => (
+          <div className="flex flex-col items-start gap-1">
+            <StatusBadge status={row.original.latest_status} />
+            <EffectiveMark doc={row.original} />
+          </div>
+        ),
       },
       {
         id: "date",
@@ -254,22 +260,17 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
           ))}
         </NativeSelect>
         {counterpartySource ? (
-          <NativeSelect
-            aria-label={t("counterpartyLabel")}
+          <CounterpartyPicker
+            id="documents-filter-counterparty"
+            label={t("counterpartyLabel")}
             value={counterpartyId}
-            onChange={(event) => {
-              setCounterpartyId(event.target.value);
+            placeholder={t("allCounterparties")}
+            testId="documents-filter-counterparty"
+            onChange={(next) => {
+              setCounterpartyId(next);
               setPage(0);
             }}
-            data-testid="documents-filter-counterparty"
-          >
-            <option value="">{t("allCounterparties")}</option>
-            {(counterparties.data ?? []).map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </NativeSelect>
+          />
         ) : null}
         <Input
           type="date"
@@ -360,7 +361,10 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
               >
                 <div className="flex items-start justify-between gap-2">
                   <span className="min-w-0 font-medium break-all">{row.registration_no ?? t("noValue")}</span>
-                  <StatusBadge status={row.latest_status} />
+                  <div className="flex flex-col items-end gap-1">
+                    <StatusBadge status={row.latest_status} />
+                    <EffectiveMark doc={row} />
+                  </div>
                 </div>
                 <p className="text-sm break-words">{row.title}</p>
                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
@@ -410,11 +414,9 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
       {creating ? (
         <CreateDocumentDialog
           projectId={projectId}
-          project={project.data}
-          kinds={kindsList}
-          counterparties={counterparties.data ?? []}
+          legalEntityId={project.data?.legal_entity_id}
+          kinds={creatableKinds(kindsList, counterpartySource)}
           canCounterparty={counterpartySource}
-          canFinancial={permissions.includes("documents:read:financial")}
           onClose={() => setCreating(false)}
         />
       ) : null}

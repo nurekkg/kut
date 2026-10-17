@@ -27,6 +27,11 @@ const KEYS = {
   legal_entity_code_missing: "legalEntityCodeMissing",
   insecure_context: "insecureContext",
   empty: "empty",
+  version_not_draft: "versionNotDraft",
+  amount_invalid: "amountInvalid",
+  amount_not_financial: "amountNotFinancial",
+  amount_exists: "amountExists",
+  amount_delete_forbidden: "amountDeleteForbidden",
   "equipment.document_kind_mismatch": "equipmentDocumentKindMismatch",
   "equipment.document_unit_mismatch": "equipmentDocumentUnitMismatch",
 } as const;

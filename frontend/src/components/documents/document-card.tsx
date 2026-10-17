@@ -9,9 +9,10 @@ import { useState, type ReactNode } from "react";
 import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
 import { Section } from "@/components/equipment/section";
-import { AmountDialog, ArchiveDialog } from "@/components/documents/document-dialogs";
+import { ArchiveDialog, VersionAmountDialog } from "@/components/documents/document-dialogs";
 import { UploadVersionDialog } from "@/components/documents/upload-version-dialog";
 import {
+  EffectiveMark,
   openDownload,
   StatusBadge,
   useDocumentErrorMessage,
@@ -25,18 +26,18 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import {
   canArchive,
-  canCreate,
   canDownload,
-  canReadFinancial,
-  canShowAmounts,
-  canUploadVersion,
+  canEditVersionAmount,
+  canEnterAmount,
+  canWriteKind,
 } from "@/lib/documents/access";
 import { formatAmount, formatDay, formatMegabytes, formatMoment } from "@/lib/documents/format";
 import { documentsApi, useDocument, useDocumentEvents } from "@/lib/documents/queries";
-import { LEGAL_ENTITIES_REF_KEY, API, projectKey } from "@/lib/projects/keys";
-import type { NamedRef, Project } from "@/lib/projects/types";
+import { API, projectKey } from "@/lib/projects/keys";
+import type { Project } from "@/lib/projects/types";
 
-// Карточка документа: реквизиты, текущая версия, все версии. Внутренним - ещё автор, комментарии,
+// Карточка документа: реквизиты, текущая версия, все версии с суммами. Сумма принадлежит версии (R1):
+// правится только у черновика, поэтому кнопка «изменить» стоит у строки версии. Внутренним - ещё автор,
 // события статусов и связи; внешним (заказчик, субподрядчик) только то, что отдал сервер.
 export function DocumentCard({ documentId }: { documentId: string }) {
   const t = useTranslations("Documents.card");
@@ -49,18 +50,15 @@ export function DocumentCard({ documentId }: { documentId: string }) {
   const permissions = user?.permissions ?? [];
   const internal = user?.is_internal ?? false;
   const doc = useDocument(documentId);
-  const events = useDocumentEvents(documentId, internal);
+  // Журнал переходов - по документному праву чтения (сервер: внутренним с documents:read); механику и
+  // начальнику техники, которые видят документ техники по праву техники, журнала не показываем.
+  const canSeeEvents = internal && permissions.includes("documents:read");
+  const events = useDocumentEvents(documentId, canSeeEvents);
   const projectId = doc.data?.project_id ?? null;
   const project = useQuery({
     queryKey: projectKey(projectId ?? "none"),
     queryFn: () => api.get<Project>(`${API}/projects/${projectId}`),
     enabled: internal && projectId !== null,
-  });
-  const legalEntities = useQuery({
-    queryKey: LEGAL_ENTITIES_REF_KEY,
-    queryFn: () => api.get<NamedRef[]>(`${API}/legal-entities`),
-    staleTime: 60_000,
-    enabled: internal,
   });
   const download = useMutation({
     mutationFn: (versionId: string) => documentsApi.downloadUrl(documentId, versionId),
@@ -68,7 +66,7 @@ export function DocumentCard({ documentId }: { documentId: string }) {
   });
   const [uploading, setUploading] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  const [editingAmount, setEditingAmount] = useState(false);
+  const [amountOf, setAmountOf] = useState<{ id: string; number: number; amount: string | null } | null>(null);
 
   if (doc.isPending) {
     return (
@@ -88,15 +86,11 @@ export function DocumentCard({ documentId }: { documentId: string }) {
   }
 
   const d = doc.data;
-  const canUpload = internal && d.archived_at === null && canUploadVersion(permissions);
+  const canUpload = internal && d.archived_at === null && canWriteKind(d.kind, permissions);
   const canArchiveNow = internal && d.archived_at === null && canArchive(permissions);
-  // Сумму пишет API по documents:write (документ - по праву записи) и documents:read:financial.
-  const canSetAmount =
-    internal && d.financial && d.archived_at === null && canCreate(permissions) && canReadFinancial(permissions);
   const current = d.current_version;
   const downloadable = canDownload(d, permissions, internal);
   const versions = [...d.versions].sort((a, b) => b.version_no - a.version_no);
-  const legalName = legalEntities.data?.find((item) => item.id === d.legal_entity_id)?.name ?? "—";
 
   return (
     <Frame backHref={d.project_id ? `/projects/${d.project_id}/documents` : "/projects"}>
@@ -135,24 +129,7 @@ export function DocumentCard({ documentId }: { documentId: string }) {
         </p>
       ) : null}
 
-      <Section
-        id="document-requisites-title"
-        title={t("requisites")}
-        action={
-          canSetAmount ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setEditingAmount(true)}
-              data-testid="document-amount-open"
-            >
-              <Pencil data-icon="inline-start" aria-hidden />
-              {d.amount === null ? t("setAmount") : t("changeAmount")}
-            </Button>
-          ) : null
-        }
-      >
+      <Section id="document-requisites-title" title={t("requisites")}>
         <dl data-testid="document-requisites" className="grid gap-3 sm:grid-cols-2">
           <Row label={t("kind")}>{kindLabel(d.kind)}</Row>
           {d.registration_no ? <Row label={t("registrationNo")}>{d.registration_no}</Row> : null}
@@ -170,12 +147,15 @@ export function DocumentCard({ documentId }: { documentId: string }) {
           {d.counterparty_id !== null ? (
             <Row label={t("counterparty")}>{d.counterparty_name ?? common("noValue")}</Row>
           ) : null}
-          {internal ? <Row label={t("legalEntity")}>{legalName}</Row> : null}
+          {internal ? <Row label={t("legalEntity")}>{d.legal_entity_name ?? common("noValue")}</Row> : null}
           <Row label={t("created")}>{formatMoment(d.created_at)}</Row>
           {d.archived_at ? <Row label={t("archivedAt")}>{formatMoment(d.archived_at)}</Row> : null}
-          {d.amount !== null && canShowAmounts(permissions, internal) ? (
-            <Row label={t("amount")} testId="document-amount">
+          {d.amount !== null ? (
+            <Row label={t("currentAmount")} testId="document-amount">
               <span className="tabular-nums">{formatAmount(d.amount)}</span>
+              {d.amount_version_no !== null ? (
+                <span className="ml-2 text-muted-foreground">{t("amountVersion", { number: d.amount_version_no })}</span>
+              ) : null}
             </Row>
           ) : null}
         </dl>
@@ -188,6 +168,7 @@ export function DocumentCard({ documentId }: { documentId: string }) {
               <p className="font-medium">{t("versionNo", { number: current.version_no })}</p>
               <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 <StatusBadge status={current.status} />
+                <EffectiveMark doc={d} />
                 <span className="tabular-nums">{formatDay(current.created_at)}</span>
               </div>
             </div>
@@ -248,30 +229,50 @@ export function DocumentCard({ documentId }: { documentId: string }) {
                     {version.author_name ? <span>{t("authorValue", { name: version.author_name })}</span> : null}
                     <span className="tabular-nums">{formatDay(version.created_at)}</span>
                     <span className="tabular-nums">{t("sizeMb", { value: formatMegabytes(version.size_bytes) })}</span>
+                    {version.amount !== null ? (
+                      <span className="tabular-nums text-foreground" data-testid="document-version-amount">
+                        {t("versionAmount", { amount: formatAmount(version.amount) })}
+                      </span>
+                    ) : null}
                   </div>
                   {version.comment ? <p className="break-words">{version.comment}</p> : null}
                 </div>
-                {downloadable ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    disabled={download.isPending}
-                    onClick={() => download.mutate(version.id)}
-                    data-testid="document-version-download"
-                  >
-                    <Download data-icon="inline-start" aria-hidden />
-                    {t("download")}
-                  </Button>
-                ) : null}
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  {canEditVersionAmount(d, version, permissions, internal) ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setAmountOf({ id: version.id, number: version.version_no, amount: version.amount })
+                      }
+                      data-testid="document-version-amount-open"
+                    >
+                      <Pencil data-icon="inline-start" aria-hidden />
+                      {version.amount === null ? t("setAmount") : t("editAmount")}
+                    </Button>
+                  ) : null}
+                  {downloadable ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={download.isPending}
+                      onClick={() => download.mutate(version.id)}
+                      data-testid="document-version-download"
+                    >
+                      <Download data-icon="inline-start" aria-hidden />
+                      {t("download")}
+                    </Button>
+                  ) : null}
+                </div>
               </li>
             ))}
           </ul>
         )}
       </Section>
 
-      {internal ? (
+      {canSeeEvents ? (
         <div data-testid="document-events">
           <Section id="document-events-title" title={t("events")}>
             {events.isPending ? <p className="text-sm text-muted-foreground">{common("loading")}</p> : null}
@@ -324,10 +325,22 @@ export function DocumentCard({ documentId }: { documentId: string }) {
         </div>
       ) : null}
 
-      {uploading ? <UploadVersionDialog documentId={d.id} onClose={() => setUploading(false)} /> : null}
+      {uploading ? (
+        <UploadVersionDialog
+          documentId={d.id}
+          canAmount={canEnterAmount(d, permissions, internal)}
+          onClose={() => setUploading(false)}
+        />
+      ) : null}
       {archiving ? <ArchiveDialog documentId={d.id} onClose={() => setArchiving(false)} /> : null}
-      {editingAmount ? (
-        <AmountDialog documentId={d.id} initial={d.amount} onClose={() => setEditingAmount(false)} />
+      {amountOf !== null ? (
+        <VersionAmountDialog
+          documentId={d.id}
+          versionId={amountOf.id}
+          versionNo={amountOf.number}
+          initial={amountOf.amount}
+          onClose={() => setAmountOf(null)}
+        />
       ) : null}
     </Frame>
   );

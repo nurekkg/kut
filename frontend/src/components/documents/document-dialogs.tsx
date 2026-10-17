@@ -67,13 +67,18 @@ export function ArchiveDialog({ documentId, onClose }: { documentId: string; onC
   );
 }
 
-// Сумма финансового документа, внесённая после создания (PUT /amount, право documents:read:financial).
-export function AmountDialog({
+// Сумма версии (R1): правится только у черновика. Сервер отвечает 409 document.version_not_draft, если версия
+// уже вышла из черновика (диалог открыт на устаревшем экране), и текст ошибки это объясняет.
+export function VersionAmountDialog({
   documentId,
+  versionId,
+  versionNo,
   initial,
   onClose,
 }: {
   documentId: string;
+  versionId: string;
+  versionNo: number;
   initial: string | null;
   onClose: () => void;
 }) {
@@ -85,7 +90,7 @@ export function AmountDialog({
   const amount = parseAmount(text);
   const invalid = text.trim() !== "" && amount === null;
   const save = useMutation({
-    mutationFn: (value: string) => documentsApi.setAmount(documentId, value),
+    mutationFn: (value: string) => documentsApi.setVersionAmount(documentId, versionId, value),
     onSuccess: async () => {
       await invalidate();
       onClose();
@@ -100,7 +105,7 @@ export function AmountDialog({
     >
       <DialogContent data-testid="document-amount-dialog">
         <DialogHeader>
-          <DialogTitle>{t("amountTitle")}</DialogTitle>
+          <DialogTitle>{t("amountTitle", { number: versionNo })}</DialogTitle>
           <DialogDescription>{t("amountText")}</DialogDescription>
         </DialogHeader>
         <form

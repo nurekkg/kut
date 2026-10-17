@@ -112,6 +112,9 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "document.version_status_invalid": (422, "document.version_status_invalid"),
     "document.link_invalid": (422, "document.link_invalid"),
     "document.amount_not_financial": (422, "document.amount_not_financial"),
+    # Сумма версии (PO 2026-10-17, R1): правка только у черновика, удаление запрещено.
+    "amount.version_not_draft": (409, "document.version_not_draft"),
+    "amount.delete_forbidden": (409, "document.amount_delete_forbidden"),
     "document.event_immutable": (409, "document.event_immutable"),
 }
 
@@ -226,6 +229,8 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "uq_document_version_document_id_version_no": (409, "document.version_conflict"),
     "uq_document_version_s3_key": (409, "document.file_already_confirmed"),
     "uq_document_amount_document_id": (409, "document.amount_exists"),
+    "uq_document_version_amount_version_id": (409, "document.amount_exists"),
+    "ck_document_version_amount_amount_not_negative": (422, "document.amount_invalid"),
     "uq_legal_entity_code": (409, "legal_entity.code_taken"),
     "ck_document_kind_valid": (422, "document.kind_invalid"),
     "ck_document_scope_valid": (422, "document.scope_invalid"),

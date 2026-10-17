@@ -134,6 +134,8 @@ export type VersionTransport = {
 
 export type UploadOptions = {
   comment: string | null;
+  // Сумма версии (R1): уходит в подтверждение; повтор шлёт то же значение, иначе ключ идемпотентности не сойдётся.
+  amount: string | null;
   onProgress?: (loaded: number, total: number) => void;
   now?: () => number;
 };
@@ -173,5 +175,8 @@ export async function uploadVersion(
   }
   if (stored === null) throw new UploadError("not_uploaded");
   work.confirmSent = true;
-  return transport.confirm({ key: stored.key, comment: options.comment }, work.idempotencyKey);
+  return transport.confirm(
+    { key: stored.key, comment: options.comment, amount: options.amount },
+    work.idempotencyKey,
+  );
 }

@@ -230,6 +230,29 @@ class DocumentAmount(BusinessBase):
     )
 
 
+class DocumentVersionAmount(BusinessBase):
+    """Сумма версии (PO 2026-10-17, R1): одна строка на версию. Правка - только у черновика (гард
+    БД),
+    удаление запрещено. Видна по праву на вид и видимости версии; RLS не даёт сумму прорабу."""
+
+    __tablename__ = "document_version_amount"
+
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_version.id"), unique=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document.id"), index=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "legal_entity_id"],
+            ["project.id", "project.legal_entity_id"],
+            name="fk_document_version_amount_project_id_project",
+        ),
+        CheckConstraint("amount >= 0", name="amount_not_negative"),
+    )
+
+
 class DocumentNumberCounter(Base):
     """Счётчик регистрационных номеров (ADR часть 1, раздел 3.4): без дыр, меняет только функция.
 

@@ -253,12 +253,14 @@ def ensure_documents(
         ).scalar_one()
         counts["document_version"] += 1
         if demo.amount is not None:
+            # Сумма принадлежит версии (R1): пишется в черновик, до утверждения.
             connection.execute(
                 text(
-                    "INSERT INTO document_amount (document_id, legal_entity_id, amount)"
-                    " VALUES (:d, :le, CAST(:amount AS numeric))"
+                    "INSERT INTO document_version_amount"
+                    " (version_id, document_id, legal_entity_id, amount)"
+                    " VALUES (:v, :d, :le, CAST(:amount AS numeric))"
                 ),
-                {"d": document_id, "le": legal, "amount": demo.amount},
+                {"v": version_id, "d": document_id, "le": legal, "amount": demo.amount},
             )
             counts["document_amount"] += 1
         if demo.approve:

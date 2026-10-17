@@ -12,11 +12,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient, Response
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy import column, insert, select, table, text, update
+from sqlalchemy.engine import Connection, Engine
 
 from tests.auth_support import AuthWorld
-from tests.equipment_support import grant as _grant
 from tests.equipment_support import headers_for, idem, second_project
 
 API = "/api/v1"
@@ -37,12 +36,46 @@ XLSM = "application/vnd.ms-excel.sheet.macroEnabled.12"
 GRANTS: list[tuple[str, UUID, UUID]] = []
 
 
+PROJECT_ACCESS = table(
+    "user_project_access", column("user_id"), column("project_id"), column("deleted_at")
+)
+ENTITY_ACCESS = table(
+    "user_legal_entity_access",
+    column("user_id"),
+    column("legal_entity_id"),
+    column("deleted_at"),
+)
+
+
+def _open(connection: Connection, access: Any, key: str, user: UUID, target: UUID) -> bool:
+    """Открывает доступ. True - строка появилась или вернулась из мягкого удаления (такой доступ
+    теста отзовём); False - доступ уже действует (его дал сид), его не трогаем."""
+    row = connection.execute(
+        select(access.c.deleted_at).where(access.c.user_id == user, access.c[key] == target)
+    ).first()
+    if row is None:
+        connection.execute(insert(access).values(user_id=user, **{key: target}))
+        return True
+    if row.deleted_at is None:
+        return False
+    connection.execute(
+        update(access)
+        .where(access.c.user_id == user, access.c[key] == target)
+        .values(deleted_at=None)
+    )
+    return True
+
+
 def grant(
     engine: Engine, user: UUID, *, projects: tuple[UUID, ...] = (), entities: tuple[UUID, ...] = ()
 ) -> None:
-    _grant(engine, user, projects=projects, entities=entities)
-    GRANTS.extend(("project", user, item) for item in projects)
-    GRANTS.extend(("entity", user, item) for item in entities)
+    with engine.begin() as connection:
+        for project in projects:
+            if _open(connection, PROJECT_ACCESS, "project_id", user, project):
+                GRANTS.append(("project", user, project))
+        for entity in entities:
+            if _open(connection, ENTITY_ACCESS, "legal_entity_id", user, entity):
+                GRANTS.append(("entity", user, entity))
 
 
 def revoke_test_grants(engine: Engine) -> None:
@@ -184,9 +217,11 @@ async def upload(
     content_type: str,
     *,
     comment: str | None = None,
+    amount: str | None = None,
 ) -> Response:
     """Загрузка версии как в браузере: presign, PUT напрямую в S3, подтверждение. Возвращает ответ
-    того шага, где остановилась загрузка (при успехе - ответ подтверждения)."""
+    того шага, где остановилась загрузка (при успехе - ответ подтверждения). Сумма - в подтверждении
+    (R1)."""
     presigned = await api.post(
         f"{API}/documents/{document_id}/versions/presign",
         json={
@@ -204,7 +239,7 @@ async def upload(
         return uploaded
     return await api.post(
         f"{API}/documents/{document_id}/versions/confirm",
-        json={"key": item["key"], "comment": comment},
+        json={"key": item["key"], "comment": comment, "amount": amount},
         headers={**headers, **idem()},
     )
 

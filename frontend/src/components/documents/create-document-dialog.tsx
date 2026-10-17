@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+import { CounterpartyPicker } from "@/components/documents/counterparty-picker";
 import { Field, useDocumentErrorMessage, useKindLabel } from "@/components/documents/shared";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,31 +19,28 @@ import {
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { newIdempotencyKey } from "@/lib/api";
-import { parseAmount } from "@/lib/documents/format";
-import { creatableKinds } from "@/lib/documents/kinds";
+import { isKindCode } from "@/lib/documents/kinds";
 import { documentsApi, useInvalidateDocuments } from "@/lib/documents/queries";
 import type { CreateBody, KindOut } from "@/lib/documents/types";
 import { useLegalEntities } from "@/lib/equipment/queries";
-import type { CounterpartyRef } from "@/lib/equipment/types";
-import type { Project } from "@/lib/projects/types";
 
-// Создание документа в реестре объекта. Ключ идемпотентности один на открытие диалога: повтор после сбоя
-// не заведёт второй номер. Юрлицо берётся из объекта, номер присваивает сервер.
+// Создание документа: из реестра объекта (projectId) или из карточки техники (unitId, связь с единицей
+// задаётся сразу). Ключ идемпотентности один на открытие диалога: повтор после сбоя не заведёт второй номер.
+// Закрыть диалог во время отправки нельзя: исход запроса неизвестен, а новый ключ дал бы дубль.
+// Юрлицо и номер - от сервера (юрлицо объекта или единицы); сумма в создании не вводится (R1).
 export function CreateDocumentDialog({
   projectId,
-  project,
+  legalEntityId,
+  unitId,
   kinds,
-  counterparties,
   canCounterparty,
-  canFinancial,
   onClose,
 }: {
-  projectId: string;
-  project: Project | undefined;
+  projectId?: string;
+  legalEntityId: string | undefined;
+  unitId?: string;
   kinds: readonly KindOut[];
-  counterparties: readonly CounterpartyRef[];
   canCounterparty: boolean;
-  canFinancial: boolean;
   onClose: () => void;
 }) {
   const t = useTranslations("Documents.create");
@@ -55,34 +53,26 @@ export function CreateDocumentDialog({
   const [kindCode, setKindCode] = useState("");
   const [title, setTitle] = useState("");
   const [counterpartyId, setCounterpartyId] = useState("");
-  const [amountText, setAmountText] = useState("");
 
   const legalEntities = useLegalEntities();
   const legalName =
-    legalEntities.data?.find((item) => item.id === project?.legal_entity_id)?.name ?? common("noValue");
-  const options = creatableKinds(kinds, canCounterparty);
-  const kind = options.find((item) => item.code === kindCode) ?? null;
+    legalEntities.data?.find((item) => item.id === legalEntityId)?.name ?? common("noValue");
+  const kind = kinds.find((item) => item.code === kindCode) ?? null;
   const needsCounterparty = kind?.counterparty_required ?? false;
-  const withAmount = kind !== null && kind.financial && canFinancial;
-  const amountFilled = withAmount && amountText.trim() !== "";
-  const amount = amountFilled ? parseAmount(amountText) : null;
-  const amountInvalid = amountFilled && amount === null;
 
   const ready =
     kind !== null &&
-    project !== undefined &&
+    legalEntityId !== undefined &&
     title.trim() !== "" &&
-    (!needsCounterparty || counterpartyId !== "") &&
-    !amountInvalid;
+    (!needsCounterparty || counterpartyId !== "");
   const body: CreateBody | null = ready
     ? {
         kind: kind.code,
-        legal_entity_id: project.legal_entity_id,
-        project_id: projectId,
+        legal_entity_id: legalEntityId,
+        ...(projectId !== undefined ? { project_id: projectId } : {}),
         title: title.trim(),
-        links: [],
+        links: unitId !== undefined ? [{ kind: "equipment_unit", id: unitId }] : [],
         ...(needsCounterparty ? { counterparty_id: counterpartyId } : {}),
-        ...(amount !== null ? { amount } : {}),
       }
     : null;
 
@@ -109,16 +99,16 @@ export function CreateDocumentDialog({
       <DialogContent data-testid="documents-create-dialog">
         <DialogHeader>
           <DialogTitle>{t("title")}</DialogTitle>
-          <DialogDescription>{t("description")}</DialogDescription>
+          <DialogDescription>{unitId !== undefined ? t("unitHint") : t("description")}</DialogDescription>
         </DialogHeader>
         <form className="grid gap-3" onSubmit={submit}>
           <div className="grid gap-0.5" data-testid="documents-create-legal-entity">
             <span className="text-sm font-medium">{t("legalEntity")}</span>
             <span className="text-sm text-muted-foreground">{legalName}</span>
           </div>
-          {project === undefined ? <p className="text-sm text-muted-foreground">{t("loadingProject")}</p> : null}
+          {legalEntityId === undefined ? <p className="text-sm text-muted-foreground">{t("loadingProject")}</p> : null}
           {canCounterparty ? null : <p className="text-sm text-muted-foreground">{t("counterpartyUnavailable")}</p>}
-          {options.length === 0 ? (
+          {kinds.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("noKinds")}</p>
           ) : (
             <>
@@ -131,9 +121,9 @@ export function CreateDocumentDialog({
                   data-testid="documents-create-kind"
                 >
                   <option value="">{t("chooseKind")}</option>
-                  {options.map((item) => (
+                  {kinds.map((item) => (
                     <option key={item.code} value={item.code}>
-                      {kindLabel(item.code)}
+                      {isKindCode(item.code) ? kindLabel(item.code) : item.code}
                     </option>
                   ))}
                 </NativeSelect>
@@ -148,37 +138,17 @@ export function CreateDocumentDialog({
                   data-testid="documents-create-title"
                 />
               </Field>
-              {needsCounterparty ? (
+              {needsCounterparty && canCounterparty ? (
                 <Field id="create-counterparty" label={t("counterparty")}>
-                  <NativeSelect
+                  <CounterpartyPicker
                     id="create-counterparty"
+                    label={t("counterparty")}
                     value={counterpartyId}
+                    placeholder={t("chooseCounterparty")}
                     required
-                    onChange={(event) => setCounterpartyId(event.target.value)}
-                    data-testid="documents-create-counterparty"
-                  >
-                    <option value="">{t("chooseCounterparty")}</option>
-                    {counterparties.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </NativeSelect>
-                </Field>
-              ) : null}
-              {withAmount ? (
-                <Field id="create-amount" label={t("amount")}>
-                  <Input
-                    id="create-amount"
-                    inputMode="decimal"
-                    value={amountText}
-                    aria-invalid={amountInvalid ? true : undefined}
-                    onChange={(event) => setAmountText(event.target.value)}
-                    data-testid="documents-create-amount"
+                    testId="documents-create-counterparty"
+                    onChange={setCounterpartyId}
                   />
-                  <p className={amountInvalid ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
-                    {amountInvalid ? common("amountInvalid") : t("amountHint")}
-                  </p>
                 </Field>
               ) : null}
             </>
@@ -189,7 +159,7 @@ export function CreateDocumentDialog({
             </p>
           ) : null}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={onClose} disabled={save.isPending}>
               {common("cancel")}
             </Button>
             <Button type="submit" disabled={body === null || save.isPending} data-testid="documents-create-submit">

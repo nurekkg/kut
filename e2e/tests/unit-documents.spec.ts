@@ -4,17 +4,23 @@ import {
   canArchive,
   canCreate,
   canDownload,
+  canEditVersionAmount,
+  canEnterAmount,
   canExport,
-  canReadFinancial,
   canSeeAmountColumn,
-  canShowAmounts,
-  canUploadVersion,
+  canSeeMoney,
   canUseCounterparties,
+  canWriteKind,
+  effectiveDiffers,
 } from "../../frontend/src/lib/documents/access";
 import { ApiError } from "../../frontend/src/lib/auth/api";
 import { documentErrorKey } from "../../frontend/src/lib/documents/errors";
 import { formatAmount, formatDay, parseAmount } from "../../frontend/src/lib/documents/format";
-import { equipmentDocumentKind } from "../../frontend/src/lib/documents/equipment-kinds";
+import {
+  equipmentDocumentKind,
+  isEquipmentDocumentKind,
+  isMoneyEquipmentDocumentKind,
+} from "../../frontend/src/lib/documents/equipment-kinds";
 import { creatableKinds, isKindCode } from "../../frontend/src/lib/documents/kinds";
 import type { KindOut, VersionOut } from "../../frontend/src/lib/documents/types";
 import {
@@ -39,13 +45,23 @@ test("колонка суммы: без строк и без сумм её не�
   expect(canSeeAmountColumn([{ amount: null }, { amount: "12.00" }])).toBe(true);
 });
 
-test("загрузка версии и создание требуют documents:write", () => {
-  expect(canUploadVersion([])).toBe(false);
-  expect(canUploadVersion(["documents:read"])).toBe(false);
-  expect(canUploadVersion(["documents:write"])).toBe(true);
+test("создание и загрузка видов юрлица и объекта требуют documents:write", () => {
+  expect(canWriteKind("ks2", [])).toBe(false);
+  expect(canWriteKind("ks2", ["documents:read"])).toBe(false);
+  expect(canWriteKind("ks2", ["documents:write"])).toBe(true);
   expect(canCreate([])).toBe(false);
   expect(canCreate(["documents:read"])).toBe(false);
   expect(canCreate(["documents:write"])).toBe(true);
+});
+
+test("виды техники пишет право техники; технический осмотр - ещё и механик (R2)", () => {
+  expect(canWriteKind("equipment_passport", ["documents:write"])).toBe(false);
+  expect(canWriteKind("equipment_passport", ["equipment:write:documents"])).toBe(true);
+  expect(canWriteKind("equipment_technical_inspection", ["equipment:write:maintenance"])).toBe(true);
+  expect(canWriteKind("equipment_passport", ["equipment:write:maintenance"])).toBe(false);
+  expect(canWriteKind("equipment_insurance", ["equipment:write:maintenance"])).toBe(false);
+  expect(isEquipmentDocumentKind("equipment_permit")).toBe(true);
+  expect(isEquipmentDocumentKind("ks2")).toBe(false);
 });
 
 test("архивирование требует отдельного уточнения documents:write:archive", () => {
@@ -58,28 +74,74 @@ test("экспорт реестра требует documents:export", () => {
   expect(canExport(["documents:export"])).toBe(true);
 });
 
-test("ссылка на файл финансового вида только с documents:read:financial", () => {
-  expect(canDownload({ financial: true }, [])).toBe(false);
-  expect(canDownload({ financial: true }, ["documents:read:financial"])).toBe(true);
-  expect(canDownload({ financial: false }, [])).toBe(true);
-  expect(canReadFinancial(["documents:read:financial"])).toBe(true);
+test("деньги вида: денежные виды техники - по тарифам (R3), прочие финансовые - по documents:read:financial", () => {
+  expect(canSeeMoney("ks2", ["documents:read:financial"])).toBe(true);
+  expect(canSeeMoney("ks2", ["equipment:read:rates"])).toBe(false);
+  expect(canSeeMoney("equipment_insurance", ["equipment:read:rates"])).toBe(true);
+  expect(canSeeMoney("equipment_insurance", ["documents:read:financial"])).toBe(false);
+  expect(isMoneyEquipmentDocumentKind("equipment_other")).toBe(true);
+  expect(isMoneyEquipmentDocumentKind("equipment_passport")).toBe(false);
+});
+
+test("ссылка на файл финансового вида только при праве на деньги вида", () => {
+  expect(canDownload({ kind: "ks2", financial: true }, [])).toBe(false);
+  expect(canDownload({ kind: "ks2", financial: true }, ["documents:read:financial"])).toBe(true);
+  expect(canDownload({ kind: "ks2", financial: false }, [])).toBe(true);
+  expect(
+    canDownload({ kind: "equipment_insurance", financial: true }, ["equipment:read:documents"]),
+  ).toBe(false);
+  expect(canDownload({ kind: "equipment_insurance", financial: true }, ["equipment:read:rates"])).toBe(
+    true,
+  );
+  expect(
+    canDownload({ kind: "equipment_passport", financial: false }, ["equipment:read:documents"]),
+  ).toBe(true);
 });
 
 test("внешним ссылку на финансовый файл отдаёт сервер по их видимости, внутреннему - по праву", () => {
-  expect(canDownload({ financial: true }, [], false)).toBe(true);
-  expect(canDownload({ financial: true }, [], true)).toBe(false);
+  expect(canDownload({ kind: "ks2", financial: true }, [], false)).toBe(true);
+  expect(canDownload({ kind: "ks2", financial: true }, [], true)).toBe(false);
 });
 
-test("суммы: внутреннему без documents:read:financial не показываем, внешнему - то, что отдал сервер", () => {
-  expect(canShowAmounts(["documents:read"], true)).toBe(false);
-  expect(canShowAmounts(["documents:read", "documents:read:financial"], true)).toBe(true);
-  expect(canShowAmounts([], false)).toBe(true);
+test("сумма версии правится только в черновике, не в архиве и не внешним (R1)", () => {
+  const ks2 = { kind: "ks2", financial: true, archived_at: null };
+  const rights = ["documents:write", "documents:read:financial"];
+  expect(canEditVersionAmount(ks2, { status: "draft" }, rights)).toBe(true);
+  expect(canEditVersionAmount(ks2, { status: "approved" }, rights)).toBe(false);
+  expect(
+    canEditVersionAmount({ ...ks2, archived_at: "2026-10-01T00:00:00Z" }, { status: "draft" }, rights),
+  ).toBe(false);
+  expect(canEditVersionAmount(ks2, { status: "draft" }, ["documents:write"])).toBe(false);
+  expect(canEditVersionAmount(ks2, { status: "draft" }, rights, false)).toBe(false);
+  const insurance = { kind: "equipment_insurance", financial: true, archived_at: null };
+  expect(
+    canEditVersionAmount(insurance, { status: "draft" }, ["equipment:write:documents", "equipment:read:rates"]),
+  ).toBe(true);
+  expect(canEditVersionAmount(insurance, { status: "draft" }, ["equipment:write:documents"])).toBe(false);
 });
 
-test("контрагенты доступны по праву на справочник техники, не по documents:read", () => {
-  expect(canUseCounterparties(["documents:read"])).toBe(false);
-  expect(canUseCounterparties(["equipment:read:rates"])).toBe(true);
-  expect(canUseCounterparties(["equipment:write"])).toBe(true);
+test("сумму при загрузке вводит внутренний с правом на деньги вида", () => {
+  expect(canEnterAmount({ kind: "ks2", financial: true }, ["documents:read:financial"])).toBe(true);
+  expect(canEnterAmount({ kind: "ks2", financial: false }, ["documents:read:financial"])).toBe(false);
+  expect(canEnterAmount({ kind: "ks2", financial: true }, ["documents:read:financial"], false)).toBe(false);
+  expect(canEnterAmount({ kind: "equipment_insurance", financial: true }, ["documents:read:financial"])).toBe(
+    false,
+  );
+  expect(canEnterAmount({ kind: "equipment_insurance", financial: true }, ["equipment:read:rates"])).toBe(
+    true,
+  );
+});
+
+test("отметка «действует vN» только когда действующая версия не последняя", () => {
+  expect(effectiveDiffers({ effective_version_no: 1, latest_version_no: 2 })).toBe(true);
+  expect(effectiveDiffers({ effective_version_no: 2, latest_version_no: 2 })).toBe(false);
+  expect(effectiveDiffers({ effective_version_no: null, latest_version_no: 1 })).toBe(false);
+});
+
+test("контрагенты - по документному праву чтения (справочник внутренним, не по праву техники)", () => {
+  expect(canUseCounterparties(["documents:read"])).toBe(true);
+  expect(canUseCounterparties(["equipment:read:rates"])).toBe(false);
+  expect(canUseCounterparties(["equipment:write"])).toBe(false);
 });
 
 test("сумма: тысячи через пробел-неразрывный и две цифры после запятой", () => {
@@ -202,7 +264,7 @@ function fakeTransport(
   const log: string[] = [];
   const presignBodies: unknown[] = [];
   const confirmKeys: string[] = [];
-  const confirmBodies: { key: string; comment: string | null }[] = [];
+  const confirmBodies: { key: string; comment: string | null; amount: string | null }[] = [];
   let putIndex = 0;
   let failed = 0;
   const transport: VersionTransport = {
@@ -255,18 +317,18 @@ function fakeTransport(
 test("загрузка версии: presign, PUT, confirm с ключом идемпотентности файла", async () => {
   const work = await prepareUpload(new File(["abc"], "a.pdf"), "key-A");
   const fake = fakeTransport(["stored"]);
-  const version = await uploadVersion(work, fake.transport, { comment: "скан" });
+  const version = await uploadVersion(work, fake.transport, { comment: "скан", amount: null });
   expect(version.id).toBe("v1");
   expect(fake.log).toEqual(["presign", "put", "confirm"]);
   expect(fake.confirmKeys).toEqual(["key-A"]);
-  expect(fake.confirmBodies[0]).toEqual({ key: "doc/1.pdf", comment: "скан" });
+  expect(fake.confirmBodies[0]).toEqual({ key: "doc/1.pdf", comment: "скан", amount: null });
 });
 
 test("повтор после сбоя confirm: ссылка и ключ те же, presign не повторяется", async () => {
   const work = await prepareUpload(new File(["abc"], "a.pdf"), "key-B");
   const fake = fakeTransport(["stored", "exists"], 1);
-  await expect(uploadVersion(work, fake.transport, { comment: null })).rejects.toThrow("network");
-  await uploadVersion(work, fake.transport, { comment: null });
+  await expect(uploadVersion(work, fake.transport, { comment: null, amount: null })).rejects.toThrow("network");
+  await uploadVersion(work, fake.transport, { comment: null, amount: null });
 
   expect(fake.presignBodies).toHaveLength(1);
   expect(fake.log).toEqual(["presign", "put", "confirm", "put", "confirm"]);
@@ -277,7 +339,7 @@ test("повтор после сбоя confirm: ссылка и ключ те ж
 test("истёкшая ссылка (403) перевыпускается один раз, с новым ключом S3", async () => {
   const work = await prepareUpload(new File(["abc"], "a.pdf"), "key-C");
   const fake = fakeTransport(["expired", "stored"]);
-  await uploadVersion(work, fake.transport, { comment: null });
+  await uploadVersion(work, fake.transport, { comment: null, amount: null });
   expect(fake.presignBodies).toHaveLength(2);
   expect(fake.confirmBodies[0]?.key).toBe("doc/2.pdf");
 });
@@ -297,8 +359,8 @@ test("истёкшая ссылка после сбоя confirm: версия н
     author_name: null,
   };
   const fake = fakeTransport(["stored"], 1, found);
-  await expect(uploadVersion(work, fake.transport, { comment: null, now: () => 0 })).rejects.toThrow("network");
-  const version = await uploadVersion(work, fake.transport, { comment: null, now: () => 10_000_000 });
+  await expect(uploadVersion(work, fake.transport, { comment: null, amount: null, now: () => 0 })).rejects.toThrow("network");
+  const version = await uploadVersion(work, fake.transport, { comment: null, amount: null, now: () => 10_000_000 });
   expect(version.id).toBe("v-found");
   expect(fake.log).toEqual(["presign", "put", "confirm", "find"]);
 });
@@ -306,7 +368,7 @@ test("истёкшая ссылка после сбоя confirm: версия н
 test("если и вторая ссылка истекла, версия не подтверждается", async () => {
   const work = await prepareUpload(new File(["abc"], "a.pdf"), "key-D");
   const fake = fakeTransport(["expired", "expired"]);
-  const error = await uploadVersion(work, fake.transport, { comment: null }).catch((reason: unknown) => reason);
+  const error = await uploadVersion(work, fake.transport, { comment: null, amount: null }).catch((reason: unknown) => reason);
   expect(error).toBeInstanceOf(UploadError);
   expect((error as UploadError).code).toBe("not_uploaded");
   expect(fake.log).not.toContain("confirm");
@@ -316,7 +378,7 @@ test("ссылка presign старше срока (минус запас) пе�
   const work = await prepareUpload(new File(["abc"], "a.pdf"), "key-E");
   const fake = fakeTransport(["stored", "stored"]);
   const start = 1_000_000;
-  await uploadVersion(work, fake.transport, { comment: null, now: () => start });
-  await uploadVersion(work, fake.transport, { comment: null, now: () => start + 900_000 });
+  await uploadVersion(work, fake.transport, { comment: null, amount: null, now: () => start });
+  await uploadVersion(work, fake.transport, { comment: null, amount: null, now: () => start + 900_000 });
   expect(fake.presignBodies).toHaveLength(2);
 });

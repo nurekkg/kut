@@ -3,19 +3,25 @@
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 
-import { StatusBadge, useDocumentErrorMessage, useKindLabel } from "@/components/documents/shared";
+import {
+  EffectiveMark,
+  StatusBadge,
+  useDocumentErrorMessage,
+  useKindLabel,
+} from "@/components/documents/shared";
 import { buttonVariants } from "@/components/ui/button";
 import { useDocuments } from "@/lib/documents/queries";
 
 const RECENT = 20;
 
-// Вкладка «Документы» карточки объекта: последние документы объекта и переход в реестр.
-export function NodeDocumentsTab({ projectId }: { projectId: string }) {
+// Вкладка «Документы» узла: последние документы, привязанные именно к этому узлу (project_node_id),
+// и переход в реестр объекта.
+export function NodeDocumentsTab({ projectId, nodeId }: { projectId: string; nodeId: string }) {
   const t = useTranslations("Documents.objectTab");
   const common = useTranslations("Documents.common");
   const message = useDocumentErrorMessage();
   const kindLabel = useKindLabel();
-  const list = useDocuments({ projectId }, { limit: RECENT, offset: 0 });
+  const list = useDocuments({ projectId, projectNodeId: nodeId }, { limit: RECENT, offset: 0 });
 
   return (
     <section aria-labelledby="object-documents-title" className="flex flex-col gap-3" data-testid="object-documents">
@@ -54,6 +60,7 @@ export function NodeDocumentsTab({ projectId }: { projectId: string }) {
                 <span className="min-w-0 flex-1 break-words">{row.title}</span>
                 <span className="text-muted-foreground">{kindLabel(row.kind)}</span>
                 <StatusBadge status={row.latest_status} />
+                <EffectiveMark doc={row} />
               </Link>
             </li>
           ))}

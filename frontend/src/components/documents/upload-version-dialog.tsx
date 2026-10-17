@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { newIdempotencyKey } from "@/lib/api";
+import { parseAmount } from "@/lib/documents/format";
 import { useInvalidateDocuments, versionTransport } from "@/lib/documents/queries";
 import {
   isRetryable,
@@ -25,23 +26,38 @@ import {
   type UploadWork,
 } from "@/lib/documents/upload";
 
-// Загрузка версии: файл проверяется и хэшируется при выборе, затем presign -> S3 -> confirm. Комментарий
-// фиксируется с первой попытки: сервер связывает ключ идемпотентности с телом запроса, и повтор с другим
-// телом он отвергает. Другой файл - новая рабочая копия, со своим ключом.
-export function UploadVersionDialog({ documentId, onClose }: { documentId: string; onClose: () => void }) {
+// Загрузка версии: файл проверяется и хэшируется при выборе, затем presign -> S3 -> confirm. Комментарий и
+// сумма фиксируются с первой попытки: сервер связывает ключ идемпотентности с телом запроса, и повтор с другим
+// телом он отвергает. Другой файл - новая рабочая копия, со своим ключом. Сумма принадлежит версии (R1) и
+// нужна только там, где пользователь вправе её видеть (canAmount, сервер проверит то же).
+export function UploadVersionDialog({
+  documentId,
+  canAmount,
+  onClose,
+}: {
+  documentId: string;
+  canAmount: boolean;
+  onClose: () => void;
+}) {
   const t = useTranslations("Documents.upload");
+  const common = useTranslations("Documents.common");
   const message = useDocumentErrorMessage();
   const invalidate = useInvalidateDocuments();
   const [work, setWork] = useState<UploadWork | null>(null);
   const [pickError, setPickError] = useState<unknown>(null);
   const [checking, setChecking] = useState(false);
   const [comment, setComment] = useState("");
+  const [amountText, setAmountText] = useState("");
   const [percent, setPercent] = useState<number | null>(null);
+  const amountFilled = canAmount && amountText.trim() !== "";
+  const amount = amountFilled ? parseAmount(amountText) : null;
+  const amountInvalid = amountFilled && amount === null;
 
   const save = useMutation({
-    mutationFn: ({ current, text }: { current: UploadWork; text: string | null }) =>
+    mutationFn: ({ current, text, sum }: { current: UploadWork; text: string | null; sum: string | null }) =>
       uploadVersion(current, versionTransport(documentId), {
         comment: text,
+        amount: sum,
         onProgress: (loaded, total) => setPercent(total > 0 ? Math.round((loaded / total) * 100) : 0),
       }),
     onSuccess: async () => {
@@ -73,9 +89,9 @@ export function UploadVersionDialog({ documentId, onClose }: { documentId: strin
   }
 
   function submit() {
-    if (work === null || busy || save.isSuccess) return;
+    if (work === null || busy || save.isSuccess || amountInvalid) return;
     setPercent(null);
-    save.mutate({ current: work, text: comment.trim() || null });
+    save.mutate({ current: work, text: comment.trim() || null, sum: amount });
   }
 
   return (
@@ -115,6 +131,22 @@ export function UploadVersionDialog({ documentId, onClose }: { documentId: strin
               {work ? t("chosen", { name: work.name }) : checking ? t("checking") : t("fileTypes")}
             </p>
           </Field>
+          {canAmount ? (
+            <Field id="upload-amount" label={t("amount")}>
+              <Input
+                id="upload-amount"
+                inputMode="decimal"
+                value={amountText}
+                disabled={locked}
+                aria-invalid={amountInvalid ? true : undefined}
+                onChange={(event) => setAmountText(event.target.value)}
+                data-testid="document-upload-amount"
+              />
+              <p className={amountInvalid ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+                {amountInvalid ? common("amountInvalid") : t("amountHint")}
+              </p>
+            </Field>
+          ) : null}
           <Field id="upload-comment" label={t("comment")}>
             <textarea
               id="upload-comment"
@@ -145,7 +177,7 @@ export function UploadVersionDialog({ documentId, onClose }: { documentId: strin
             </Button>
             <Button
               type="submit"
-              disabled={work === null || busy || save.isSuccess || rejected}
+              disabled={work === null || busy || save.isSuccess || rejected || amountInvalid}
               data-testid="document-upload-submit"
             >
               {save.isError && !rejected ? t("retry") : t("submit")}

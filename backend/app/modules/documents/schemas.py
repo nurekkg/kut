@@ -49,7 +49,6 @@ class DocumentCreate(BaseModel):
     contract_id: uuid.UUID | None = None
     title: Title
     links: list[LinkIn] = Field(default_factory=list, max_length=20)
-    amount: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
 
 
 class VersionOut(BaseModel):
@@ -63,6 +62,14 @@ class VersionOut(BaseModel):
     comment: str | None = None
     checksum_sha256: str | None = None
     author_name: str | None = None
+    # Сумма этой версии (PO 2026-10-17, R1): видна по праву на вид, внешним - только утверждённой
+    # версии.
+    amount: Decimal | None = None
+
+
+class CounterpartyOut(BaseModel):
+    id: uuid.UUID
+    name: str
 
 
 class EventOut(BaseModel):
@@ -94,7 +101,13 @@ class DocumentOut(BaseModel):
     latest_version_no: int | None = None
     latest_status: str | None = None
     counterparty_name: str | None = None
+    legal_entity_name: str | None = None
+    # Текущая сумма (R1): сумма действующей версии, иначе последней видимой; номер той версии.
     amount: Decimal | None = None
+    amount_version_no: int | None = None
+    # Номер действующей версии (утверждённой или подписанной), если она есть: для отметки
+    # «действует vN».
+    effective_version_no: int | None = None
     links: list[LinkOut] = Field(default_factory=list)
 
 
@@ -122,6 +135,8 @@ class VersionConfirm(BaseModel):
 
     key: str = Field(max_length=512)
     comment: Comment | None = None
+    # Сумма новой версии (R1): новая сумма = новая версия; финансовым видам.
+    amount: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
 
 
 class DownloadOut(BaseModel):

@@ -380,7 +380,32 @@ async def test_a_bulk_update_is_one_statement_trigger_call_not_one_per_row(
     )
     assert journaled == BULK_ROWS
     assert trigger_calls == {"audit_update": 1}, "one statement-level call, not one per row"
-    assert elapsed < 30
+
+
+@pytest.mark.perf
+async def test_a_bulk_update_takes_under_thirty_seconds(
+    world: World, worker_engine: AsyncEngine
+) -> None:
+    """Порог времени зависит от дисковой нагрузки машины: проверяется только в CI (маркер perf)."""
+    request_id = uuid4()
+    prefix = f"perf-{request_id}"
+    with system_context(request_id):
+        async with async_sessionmaker(worker_engine)() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO counterparty (name, types)"
+                    " SELECT :prefix || g, ARRAY['supplier'] FROM generate_series(1, :n) g"
+                ),
+                {"prefix": prefix, "n": BULK_ROWS},
+            )
+            started = perf_counter()
+            await session.execute(
+                text("UPDATE counterparty SET name = name || '_u' WHERE name LIKE :like"),
+                {"like": f"{prefix}%"},
+            )
+            elapsed = perf_counter() - started
+            await session.rollback()
+    assert elapsed < 30, f"bulk UPDATE of {BULK_ROWS} rows took {elapsed:.2f}s"
 
 
 async def test_journal_rows_land_in_the_monthly_partition(
