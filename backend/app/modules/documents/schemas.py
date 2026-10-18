@@ -25,6 +25,7 @@ class KindOut(BaseModel):
     counterparty_required: bool
     contract_required: bool
     links: list[str]
+    lines: bool
 
 
 class LinkIn(BaseModel):
@@ -150,3 +151,53 @@ class AmountIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     amount: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+
+
+class LineIn(BaseModel):
+    """Позиция черновика (ADR-015 часть 4): наименование, ед., количество.
+    Цена - отдельным запросом."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=300)
+    unit: str = Field(min_length=1, max_length=20)
+    quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
+    work_id: uuid.UUID | None = None
+    project_node_id: uuid.UUID | None = None
+
+
+class LinesIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lines: list[LineIn] = Field(max_length=2000)
+
+
+class PriceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    position_no: int = Field(ge=1, le=2000000)
+    unit_price: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+
+
+class PricesIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prices: list[PriceIn] = Field(max_length=2000)
+
+
+class LineOut(BaseModel):
+    position_no: int
+    name: str
+    unit: str
+    quantity: Decimal
+    work_id: uuid.UUID | None = None
+    project_node_id: uuid.UUID | None = None
+    # Цена и сумма - только с правом на деньги вида (RLS представления); без права - null.
+    unit_price: Decimal | None = None
+    amount: Decimal | None = None
+
+
+class LinesOut(BaseModel):
+    lines: list[LineOut]
+    # Итог по позициям - справочно, только если сумма видна по каждой позиции.
+    total: Decimal | None = None

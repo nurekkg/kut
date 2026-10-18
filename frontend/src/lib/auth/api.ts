@@ -10,6 +10,8 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     readonly retryAfter: number | null = null,
+    // Объект ошибки с кодом (например, строки импорта позиций) - для текста с номерами строк.
+    readonly detail: unknown = null,
   ) {
     super(code);
     this.name = "ApiError";
@@ -18,21 +20,22 @@ export class ApiError extends Error {
 
 export async function toApiError(response: Response): Promise<ApiError> {
   let code = response.status === 422 ? "validation" : "unknown";
+  let detail: unknown = null;
   try {
     const body: unknown = await response.json();
-    if (
-      typeof body === "object" &&
-      body !== null &&
-      "detail" in body &&
-      typeof body.detail === "string"
-    ) {
-      code = body.detail;
+    if (typeof body === "object" && body !== null && "detail" in body) {
+      if (typeof body.detail === "string") {
+        code = body.detail;
+      } else if (typeof body.detail === "object" && body.detail !== null && "code" in body.detail) {
+        if (typeof body.detail.code === "string") code = body.detail.code;
+        detail = body.detail;
+      }
     }
   } catch {
     // тело ответа не JSON: остаётся код по статусу
   }
   const retry = Number(response.headers.get("retry-after"));
-  return new ApiError(response.status, code, retry > 0 ? retry : null);
+  return new ApiError(response.status, code, retry > 0 ? retry : null, detail);
 }
 
 type PostOptions = { body?: unknown; token?: string };

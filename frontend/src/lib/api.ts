@@ -40,7 +40,8 @@ function client(owner?: string) {
     get: <T>(path: string, params?: Query) => apiFetch<T>(withQuery(path, params), {}, owner),
     post: <T>(path: string, body?: unknown, key?: string) =>
       apiFetch<T>(path, jsonInit("POST", body, key), owner),
-    put: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PUT", body), owner),
+    put: <T>(path: string, body?: unknown, key?: string) =>
+      apiFetch<T>(path, jsonInit("PUT", body, key), owner),
     patch: <T>(path: string, body?: unknown) => apiFetch<T>(path, jsonInit("PATCH", body), owner),
     delete: (path: string) => apiFetch<void>(path, { method: "DELETE" }, owner),
   };

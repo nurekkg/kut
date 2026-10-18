@@ -34,6 +34,8 @@ class KindSpec:
     counterparty: bool = False
     contract: bool = False
     links: frozenset[Link] = frozenset()
+    # Позиции версии (ADR-015 часть 4): виды, где версия состоит из строк работ или материалов.
+    lines: bool = False
 
 
 OBJECT: Final = Scope.OBJECT
@@ -46,21 +48,23 @@ KINDS: Final[dict[str, KindSpec]] = {
     "contract_supply": KindSpec("ДП", LEGAL, True, counterparty=True),
     "contract_rental": KindSpec("ДА", LEGAL, True, counterparty=True, contract=True),
     "addendum": KindSpec("ДОП", LEGAL, True, contract=True),
-    "estimate_local": KindSpec("СМЛ", OBJECT, True),
-    "estimate_summary": KindSpec("СМС", OBJECT, True),
-    "ks2": KindSpec("КС2", OBJECT, True, counterparty=True),
-    "ks3": KindSpec("КС3", OBJECT, True, counterparty=True),
-    "ks6": KindSpec("КС6", OBJECT, True, counterparty=True),
+    "estimate_local": KindSpec("СМЛ", OBJECT, True, lines=True),
+    "estimate_summary": KindSpec("СМС", OBJECT, True, lines=True),
+    "ks2": KindSpec("КС2", OBJECT, True, counterparty=True, lines=True),
+    "ks3": KindSpec("КС3", OBJECT, True, counterparty=True, lines=True),
+    "ks6": KindSpec("КС6", OBJECT, True, counterparty=True, lines=True),
     "hidden_works_act": KindSpec(
         "АСР", OBJECT, False, links=frozenset({Link.PROJECT_NODE, Link.WORK})
     ),
     "ird": KindSpec("ИД", OBJECT, False, links=frozenset({Link.PROJECT_NODE, Link.WORK})),
-    "waybill_torg12": KindSpec("ТОРГ12", EITHER, True, counterparty=True),
-    "waybill_m15": KindSpec("М15", EITHER, True, counterparty=True),
-    "waybill_internal": KindSpec("ВН", EITHER, False),
+    "waybill_torg12": KindSpec("ТОРГ12", EITHER, True, counterparty=True, lines=True),
+    "waybill_m15": KindSpec("М15", EITHER, True, counterparty=True, lines=True),
+    "waybill_internal": KindSpec("ВН", EITHER, False, lines=True),
     "invoice_esf": KindSpec("ЭСФ", LEGAL, True, counterparty=True),
-    "m7_act": KindSpec("М7", EITHER, False),
-    "material_request": KindSpec("ЗМ", OBJECT, False, links=frozenset({Link.PROJECT_NODE})),
+    "m7_act": KindSpec("М7", EITHER, False, lines=True),
+    "material_request": KindSpec(
+        "ЗМ", OBJECT, False, links=frozenset({Link.PROJECT_NODE}), lines=True
+    ),
     "commissioning_act": KindSpec("АВЭ", OBJECT, False),
     # Документы техники (ADR-015 часть 3, раздел 10, вариант B): вид по строке equipment_document.
     "equipment_passport": KindSpec("ПСП", LEGAL, False, links=frozenset({Link.EQUIPMENT_UNIT})),
@@ -74,6 +78,7 @@ KINDS: Final[dict[str, KindSpec]] = {
 }
 
 FINANCIAL_KINDS: Final = frozenset(kind for kind, spec in KINDS.items() if spec.financial)
+LINE_KINDS: Final = frozenset(kind for kind, spec in KINDS.items() if spec.lines)
 EQUIPMENT_KINDS: Final = frozenset(kind for kind in KINDS if kind.startswith("equipment_"))
 MONEY_EQUIPMENT_KINDS: Final = frozenset({"equipment_insurance", "equipment_other"})
 INSPECTION_KIND: Final = "equipment_technical_inspection"

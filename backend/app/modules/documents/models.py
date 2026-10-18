@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -274,4 +275,67 @@ class DocumentNumberCounter(Base):
     __table_args__ = (
         CheckConstraint(f"kind IN ({_KIND_VALUES})", name="kind_valid"),
         CheckConstraint("last_no >= 0", name="last_no_not_negative"),
+    )
+
+
+class DocumentLine(BusinessBase):
+    """Позиция версии (ADR-015 часть 4, S6a-1): наименование, ед., количество.
+    Цена - в DocumentLinePrice. Вносится и меняется только в черновике.
+    Удаление - мягкое (deleted_at), тоже в черновике."""
+
+    __tablename__ = "document_line"
+
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document.id"), index=True)
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_version.id"), index=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
+    position_no: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(300))
+    unit: Mapped[str] = mapped_column(String(20))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    work_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("work.id"), default=None)
+    project_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("project_node.id"), default=None
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "legal_entity_id"],
+            ["project.id", "project.legal_entity_id"],
+            name="fk_document_line_project_id_project",
+        ),
+        Index(
+            "uq_document_line_version_id_position_no",
+            "version_id",
+            "position_no",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        CheckConstraint("position_no >= 1", name="position_positive"),
+        CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("btrim(name) <> ''", name="name_not_blank"),
+        CheckConstraint("btrim(unit) <> ''", name="unit_not_blank"),
+    )
+
+
+class DocumentLinePrice(BusinessBase):
+    """Цена позиции (ADR-015 часть 4): под правом на деньги вида, как сумма версии. Сумма позиции -
+    в представлении document_line_amount (RLS цен действует через него)."""
+
+    __tablename__ = "document_line_price"
+
+    line_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_line.id"), unique=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document.id"), index=True)
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_version.id"), index=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "legal_entity_id"],
+            ["project.id", "project.legal_entity_id"],
+            name="fk_document_line_price_project_id_project",
+        ),
+        CheckConstraint("unit_price >= 0", name="unit_price_not_negative"),
     )

@@ -116,6 +116,11 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "amount.version_not_draft": (409, "document.version_not_draft"),
     "amount.delete_forbidden": (409, "document.amount_delete_forbidden"),
     "document.event_immutable": (409, "document.event_immutable"),
+    # Позиции (ADR-015 часть 4): запись и удаление только в черновике, по виду и праву.
+    "line.version_not_draft": (409, "document.lines_not_draft"),
+    "line.delete_forbidden": (409, "document.line_delete_forbidden"),
+    "line.kind_not_allowed": (422, "document.lines_not_allowed"),
+    "line.deleted": (409, "document.line_deleted"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -248,6 +253,8 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "fk_document_link_work_actual_id_work_actual": (422, "document.link_invalid"),
     "fk_document_link_project_node_id_project_node": (422, "document.link_invalid"),
     "fk_document_link_equipment_unit_id_equipment_unit": (422, "document.link_invalid"),
+    "fk_document_line_work_id_work": (422, "document.line_invalid"),
+    "fk_document_line_project_node_id_project_node": (422, "document.line_invalid"),
 }
 
 

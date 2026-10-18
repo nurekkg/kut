@@ -295,3 +295,7 @@ extra:
   - {role: finance_director, permission: "documents:export"}
   - {role: accountant, permission: "documents:export"}
   - {role: lawyer, permission: "documents:export"}
+  # Позиции версии (S6a-1, ADR-015 часть 4): вносят ПТО и снабженец; техдиректор - контроль.
+  - {role: estimator, permission: "documents:write:lines"}
+  - {role: procurement, permission: "documents:write:lines"}
+  - {role: technical_director, permission: "documents:write:lines"}

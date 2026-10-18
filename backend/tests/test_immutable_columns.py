@@ -48,6 +48,8 @@ AUDITED_TABLES = (
     "document_link",
     "document_amount",
     "document_version_amount",
+    "document_line",
+    "document_line_price",
 )
 # Колонки, которые обязаны быть неизменяемыми (id есть у всех, у project ещё и юрлицо, у узла
 # объект и юрлицо, у таблиц S3a - объект, юрлицо и то, что определяет смысл строки).
@@ -94,6 +96,27 @@ FROZEN = {table: {"id"} for table in AUDITED_TABLES} | {
     },
     "document_amount": {"id", "document_id"},
     "document_version_amount": {"id", "document_id", "version_id"},
+    "document_line": {
+        "id",
+        "version_id",
+        "document_id",
+        "legal_entity_id",
+        "project_id",
+        "position_no",
+        "name",
+        "unit",
+        "quantity",
+        "work_id",
+        "project_node_id",
+    },
+    "document_line_price": {
+        "id",
+        "line_id",
+        "version_id",
+        "document_id",
+        "legal_entity_id",
+        "project_id",
+    },
     "project_node": {"id", "project_id", "legal_entity_id"},
     "project_finance": {"id", "project_id", "legal_entity_id"},
     "schedule_item": {"id", "project_id", "legal_entity_id", "node_id", "work_id"},

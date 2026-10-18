@@ -43,6 +43,7 @@ export type KindOut = {
   counterparty_required: boolean;
   contract_required: boolean;
   links: string[];
+  lines: boolean;
 };
 
 export type VersionOut = {
@@ -113,6 +114,25 @@ export type DownloadOut = { url: string; expires_in: number };
 export type PresignBody = { content_type: string; size_bytes: number; checksum_sha256: string };
 
 export type ConfirmBody = { key: string; comment: string | null; amount: string | null };
+
+// Позиции версии (ADR-015 часть 4): цена и сумма - null, если право на деньги не выдано (сервер отдаёт null).
+export type LineOut = {
+  position_no: number;
+  name: string;
+  unit: string;
+  quantity: string;
+  work_id: string | null;
+  project_node_id: string | null;
+  unit_price: string | null;
+  amount: string | null;
+};
+
+export type LinesOut = { lines: LineOut[]; total: string | null };
+
+// Черновик позиции в форме: количество и цена - строкой, как введено; проверка - в диалоге.
+export type LineDraft = { name: string; unit: string; quantity: string };
+
+export type PriceDraft = { position_no: number; unit_price: string };
 
 // Создание: поля вне контракта бэкенд отвергает (extra=forbid), поэтому тело собирается по полям.
 // Сумма в создании не передаётся: она принадлежит версии и вносится при загрузке (R1).

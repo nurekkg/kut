@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from datetime import date
 from typing import Annotated, Literal
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.deps import get_db, get_principal, internal_only, require
 from app.modules.auth.principal import Principal
-from app.modules.documents import service
+from app.modules.documents import lines, lines_import, service
 from app.modules.documents.schemas import (
     AmountIn,
     CounterpartyOut,
@@ -17,8 +18,11 @@ from app.modules.documents.schemas import (
     DownloadOut,
     EventOut,
     KindOut,
+    LinesIn,
+    LinesOut,
     PresignOut,
     PresignRequest,
+    PricesIn,
     VersionConfirm,
     VersionOut,
 )
@@ -52,6 +56,11 @@ Internal = Annotated[Principal, Depends(internal_only(get_principal))]
 Archiver = Annotated[
     Principal,
     Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="archive"))),
+]
+# Позиции версии: право documents:write:lines (ADR-015 часть 4); деньги проверяют сервис и БД.
+LinesWriter = Annotated[
+    Principal,
+    Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="lines"))),
 ]
 VersionStatus = Literal["draft", "on_approval", "approved", "signed", "archived"]
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -103,6 +112,7 @@ async def kinds(_principal: Reader) -> list[KindOut]:
             counterparty_required=spec.counterparty,
             contract_required=spec.contract,
             links=sorted(link.value for link in spec.links),
+            lines=spec.lines,
         )
         for code, spec in KINDS.items()
     ]
@@ -245,3 +255,119 @@ async def download_url(
 async def archive(document_id: uuid.UUID, session: Db, principal: Archiver) -> Response:
     await service.archive(session, principal, document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _body(request: Request) -> bytes:
+    """Файл импорта - тело запроса; больше лимита - 413 уже при чтении потока."""
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > lines_import.MAX_BYTES:
+            raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "document.lines_too_large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.get("/lines/template.xlsx")
+async def lines_template(_principal: Reader) -> Response:
+    """Шаблон импорта позиций: строка заголовка, без формул и макросов."""
+    return Response(
+        content=lines_import.template_xlsx(),
+        media_type=XLSX,
+        headers={
+            "Content-Disposition": 'attachment; filename="document-lines-template.xlsx"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get("/{document_id}/versions/{version_id}/lines", response_model=LinesOut)
+async def version_lines(
+    document_id: uuid.UUID, version_id: uuid.UUID, session: Db, _principal: Reader
+) -> LinesOut:
+    """Позиции видны всем, кто видит версию; цена и сумма - только с правом на деньги вида."""
+    return await lines.list_lines(session, document_id, version_id)
+
+
+@router.put("/{document_id}/versions/{version_id}/lines", response_model=LinesOut)
+async def replace_version_lines(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    body: LinesIn,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: LinesWriter,
+) -> Response:
+    """Полный список позиций черновика; повтор с тем же ключом - тот же ответ."""
+
+    async def handler() -> tuple[int, LinesOut]:
+        return status.HTTP_200_OK, await lines.replace_lines(
+            session, principal, document_id, version_id, body
+        )
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, body.model_dump(mode="json")),
+        handler=handler,
+    )
+    return result.to_response()
+
+
+@router.put("/{document_id}/versions/{version_id}/line-prices", response_model=LinesOut)
+async def set_version_prices(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    body: PricesIn,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: Internal,
+) -> Response:
+    """Цены черновика; без права на деньги вида - 403. Повтор с тем же ключом - тот же ответ."""
+
+    async def handler() -> tuple[int, LinesOut]:
+        return status.HTTP_200_OK, await lines.set_prices(
+            session, principal, document_id, version_id, body
+        )
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, body.model_dump(mode="json")),
+        handler=handler,
+    )
+    return result.to_response()
+
+
+@router.post("/{document_id}/versions/{version_id}/lines/import", response_model=LinesOut)
+async def import_version_lines(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: LinesWriter,
+) -> Response:
+    """Импорт XLSX в черновик: полная замена позиций. Файл - тело запроса, до 2 МБ."""
+    data = await _body(request)
+
+    async def handler() -> tuple[int, LinesOut]:
+        return status.HTTP_200_OK, await lines.import_lines(
+            session, principal, document_id, version_id, data
+        )
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(
+            request.method, request.url.path, {"sha256": hashlib.sha256(data).hexdigest()}
+        ),
+        handler=handler,
+    )
+    return result.to_response()

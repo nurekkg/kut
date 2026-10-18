@@ -3,6 +3,7 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { apiFetch } from "@/lib/auth/session";
 import { API } from "@/lib/projects/keys";
 
 import { putObject, type VersionTransport } from "./upload";
@@ -14,7 +15,9 @@ import type {
   DownloadOut,
   EventOut,
   KindOut,
+  LinesOut,
   PresignOut,
+  PriceDraft,
   VersionOut,
 } from "./types";
 
@@ -118,7 +121,28 @@ export const documentsApi = {
     api.put<void>(`${DOCUMENTS_API}/${id}/versions/${versionId}/amount`, { amount }),
   downloadUrl: (id: string, versionId: string) =>
     api.get<DownloadOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/download-url`),
+  putLines: (id: string, versionId: string, lines: LineBody[], key: string) =>
+    api.put<LinesOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/lines`, { lines }, key),
+  putPrices: (id: string, versionId: string, prices: PriceDraft[], key: string) =>
+    api.put<LinesOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/line-prices`, { prices }, key),
+  importLines: async (id: string, versionId: string, file: File, key: string) =>
+    apiFetch<LinesOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/lines/import`, {
+      method: "POST",
+      headers: { "Content-Type": file.type || "application/octet-stream", "Idempotency-Key": key },
+      body: await file.arrayBuffer(),
+    }),
 };
+
+// Тело позиции: поля работы и узла сметы в интерфейсе не заполняются (сервер принимает null).
+export type LineBody = { name: string; unit: string; quantity: string; work_id: null; project_node_id: null };
+
+export function useVersionLines(documentId: string, versionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "lines", documentId, versionId],
+    queryFn: () => api.get<LinesOut>(`${DOCUMENTS_API}/${documentId}/versions/${versionId}/lines`),
+    enabled,
+  });
+}
 
 export function versionTransport(documentId: string): VersionTransport {
   return {
