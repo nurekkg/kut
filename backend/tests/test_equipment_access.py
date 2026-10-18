@@ -211,9 +211,16 @@ async def test_the_mechanic_closes_a_repair_writes_a_document_and_sees_no_money(
     )
     assert closed.status_code == 200, closed.text
     assert closed.json()["done_at"] is not None
-    document = await api.post(
+    # Механик вносит строку срока только для технического осмотра (PO 2026-10-18); страховка - 403.
+    insurance = await api.post(
         f"{API}/units/{unit['id']}/documents",
         json={"kind": "insurance", "number": "СТ-2031", "valid_until": "2036-12-31"},
+        headers={**mechanic, **idem()},
+    )
+    assert insurance.status_code == 403, insurance.text
+    document = await api.post(
+        f"{API}/units/{unit['id']}/documents",
+        json={"kind": "technical_inspection", "number": "ТО-2031", "valid_until": "2036-12-31"},
         headers={**mechanic, **idem()},
     )
     assert document.status_code == 201, document.text

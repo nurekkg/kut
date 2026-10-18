@@ -33,11 +33,22 @@ const SHORT_DATE = new Intl.DateTimeFormat("ru-RU", {
   year: "2-digit",
 });
 
-export function formatShortDate(iso: string | null | undefined): string {
+// Срок техники (документы, ТО, назначения): год из четырёх цифр. Двузначный год (31.12.40) путал сроки.
+const TERM_DATE = new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+function formatWith(format: Intl.DateTimeFormat, iso: string | null | undefined): string {
   if (!iso) return "—";
   const [year, month, day] = iso.split("-").map(Number);
   if (!year || !month || !day) return iso;
-  return SHORT_DATE.format(new Date(year, month - 1, day));
+  return format.format(new Date(year, month - 1, day));
+}
+
+export function formatShortDate(iso: string | null | undefined): string {
+  return formatWith(SHORT_DATE, iso);
+}
+
+export function formatTermDate(iso: string | null | undefined): string {
+  return formatWith(TERM_DATE, iso);
 }
 
 const MONTH = new Intl.DateTimeFormat("ru-RU", { month: "short", timeZone: "UTC" });

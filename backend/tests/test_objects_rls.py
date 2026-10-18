@@ -31,7 +31,11 @@ async def run(
 
 
 async def node_ids(context: RequestContext, *, portal: bool = False) -> set[UUID]:
-    rows = await run("SELECT id FROM project_node WHERE name LIKE 'RLS-%'", context, portal=portal)
+    rows = await run(
+        "SELECT id FROM project_node WHERE name LIKE 'RLS-%' AND deleted_at IS NULL",
+        context,
+        portal=portal,
+    )
     return {row[0] for row in rows}  # type: ignore[misc]
 
 
@@ -197,34 +201,44 @@ async def test_the_portal_pool_cannot_read_the_works_catalog(world: World) -> No
 
 
 async def test_a_foreman_writes_nodes_of_his_object_but_not_of_another(
-    tree: dict[str, UUID], world: World
+    tree: dict[str, UUID], world: World, worker_engine: AsyncEngine
 ) -> None:
     context = world.foreman()
-    await run(
+    own = await run(
         "INSERT INTO project_node (project_id, legal_entity_id, type, name)"
-        " VALUES (:p, :le, 'stage', 'RLS-own')",
+        " VALUES (:p, :le, 'stage', 'RLS-own') RETURNING id",
         context,
         p=world.p1,
         le=world.le1,
     )
-    with pytest.raises(DBAPIError, match="row-level security"):
-        await run(
-            "INSERT INTO project_node (project_id, legal_entity_id, type, name)"
-            " VALUES (:p, :le, 'stage', 'RLS-foreign')",
+    try:
+        with pytest.raises(DBAPIError, match="row-level security"):
+            await run(
+                "INSERT INTO project_node (project_id, legal_entity_id, type, name)"
+                " VALUES (:p, :le, 'stage', 'RLS-foreign')",
+                context,
+                p=world.p2,
+                le=world.le2,
+            )
+        changed = await run(
+            "UPDATE project_node SET name = 'RLS-b2-renamed' WHERE id = :id RETURNING id",
             context,
-            p=world.p2,
-            le=world.le2,
+            id=tree["b2"],
         )
-    changed = await run(
-        "UPDATE project_node SET name = 'RLS-b2-renamed' WHERE id = :id RETURNING id",
-        context,
-        id=tree["b2"],
-    )
-    assert changed == []  # чужой узел для прораба не существует: ни строки, ни ошибки
-    renamed = await run(
-        "UPDATE project_node SET sort_order = 7 WHERE id = :id RETURNING id", context, id=tree["b1"]
-    )
-    assert len(renamed) == 1
+        assert changed == []  # чужой узел для прораба не существует: ни строки, ни ошибки
+        renamed = await run(
+            "UPDATE project_node SET sort_order = 7 WHERE id = :id RETURNING id",
+            context,
+            id=tree["b1"],
+        )
+        assert len(renamed) == 1
+    finally:
+        # Узел теста не должен попасть в выборки других тестов модуля (префикс RLS-).
+        async with worker_engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE project_node SET deleted_at = now() WHERE id = :id"),
+                {"id": own[0][0]},
+            )
 
 
 async def test_a_write_cannot_move_a_node_into_an_object_the_user_does_not_have(

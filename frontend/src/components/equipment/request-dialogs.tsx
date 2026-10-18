@@ -29,7 +29,7 @@ import {
 } from "@/lib/equipment/queries";
 import type { AssignmentCheck, DocumentKind, RequestRow } from "@/lib/equipment/types";
 import { buildIndex, pathLabel } from "@/lib/projects/tree";
-import { addDays, formatShortDate, todayIso } from "@/lib/schedule/dates";
+import { addDays, formatTermDate, todayIso } from "@/lib/schedule/dates";
 
 type Done = () => void;
 
@@ -329,7 +329,7 @@ export function AssignDialog({
               <p key={`${warning.kind}-${warning.valid_until}`} className="text-amber-900 dark:text-amber-300">
                 {t("documentWarning", {
                   kind: kindText(warning.kind as DocumentKind),
-                  date: formatShortDate(warning.valid_until),
+                  date: formatTermDate(warning.valid_until),
                 })}
               </p>
             ))}

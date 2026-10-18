@@ -66,6 +66,9 @@ export type DocumentRow = {
   number: string;
   valid_until: string;
   version: number;
+  // Связанный документ реестра (S5b); номер виден только внутренним ролям.
+  document_id: string | null;
+  document_no: string | null;
 };
 
 export type MaintenanceRow = {

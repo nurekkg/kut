@@ -616,3 +616,27 @@ async def test_overhead_money_stays_inside_its_legal_entity(
     by_unit = "SELECT id FROM cost_entry WHERE equipment_unit_id = CAST(:unit AS uuid)"
     assert await rows(by_unit, ctx, {"unit": west_unit["id"]}) == []
     assert await rows(by_unit, ctx, {"unit": east_unit["id"]}) != []
+
+
+async def test_the_audit_journal_shows_no_money_rows_without_the_rate_right(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    new_user: Any,
+    worker_sync_engine: Engine,
+) -> None:
+    """F1 (ADR-015 часть 3, раздел 13): строки журнала по деньгам (проводки, ГСМ) с суммами
+    видны только с equipment:read:rates. Прораб читает журнал объекта по equipment:read,
+    но суммы - нет."""
+    await reference_world(api, auth_world, new_user, worker_sync_engine)
+    money_rows = (
+        "SELECT count(*) FROM audit_log WHERE table_name IN ('cost_entry', 'equipment_fuel')"
+        " AND (new ? 'amount' OR old ? 'amount')"
+    )
+    foreman = in_context(auth_world.users["foreman"], (east(auth_world),), (le_east(auth_world),))
+    finance = in_context(
+        auth_world.users["finance"],
+        tuple(auth_world.projects.values()),
+        tuple(auth_world.legal_entities.values()),
+    )
+    assert await rows(money_rows, foreman) == [(0,)]
+    assert (await rows(money_rows, finance))[0][0] > 0

@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { type ReactNode, useState } from "react";
 
+import { useAuth } from "@/components/auth/auth-provider";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,6 +18,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { api, newIdempotencyKey } from "@/lib/api";
+import { equipmentDocumentKind } from "@/lib/documents/equipment-kinds";
+import { useDocuments } from "@/lib/documents/queries";
 import { useEquipmentErrorMessage } from "@/lib/equipment/errors";
 import { EQUIPMENT_KEY } from "@/lib/equipment/keys";
 import { EQUIPMENT_API } from "@/lib/equipment/queries";
@@ -225,11 +228,32 @@ export function DocumentDialog({ unitId, onClose }: { unitId: string; onClose: D
   const [kind, setKind] = useState<DocumentKind>("technical_inspection");
   const [number, setNumber] = useState("");
   const [validUntil, setValidUntil] = useState("");
+  const [documentId, setDocumentId] = useState("");
+  const { user } = useAuth();
+  // Строка срока: технический осмотр - механику (equipment:write:maintenance), остальные виды - по праву
+  // загрузки техники (PO 2026-10-18). Сервер проверяет то же правило; здесь - только варианты в списке.
+  const permissions = user?.permissions ?? [];
+  const kinds = DOCUMENT_KINDS.filter(
+    (value) => value === "technical_inspection" || permissions.includes("equipment:write:documents"),
+  );
+  // Связать можно только документ реестра того же вида, что и строка срока: сервер проверяет это ещё раз.
+  // Документы техники видны по праву техники (equipment:read:documents), без документного права тоже.
+  const canReadDocuments =
+    (user?.permissions.includes("documents:read") || user?.permissions.includes("equipment:read:documents")) ??
+    false;
+  const documents = useDocuments({ equipmentUnitId: unitId }, { limit: 100, offset: 0 }, canReadDocuments);
+  const linkable = (documents.data ?? []).filter((item) => item.kind === equipmentDocumentKind(kind));
   const save = useMutation({
     mutationFn: () =>
       api.post(
         `${EQUIPMENT_API}/units/${unitId}/documents`,
-        { kind, number: number.trim(), valid_until: validUntil },
+        {
+          kind,
+          number: number.trim(),
+          valid_until: validUntil,
+          // Поле уходит только при выборе: без связи запрос прежний.
+          ...(documentId ? { document_id: documentId } : {}),
+        },
         key,
       ),
     onSuccess: async () => {
@@ -251,9 +275,12 @@ export function DocumentDialog({ unitId, onClose }: { unitId: string; onClose: D
         <NativeSelect
           id="document-kind"
           value={kind}
-          onChange={(event) => setKind(event.target.value as DocumentKind)}
+          onChange={(event) => {
+            setKind(event.target.value as DocumentKind);
+            setDocumentId("");
+          }}
         >
-          {DOCUMENT_KINDS.map((value) => (
+          {kinds.map((value) => (
             <option key={value} value={value}>
               {kindText(value)}
             </option>
@@ -277,6 +304,24 @@ export function DocumentDialog({ unitId, onClose }: { unitId: string; onClose: D
           onChange={(event) => setValidUntil(event.target.value)}
           required
         />
+      </Field>
+      <Field id="document-link" label={t("documentLink")}>
+        <NativeSelect
+          id="document-link"
+          value={documentId}
+          onChange={(event) => setDocumentId(event.target.value)}
+          data-testid="equipment-document-link"
+        >
+          <option value="">{t("documentLinkNone")}</option>
+          {linkable.map((item) => (
+            <option key={item.id} value={item.id}>
+              {[item.registration_no, item.title].filter(Boolean).join(" · ")}
+            </option>
+          ))}
+        </NativeSelect>
+        <p className="text-xs text-muted-foreground">
+          {linkable.length === 0 ? t("documentLinkEmpty") : t("documentLinkHint")}
+        </p>
       </Field>
     </FormDialog>
   );

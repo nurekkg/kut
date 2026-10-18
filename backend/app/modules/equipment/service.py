@@ -11,6 +11,8 @@ from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
+from app.modules.auth.principal import Principal
+from app.modules.documents.models import Document, DocumentLink
 from app.modules.equipment.models import (
     EquipmentAssignment,
     EquipmentDocument,
@@ -32,6 +34,7 @@ from app.modules.equipment.schemas import (
     UnitOut,
     UnitPatch,
 )
+from app.modules.rbac.enums import Action, Module
 
 BISHKEK = ZoneInfo("Asia/Bishkek")
 SOON_DAYS = 30
@@ -70,7 +73,7 @@ def type_out(row: EquipmentType) -> TypeOut:
     return TypeOut(id=row.id, code=row.code, name=row.name, default_unit=row.default_unit)
 
 
-def document_out(row: EquipmentDocument) -> DocumentOut:
+def document_out(row: EquipmentDocument, document_no: str | None = None) -> DocumentOut:
     return DocumentOut(
         id=row.id,
         equipment_unit_id=row.equipment_unit_id,
@@ -78,6 +81,8 @@ def document_out(row: EquipmentDocument) -> DocumentOut:
         number=row.number,
         valid_until=row.valid_until,
         version=row.version,
+        document_id=row.document_id,
+        document_no=document_no,
     )
 
 
@@ -323,12 +328,68 @@ async def unit_card(session: AsyncSession, unit_id: uuid.UUID) -> UnitCard:
     return UnitCard(
         **base.model_dump(),
         status=await unit_status(session, unit_id, bishkek_today()),
-        documents=[document_out(item) for item in documents],
+        documents=await document_outs(session, list(documents)),
         maintenance=[maintenance_out(item) for item in maintenance],
     )
 
 
 # --- документы техники -------------------------------------------------------------------------
+
+
+DOCUMENT_KIND_OF = {
+    "passport": "equipment_passport",
+    "technical_inspection": "equipment_technical_inspection",
+    "insurance": "equipment_insurance",
+    "permit": "equipment_permit",
+    "other": "equipment_other",
+}
+
+
+async def document_outs(
+    session: AsyncSession, rows: Sequence[EquipmentDocument]
+) -> list[DocumentOut]:
+    """Строки срока с регистрационным номером связанного документа: номер отдаёт RLS документов."""
+    ids = [row.document_id for row in rows if row.document_id is not None]
+    numbers: dict[uuid.UUID, str] = {}
+    if ids:
+        numbers = {
+            found.id: found.registration_no
+            for found in await session.execute(
+                select(Document.id, Document.registration_no).where(Document.id.in_(ids))
+            )
+        }
+    return [
+        document_out(row, numbers.get(row.document_id) if row.document_id else None) for row in rows
+    ]
+
+
+async def _linked_document_no(
+    session: AsyncSession, unit_id: uuid.UUID, kind: str, document_id: uuid.UUID
+) -> str:
+    """Документ строки срока (Q8): виден вызывающему, того же вида и связан с этой единицей."""
+    found = (
+        await session.execute(
+            select(Document.kind, Document.registration_no).where(Document.id == document_id)
+        )
+    ).one_or_none()
+    if found is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
+    if found.kind != DOCUMENT_KIND_OF[kind]:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "equipment.document_kind_mismatch"
+        )
+    linked = await session.scalar(
+        select(DocumentLink.id).where(
+            DocumentLink.document_id == document_id,
+            DocumentLink.equipment_unit_id == unit_id,
+        )
+    )
+    if linked is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "equipment.document_unit_mismatch"
+        )
+    number: str = found.registration_no
+    return number
 
 
 async def list_documents(session: AsyncSession, unit_id: uuid.UUID) -> list[DocumentOut]:
@@ -338,20 +399,43 @@ async def list_documents(session: AsyncSession, unit_id: uuid.UUID) -> list[Docu
         .where(EquipmentDocument.equipment_unit_id == unit_id)
         .order_by(EquipmentDocument.kind, EquipmentDocument.version.desc())
     )
-    return [document_out(row) for row in rows]
+    return await document_outs(session, list(rows))
+
+
+def _document_kind_allowed(principal: Principal, kind: str) -> bool:
+    """Строка срока по виду (PO 2026-10-18): технический осмотр - механику
+    (equipment:write:maintenance), остальные виды - по праву загрузки документов техники
+    (equipment:write:documents). Политика вставки equipment_document проверяет то же по виду
+    (миграция c9e2d4b7a1f6)."""
+    return kind == "technical_inspection" or principal.has(
+        Module.EQUIPMENT, Action.WRITE, "documents"
+    )
 
 
 async def add_document(
-    session: AsyncSession, unit_id: uuid.UUID, data: DocumentCreate
+    session: AsyncSession, principal: Principal, unit_id: uuid.UUID, data: DocumentCreate
 ) -> DocumentOut:
     """Новая версия строкой: старые не меняются и не удаляются (ТЗ §2.2)."""
+    if not _document_kind_allowed(principal, data.kind):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "equipment.document_kind_forbidden")
     unit = await _unit(session, unit_id)
+    # Блокировка на время транзакции: параллельные добавления этой единицы ждут друг друга, поэтому
+    # номер версии идёт без пропусков и не сталкивается с уникальным индексом (F2, ADR-015 часть 3
+    # раздел 13). Блокировка строки FOR UPDATE здесь не годится: политика записи техники (RLS)
+    # скрывает строку от механика, и лок не берётся; advisory-лок от прав не зависит.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"equipment_document:{unit_id}"},
+    )
     last_version = await session.scalar(
         select(func.coalesce(func.max(EquipmentDocument.version), 0)).where(
             EquipmentDocument.equipment_unit_id == unit_id,
             EquipmentDocument.kind == data.kind,
         )
     )
+    linked_no = None
+    if data.document_id is not None:
+        linked_no = await _linked_document_no(session, unit_id, data.kind, data.document_id)
     row = EquipmentDocument(
         legal_entity_id=unit.legal_entity_id,
         equipment_unit_id=unit.id,
@@ -359,11 +443,12 @@ async def add_document(
         number=data.number,
         valid_until=data.valid_until,
         version=(last_version or 0) + 1,
+        document_id=data.document_id,
     )
     async with db_rules(session):
         session.add(row)
         await session.flush()
-    return document_out(row)
+    return document_out(row, linked_no)
 
 
 # --- ТО и ремонты ------------------------------------------------------------------------------

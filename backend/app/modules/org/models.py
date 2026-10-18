@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, Index, String
+from sqlalchemy import CheckConstraint, Index, String, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,10 +18,26 @@ _TYPES = ", ".join(f"'{kind.value}'" for kind in CounterpartyType)
 
 
 class LegalEntity(BusinessBase):
+    """Код юрлица (`code`) нужен номеру документа: <вид>-<код>-<год>-<n>.
+
+    ADR-015 часть 1 раздел 3.4.
+    """
+
     __tablename__ = "legal_entity"
 
     name: Mapped[str]
     tax_id: Mapped[str | None] = mapped_column(default=None)
+    code: Mapped[str | None] = mapped_column(String(8), default=None)
+
+    __table_args__ = (
+        CheckConstraint("code IS NULL OR code ~ '^[A-Za-z0-9А-Яа-яЁё]{1,8}$'", name="code_valid"),
+        Index(
+            "uq_legal_entity_code",
+            "code",
+            unique=True,
+            postgresql_where=text("code IS NOT NULL AND deleted_at IS NULL"),
+        ),
+    )
 
 
 class Counterparty(BusinessBase):

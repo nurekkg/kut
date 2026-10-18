@@ -6,3 +6,7 @@
 # 2. Тестовая фикстура из коммита 2d53a70: текст «for-tests-only-not-a-real-key», не ключ.
 #    В HEAD заменена генерацией ключа в тесте (коммит b67ebe7).
 2d53a70383805fa019603444647d9578ed65de84:backend/tests/test_app.py:generic-api-key:16
+
+# 3. Константный ключ идемпотентности в тесте документов (коммит 88c2407, backend/tests/test_documents_api.py:240):
+#    не секрет. В HEAD заменён на uuid4() (хвосты S5a, ветка s5a). Решение по образцу пунктов 1-2.
+88c240783ca6d76ff1ecf2830fb7b0d1138b046b:backend/tests/test_documents_api.py:generic-api-key:240

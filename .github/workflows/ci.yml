@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'phase-*', 'se-*']
+    branches: [main, 'phase-*', 'se-*', 's5*']
   pull_request:
   workflow_dispatch:
 
@@ -108,8 +108,11 @@ jobs:
           PGDATABASE: kut
           KUT_BOOTSTRAP_TEST_DB: "1"
         run: psql -X -q -v ON_ERROR_STOP=1 -f ../db/bootstrap.sql
-      - name: Pytest
-        run: uv run pytest -q
+      - name: Pytest (случайный порядок, seed печатается)
+        run: |
+          SEED="$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')"
+          echo "pytest-randomly seed: $SEED"
+          uv run pytest -q --randomly-seed="$SEED"
       - name: Alembic upgrade, downgrade, upgrade, seeds
         env:
           DATABASE_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut
@@ -241,3 +244,12 @@ jobs:
           name: e2e-failure
           path: e2e/artifacts/
           retention-days: 7
+      # Снимки экранов (шаги shot()) - при ручном запуске всегда, даже когда тесты зелёные: их смотрят глазами.
+      - name: Upload screenshots (manual run)
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: e2e-screens
+          path: e2e/artifacts/screens/
+          retention-days: 7
+          if-no-files-found: warn

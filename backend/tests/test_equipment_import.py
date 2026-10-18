@@ -192,6 +192,11 @@ async def test_templates_and_the_journal_are_available_to_the_registry_writers(
     template = await api.get(f"{API}/import/template", params={"format": "csv"}, headers=head)
     assert template.status_code == 200
     assert "Код типа" in template.text and "Номер договора аренды" in template.text
+    code = await new_type(api, head)
+    created = await check(
+        api, head, body([good_row(f"JRN{uuid.uuid4().hex[:6].upper()}", 0, code)])
+    )
+    assert created.status_code == 200, created.text  # свой пакет: журнал не зависит от порядка
     journal = (await api.get(f"{API}/import/batches", headers=head)).json()
     assert journal and {item["status"] for item in journal} <= {"checked", "committed", "rejected"}
     foreman = await headers_for(api, "foreman")

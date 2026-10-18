@@ -123,6 +123,23 @@ ADR_EQUIPMENT_GRANTS = {
     },
     ("technical_director", "equipment", "write", None),
     ("equipment_head", "equipment", "write", None),
+    # Документы техники (PO 2026-10-17, R2): видят девять ролей, загружают техдир и начальник.
+    *{
+        (role, "equipment", "read", "documents")
+        for role in (
+            "owner",
+            "finance_director",
+            "technical_director",
+            "equipment_head",
+            "mechanic",
+            "estimator",
+            "foreman",
+            "master",
+            "accountant",
+        )
+    },
+    ("technical_director", "equipment", "write", "documents"),
+    ("equipment_head", "equipment", "write", "documents"),
     # Начальник отдела видит объекты (решение PO, SE-2a): реестр и назначения по объекту. Бюджет,
     # заказчик и адрес остаются закрыты: их даёт finance:read, а у начальника его нет.
     ("equipment_head", "objects", "read", None),
@@ -169,7 +186,9 @@ async def db_grants(engine: AsyncEngine) -> set[tuple[str, str, str, str | None]
 async def test_the_database_holds_exactly_the_tz_matrix_plus_the_documented_extras(
     owner_engine: AsyncEngine,
 ) -> None:
-    assert await db_grants(owner_engine) == tz_grants() | EXTRA_GRANTS | ADR_EQUIPMENT_GRANTS
+    assert await db_grants(owner_engine) == (
+        tz_grants() | EXTRA_GRANTS | ADR_EQUIPMENT_GRANTS | ADR_DOCUMENT_GRANTS
+    )
 
 
 async def test_there_are_thirteen_internal_and_three_external_roles_with_the_agreed_scopes(
@@ -206,6 +225,22 @@ async def test_two_factor_is_required_for_owner_finance_director_and_accountant_
     assert codes == {"owner", "finance_director", "accountant"}
 
 
+# ADR-015 часть 2 раздел 6 и решения PO Q2, Q3: право на финансовые виды и архив документов.
+ADR_DOCUMENT_GRANTS = {
+    ("owner", "documents", "read", "financial"),
+    ("finance_director", "documents", "read", "financial"),
+    ("technical_director", "documents", "read", "financial"),
+    ("accountant", "documents", "read", "financial"),
+    ("lawyer", "documents", "read", "financial"),
+    ("estimator", "documents", "read", "financial"),
+    ("owner", "documents", "write", "archive"),
+    ("owner", "documents", "export", None),
+    ("finance_director", "documents", "export", None),
+    ("accountant", "documents", "export", None),
+    ("lawyer", "documents", "export", None),
+}
+
+
 async def test_qualified_rights_are_exactly_the_documented_ones(
     owner_engine: AsyncEngine,
 ) -> None:
@@ -213,7 +248,9 @@ async def test_qualified_rights_are_exactly_the_documented_ones(
     assert qualified == {
         ("technical_director", "work_actual", "write", "after_approval"),
         ("technical_director", "materials", "approve", "limit_override"),
-    } | {grant for grant in ADR_EQUIPMENT_GRANTS if grant[3] is not None}
+    } | {grant for grant in ADR_EQUIPMENT_GRANTS if grant[3] is not None} | {
+        grant for grant in ADR_DOCUMENT_GRANTS if grant[3] is not None
+    }
 
 
 async def test_external_roles_are_read_only(owner_engine: AsyncEngine) -> None:

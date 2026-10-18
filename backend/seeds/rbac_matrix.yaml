@@ -267,3 +267,31 @@ extra:
   - {role: technical_director, permission: "equipment:write:maintenance"}
   - {role: equipment_head, permission: "equipment:write:maintenance"}
   - {role: mechanic, permission: "equipment:write:maintenance"}
+  # Документы техники (PO 2026-10-17, R2): видят владелец, финдиректор, техдир, начальник отдела, механик,
+  # сметчик, прораб, мастер, бухгалтер; загружают техдир и начальник. Машинист, кладовщик, снабженец,
+  # юрист - нет. Денежные виды (страховка, прочее) - по equipment:read:rates (R3).
+  - {role: owner, permission: "equipment:read:documents"}
+  - {role: finance_director, permission: "equipment:read:documents"}
+  - {role: technical_director, permission: "equipment:read:documents"}
+  - {role: equipment_head, permission: "equipment:read:documents"}
+  - {role: mechanic, permission: "equipment:read:documents"}
+  - {role: estimator, permission: "equipment:read:documents"}
+  - {role: foreman, permission: "equipment:read:documents"}
+  - {role: master, permission: "equipment:read:documents"}
+  - {role: accountant, permission: "equipment:read:documents"}
+  - {role: technical_director, permission: "equipment:write:documents"}
+  - {role: equipment_head, permission: "equipment:write:documents"}
+  # Документы (ADR-015 часть 2 раздел 6, решения PO по §14): суммы и файлы финансовых видов - по
+  # documents:read:financial (Q3: прораб и мастер не видят, сметчик-ПТО - видит); архив - владелец (ADR D2).
+  - {role: owner, permission: "documents:read:financial"}
+  - {role: finance_director, permission: "documents:read:financial"}
+  - {role: technical_director, permission: "documents:read:financial"}
+  - {role: accountant, permission: "documents:read:financial"}
+  - {role: lawyer, permission: "documents:read:financial"}
+  - {role: estimator, permission: "documents:read:financial"}
+  - {role: owner, permission: "documents:write:archive"}
+  # Выгрузка реестра в XLSX (S5b): суммы в файле - только при documents:read:financial (сервер).
+  - {role: owner, permission: "documents:export"}
+  - {role: finance_director, permission: "documents:export"}
+  - {role: accountant, permission: "documents:export"}
+  - {role: lawyer, permission: "documents:export"}

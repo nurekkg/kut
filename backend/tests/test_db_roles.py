@@ -152,6 +152,13 @@ async def test_the_password_hash_is_not_readable_by_the_app_and_portal_logins(
 
 BASE_COLUMNS = {"id", "created_at", "updated_at", "deleted_at"}
 PORTAL_COLUMNS = {
+    # Документы (ADR-015 часть 2 раздел 7.5): без номера, автора, ключа файла и комментариев.
+    "document": BASE_COLUMNS
+    | {"kind", "title", "project_id", "counterparty_id", "financial", "current_version_id"},
+    "document_version": BASE_COLUMNS
+    | {"document_id", "version_no", "status", "content_type", "size_bytes"},
+    "document_amount": BASE_COLUMNS | {"document_id", "amount"},
+    "document_version_amount": BASE_COLUMNS | {"version_id", "document_id", "amount"},
     "user": BASE_COLUMNS
     | {"phone", "email", "full_name", "role_id", "counterparty_id", "is_active", "role_ver"},
     "project": BASE_COLUMNS | {"legal_entity_id", "name", "status"},

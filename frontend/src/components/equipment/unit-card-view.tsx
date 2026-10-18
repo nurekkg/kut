@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { ContractStatusBadge, UnitStatusBadge } from "@/components/equipment/badges";
 import { Section } from "@/components/equipment/section";
 import { UnitCostsSection } from "@/components/equipment/unit-costs-section";
+import { UnitDocumentRegistrySection } from "@/components/equipment/unit-documents-section";
 import {
   UnitDocumentsSection,
   UnitMaintenanceSection,
@@ -44,6 +45,7 @@ export function UnitCardView({ unitId }: { unitId: string }) {
       <UnitAssignmentsSection unitId={card.id} />
       <UnitMaintenanceSection unit={card} />
       <UnitDocumentsSection unit={card} />
+      <UnitDocumentRegistrySection unitId={card.id} legalEntityId={card.legal_entity_id} />
       {access.canRates && card.contract_id ? <UnitContractSection unit={card} /> : null}
       {access.canRates || access.canWrite ? <UnitRatesSection unit={card} access={access} /> : null}
       {access.canRates ? <UnitCostsSection unitId={unitId} /> : null}

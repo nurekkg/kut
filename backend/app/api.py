@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.modules.actuals.router import router as actuals_router
 from app.modules.auth.router import router as auth_router
 from app.modules.dashboards.router import router as dashboards_router
+from app.modules.documents.router import router as documents_router
 from app.modules.equipment.router import router as equipment_router
 from app.modules.equipment.shift_router import router as shift_router
 from app.modules.photos.router import router as photos_router
@@ -26,3 +27,4 @@ api_v1_router.include_router(settings_router)
 api_v1_router.include_router(works_router)
 api_v1_router.include_router(equipment_router)
 api_v1_router.include_router(shift_router)
+api_v1_router.include_router(documents_router)

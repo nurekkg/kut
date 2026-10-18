@@ -16,6 +16,7 @@ from sqlalchemy import Connection, create_engine, text
 from app.core.config import get_settings
 from app.modules.auth.crypto import encrypt_totp_secret
 from app.modules.auth.security import MIN_PASSWORD_LENGTH, hash_password
+from app.modules.documents.devseed import ensure_documents
 from app.modules.equipment.devseed import SECOND_EAST, ensure_equipment, ensure_shifts
 from app.modules.equipment.service import bishkek_today
 from app.modules.objects.devseed import ensure_project_card, ensure_tree, ensure_works
@@ -27,6 +28,8 @@ WEST = "ЖК «Запад» (dev)"
 LE_EAST = "ООО «Кут Девелопмент» (dev)"
 LE_WEST = "ОсОО «Кут Строй» (dev)"
 LEGAL_ENTITIES = (LE_EAST, LE_WEST)
+# Коды для номеров документов (ADR-015 часть 1 раздел 3.4): <вид>-<код>-<год>-<n>.
+LEGAL_ENTITY_CODES = {LE_EAST: "ЮЛ1", LE_WEST: "ЮЛ2"}
 PROJECTS = ((EAST, LE_EAST), (WEST, LE_WEST), (SECOND_EAST, LE_EAST))
 SUB_A = "Субподрядчик А (dev)"
 SUB_B = "Субподрядчик Б (dev)"
@@ -129,19 +132,29 @@ def _insert(connection: Connection, report: SeedReport, table: str, sql: str, **
 
 
 def _ensure_legal_entity(connection: Connection, report: SeedReport, name: str) -> Any:
+    code = LEGAL_ENTITY_CODES[name]
     found = _find(
         connection,
         "SELECT id FROM legal_entity WHERE name = :name AND deleted_at IS NULL",
         name=name,
     )
     if found is not None:
+        # Код нужен номерам документов (ADR-015): строки, созданные до S5a, получают его один раз.
+        connection.execute(
+            text(
+                "UPDATE legal_entity SET code = :code"
+                " WHERE id = :id AND code IS NULL AND deleted_at IS NULL"
+            ),
+            {"code": code, "id": found},
+        )
         return found
     return _insert(
         connection,
         report,
         "legal_entity",
-        "INSERT INTO legal_entity (name) VALUES (:name) RETURNING id",
+        "INSERT INTO legal_entity (name, code) VALUES (:name, :code) RETURNING id",
         name=name,
+        code=code,
     )
 
 
@@ -357,6 +370,39 @@ def seed_media(connection: Connection, report: SeedReport) -> None:
         report.add("work_photo", ensure_photos(connection, project, entity))
 
 
+def seed_documents(connection: Connection, report: SeedReport) -> None:
+    """Демо-документы: файлы идут в S3, поэтому отдельно от основного сида (как фото)."""
+    east = _find(
+        connection, "SELECT id FROM project WHERE name = :name AND deleted_at IS NULL", name=EAST
+    )
+    west = _find(
+        connection, "SELECT id FROM project WHERE name = :name AND deleted_at IS NULL", name=WEST
+    )
+    if east is None or west is None:
+        return
+    legal = {
+        key: _find(
+            connection,
+            "SELECT legal_entity_id FROM project WHERE id = :id",
+            id=project,
+        )
+        for key, project in (("east", east), ("west", west))
+    }
+    counterparties = {
+        name: _find(connection, "SELECT id FROM counterparty WHERE name = :name", name=name)
+        for name, _kind in COUNTERPARTIES
+    }
+    counts = ensure_documents(
+        connection,
+        legal_entities={"east": legal["east"], "west": legal["west"]},
+        projects={"east": east, "west": west},
+        counterparties=counterparties,
+    )
+    for table, count in counts.items():
+        if count:
+            report.add(table, count)
+
+
 def seed_shifts(connection: Connection, report: SeedReport) -> None:
     """Листы, ГСМ и ремонт SE-2a: только dev-seed, как фото; тестовая база их не получает."""
     east = _find(
@@ -407,6 +453,7 @@ def main() -> int:
         report = seed(connection, password_hash=hash_password(password), totp_secret=totp_secret)
         seed_media(connection, report)
         seed_shifts(connection, report)
+        seed_documents(connection, report)
     engine.dispose()
     print(f"dev seed: created {report.created}" if report.changed else "dev seed: nothing to do")
     return 0

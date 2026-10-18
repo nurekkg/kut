@@ -86,6 +86,8 @@ class DocumentOut(BaseModel):
     number: str
     valid_until: date
     version: int
+    document_id: uuid.UUID | None = None
+    document_no: str | None = None
 
 
 class MaintenanceOut(BaseModel):
@@ -118,6 +120,7 @@ class DocumentCreate(_Strict):
     kind: DocKind
     number: str = Field(min_length=1, max_length=100)
     valid_until: date
+    document_id: uuid.UUID | None = None
 
 
 class MaintenanceCreate(_Strict):
