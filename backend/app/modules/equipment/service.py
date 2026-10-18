@@ -405,7 +405,7 @@ async def list_documents(session: AsyncSession, unit_id: uuid.UUID) -> list[Docu
 def _document_kind_allowed(principal: Principal, kind: str) -> bool:
     """Строка срока по виду (PO 2026-10-18): технический осмотр - механику
     (equipment:write:maintenance), остальные виды - по праву загрузки документов техники
-    (equipment:write:documents). Та же проверка стоит в политике вставки equipment_document
+    (equipment:write:documents). Политика вставки equipment_document проверяет то же по виду
     (миграция c9e2d4b7a1f6)."""
     return kind == "technical_inspection" or principal.has(
         Module.EQUIPMENT, Action.WRITE, "documents"

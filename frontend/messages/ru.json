@@ -1167,6 +1167,7 @@
       "allCounterparties": "Все контрагенты",
       "dateFrom": "Создан с",
       "dateTo": "Создан по",
+      "datePlaceholder": "дд.мм.гггг",
       "columns": {
         "number": "Регистрационный номер",
         "kind": "Вид",
@@ -1724,7 +1725,8 @@
       "projectInvalid": "Объект не найден.",
       "maintenanceCloseForbidden": "Ремонт закрывается только через закрытие с суммой.",
       "documentKindMismatch": "Вид документа не соответствует виду строки срока.",
-      "documentUnitMismatch": "Документ не относится к этой единице техники."
+      "documentUnitMismatch": "Документ не относится к этой единице техники.",
+      "documentKindForbidden": "Этот вид документа вносит техдиректор или начальник отдела спецтехники."
     },
     "categories": {
       "equipment_own": "Своя техника",

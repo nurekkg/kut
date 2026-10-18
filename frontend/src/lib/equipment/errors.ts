@@ -70,6 +70,7 @@ const KEYS = {
   "equipment.maintenance_close_forbidden": "maintenanceCloseForbidden",
   "equipment.document_kind_mismatch": "documentKindMismatch",
   "equipment.document_unit_mismatch": "documentUnitMismatch",
+  "equipment.document_kind_forbidden": "documentKindForbidden",
   forbidden: "forbidden",
   not_found: "notFound",
   validation: "validation",

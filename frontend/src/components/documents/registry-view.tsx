@@ -6,7 +6,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Download, FilePlus, SlidersHorizo
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { cn } from "cn";
+import { cn } from "@/lib/utils";
 
 import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
@@ -306,6 +306,7 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
               setDateFrom(next);
               setPage(0);
             }}
+            placeholder={t("datePlaceholder")}
             data-testid="documents-filter-from"
           />
           <DateField
@@ -316,6 +317,7 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
               setDateTo(next);
               setPage(0);
             }}
+            placeholder={t("datePlaceholder")}
             data-testid="documents-filter-to"
           />
         </div>

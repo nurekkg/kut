@@ -117,6 +117,7 @@ class DocumentVersion(BusinessBase):
     content_type: Mapped[str] = mapped_column(String(128))
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     checksum_sha256: Mapped[str] = mapped_column(String(64))
+    # У kut_app колонка не читается (миграция c9e2d4b7a1f6): значение отдаёт app.version_comment.
     comment: Mapped[str | None] = mapped_column(String(2000), default=None)
     status: Mapped[str] = mapped_column(String(16), server_default="draft")
     parent_version_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -158,6 +159,7 @@ class DocumentStatusEvent(BusinessBase):
     legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
     from_status: Mapped[str | None] = mapped_column(String(16), default=None)
     to_status: Mapped[str] = mapped_column(String(16))
+    # У kut_app колонка не читается (миграция c9e2d4b7a1f6): значение отдаёт app.event_comment.
     comment: Mapped[str | None] = mapped_column(String(2000), default=None)
     actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id"), default=None)
 

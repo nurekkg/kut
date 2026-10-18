@@ -230,6 +230,12 @@ export function DocumentDialog({ unitId, onClose }: { unitId: string; onClose: D
   const [validUntil, setValidUntil] = useState("");
   const [documentId, setDocumentId] = useState("");
   const { user } = useAuth();
+  // Строка срока: технический осмотр - механику (equipment:write:maintenance), остальные виды - по праву
+  // загрузки техники (PO 2026-10-18). Сервер проверяет то же правило; здесь - только варианты в списке.
+  const permissions = user?.permissions ?? [];
+  const kinds = DOCUMENT_KINDS.filter(
+    (value) => value === "technical_inspection" || permissions.includes("equipment:write:documents"),
+  );
   // Связать можно только документ реестра того же вида, что и строка срока: сервер проверяет это ещё раз.
   // Документы техники видны по праву техники (equipment:read:documents), без документного права тоже.
   const canReadDocuments =
@@ -274,7 +280,7 @@ export function DocumentDialog({ unitId, onClose }: { unitId: string; onClose: D
             setDocumentId("");
           }}
         >
-          {DOCUMENT_KINDS.map((value) => (
+          {kinds.map((value) => (
             <option key={value} value={value}>
               {kindText(value)}
             </option>
