@@ -42,6 +42,8 @@ test("экраны документов: прораб, сметчик, нача�
   browser,
   request,
 }) => {
+  // Четырнадцать контекстов входа и снимков: тест длиннее лимита по умолчанию (180 с).
+  test.setTimeout(360_000);
   const techdir = await apiLogin(request, "techdir");
   const east = await projectNamed(request, techdir, EAST_NAME);
   const head = await apiLogin(request, "equipment_head");

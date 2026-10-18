@@ -76,7 +76,8 @@ test("позиции версии: ПТО импортирует и видит �
   browser,
   request,
 }) => {
-  test.setTimeout(300_000);
+  // Шесть контекстов входа и загрузки карточки подряд: по минутам на каждый, поэтому бюджет шире обычного.
+  test.setTimeout(900_000);
   const techdir = await apiLogin(request, "techdir");
   const estimator = await apiLogin(request, "estimator");
   const east = await projectNamed(request, techdir, EAST_NAME);
