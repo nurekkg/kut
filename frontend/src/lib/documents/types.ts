@@ -129,8 +129,16 @@ export type LineOut = {
 
 export type LinesOut = { lines: LineOut[]; total: string | null };
 
-// Черновик позиции в форме: количество и цена - строкой, как введено; проверка - в диалоге.
-export type LineDraft = { name: string; unit: string; quantity: string };
+// Черновик позиции в форме: количество - строкой, как введено; проверка - в диалоге. Номер позиции (position_no)
+// держит идентичность: цена и связи переходят к той же позиции после сохранения; у новой позиции номера нет.
+export type LineDraft = {
+  position_no: number | null;
+  name: string;
+  unit: string;
+  quantity: string;
+  work_id: string | null;
+  project_node_id: string | null;
+};
 
 export type PriceDraft = { position_no: number; unit_price: string };
 

@@ -11,6 +11,8 @@ import httpx
 import openpyxl
 import pytest
 from httpx import AsyncClient
+from openpyxl import Workbook
+from openpyxl.worksheet.formula import ArrayFormula
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
@@ -33,7 +35,7 @@ from tests.documents_support import (
     upload,
     zip_bytes,
 )
-from tests.equipment_support import idem, in_context, rows
+from tests.equipment_support import idem, in_context, rows, second_project
 
 HEADER = ["№", "Наименование", "Ед.", "Количество", "Цена"]
 
@@ -207,7 +209,11 @@ async def test_a_new_list_keeps_the_prices_of_the_same_positions(
         desk.heads["estimator"],
         document,
         version,
-        [line("Бетон B30"), line("Арматура", "3", "т"), line("Щебень")],
+        [
+            {"position_no": 1, **line("Бетон B30")},
+            {"position_no": 2, **line("Арматура", "3", "т")},
+            line("Щебень"),
+        ],
     )
     assert replaced.status_code == 200, replaced.text
     items = replaced.json()["lines"]
@@ -631,3 +637,138 @@ async def test_the_portal_login_sees_the_lines_of_an_approved_version_only_in_sq
         async with get_portal_sessionmaker()() as session:
             approved = (await session.execute(text(counts), {"v": version})).one()
     assert tuple(approved) == (2, 2)
+
+
+async def test_deleting_a_position_keeps_the_prices_of_the_others(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    """Цена держится за номером позиции: удаление средней строки не сдвигает цены соседей."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator")
+    document, version = await ks2_version(api, s3, desk, auth_world)
+    headers = desk.heads["estimator"]
+    created = await put_lines(api, headers, document, version, [line("А"), line("Б"), line("В")])
+    assert created.status_code == 200, created.text
+    await put_prices(api, headers, document, version, [(1, "100.00"), (2, "200.00"), (3, "300.00")])
+
+    replaced = await put_lines(
+        api,
+        headers,
+        document,
+        version,
+        [{"position_no": 1, **line("А")}, {"position_no": 3, **line("В")}],
+    )
+    assert replaced.status_code == 200, replaced.text
+    prices = {item["position_no"]: item["unit_price"] for item in replaced.json()["lines"]}
+    assert prices == {1: "100.00", 3: "300.00"}
+
+
+async def test_a_new_position_gets_a_new_number_and_no_deleted_price(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator")
+    document, version = await priced_draft(api, s3, desk, auth_world)
+    replaced = await put_lines(
+        api,
+        desk.heads["estimator"],
+        document,
+        version,
+        [{"position_no": 1, **line("Бетон B25")}, line("Новая")],
+    )
+    assert replaced.status_code == 200, replaced.text
+    items = [(item["position_no"], item["unit_price"]) for item in replaced.json()["lines"]]
+    assert items == [(1, "100.00"), (3, None)]
+
+
+async def test_a_duplicate_position_number_and_a_blank_name_are_refused(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator")
+    document, version = await ks2_version(api, s3, desk, auth_world)
+    headers = desk.heads["estimator"]
+    duplicate = await put_lines(
+        api,
+        headers,
+        document,
+        version,
+        [{"position_no": 1, **line("А")}, {"position_no": 1, **line("Б")}],
+    )
+    assert duplicate.status_code == 422, duplicate.text
+    assert duplicate.json()["detail"] == "document.lines_invalid"
+    blank = await put_lines(api, headers, document, version, [line("   ")])
+    assert blank.status_code == 422, blank.text
+
+
+async def test_a_node_of_another_object_is_refused_by_the_database_guard(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator")
+    document, version = await ks2_version(api, s3, desk, auth_world)
+    other = second_project(worker_sync_engine, desk.legal)
+    with worker_sync_engine.begin() as connection:
+        foreign_node = connection.scalar(
+            text(
+                "INSERT INTO project_node (project_id, legal_entity_id, type, name)"
+                " VALUES (CAST(:p AS uuid), CAST(:le AS uuid), 'building', 'Чужой корпус')"
+                " RETURNING id"
+            ),
+            {"p": str(other), "le": str(desk.legal)},
+        )
+    refused = await put_lines(
+        api,
+        desk.heads["estimator"],
+        document,
+        version,
+        [{"position_no": 1, **line("Бетон"), "project_node_id": str(foreign_node)}],
+    )
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == "document.line_invalid"
+    with pytest.raises(DBAPIError, match=r"line\.node_invalid"):
+        await write(
+            "INSERT INTO document_line (document_id, version_id, legal_entity_id, project_id,"
+            " position_no, name, unit, quantity, project_node_id) VALUES (CAST(:d AS uuid),"
+            " CAST(:v AS uuid), CAST(:le AS uuid), CAST(:p AS uuid), 9, 'Чужая', 'шт', 1,"
+            " CAST(:n AS uuid))",
+            ctx(auth_world, "estimator", desk),
+            {
+                "d": document,
+                "v": version,
+                "le": str(desk.legal),
+                "p": str(desk.project),
+                "n": str(foreign_node),
+            },
+        )
+
+
+async def test_an_array_formula_and_a_broken_workbook_are_refused_not_stored(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator")
+    document, version = await ks2_version(api, s3, desk, auth_world)
+    headers = desk.heads["estimator"]
+
+    book = Workbook()
+    sheet = book.active
+    sheet.append(HEADER)
+    sheet.append([1, "Бетон", "м3", ArrayFormula("D2", "=2*2"), None])
+    stream = io.BytesIO()
+    book.save(stream)
+    array = await import_lines(api, headers, document, version, stream.getvalue())
+    assert array.status_code == 422, array.text
+    assert array.json()["detail"] == {"code": "document.lines_formula", "rows": [2]}
+
+    broken = zip_bytes({"[Content_Types].xml": b"<Types/>", "xl/workbook.xml": b"<workbook"})
+    refused = await import_lines(api, headers, document, version, broken)
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == {"code": "document.lines_format"}
+
+
+async def test_a_money_user_without_the_lines_right_cannot_change_prices(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    """Бухгалтер видит деньги, но позиции не вносит: сменить существующую цену он не может.
+    Отказ - 403, а не сбой сервера."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "accountant")
+    document, version = await priced_draft(api, s3, desk, auth_world)
+    refused = await put_prices(api, desk.heads["accountant"], document, version, [(1, "999.00")])
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["detail"] == "forbidden"

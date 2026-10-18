@@ -155,10 +155,12 @@ class AmountIn(BaseModel):
 
 class LineIn(BaseModel):
     """Позиция черновика (ADR-015 часть 4): наименование, ед., количество.
-    Цена - отдельным запросом."""
+    Цена - отдельным запросом. Номер позиции, пришедший с версией, - её идентичность:
+    цена держится за номером, а не за порядком в списке. Без номера - новая позиция."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    position_no: int | None = Field(default=None, ge=1, le=2000000)
     name: str = Field(min_length=1, max_length=300)
     unit: str = Field(min_length=1, max_length=20)
     quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=4)

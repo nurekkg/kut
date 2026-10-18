@@ -24,7 +24,7 @@ from app.modules.documents.models import (
     DocumentVersion,
 )
 from app.modules.documents.schemas import LineOut, LinesIn, LinesOut, PricesIn
-from app.modules.documents.types import LINE_KINDS, MONEY_EQUIPMENT_KINDS
+from app.modules.documents.types import LINE_KINDS
 from app.modules.rbac.enums import Action, Module
 
 # Сумма позиции и цена - представление с security_invoker: RLS цен действует через него.
@@ -45,6 +45,9 @@ class NewLine:
     work_id: uuid.UUID | None
     project_node_id: uuid.UUID | None
     unit_price: Decimal | None
+    # Цена держится за номером только у позиции, чей номер пришёл от клиента или из файла;
+    # у новой позиции цены нет.
+    keep_price: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +59,9 @@ class _Draft:
     kind: str
 
 
-def _money_allowed(principal: Principal, kind: str) -> bool:
-    if kind in MONEY_EQUIPMENT_KINDS:
-        return principal.has(Module.EQUIPMENT, Action.READ, "rates")
+def _money_allowed(principal: Principal) -> bool:
+    """Право на деньги видов с позициями - документное финансовое.
+    Виды техники позиций не имеют, поэтому отдельной ветки нет."""
     return principal.has(Module.DOCUMENTS, Action.READ, "financial")
 
 
@@ -92,7 +95,7 @@ async def _draft(session: AsyncSession, document_id: uuid.UUID, version_id: uuid
 
 async def _replace_guard(session: AsyncSession, principal: Principal, draft: _Draft) -> None:
     """Замена списка с ценами - только с правом на деньги: без него цены теряются при переносе."""
-    if _money_allowed(principal, draft.kind):
+    if _money_allowed(principal):
         return
     if await session.scalar(select(func.app.version_priced_lines(draft.version_id))):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
@@ -153,8 +156,9 @@ async def _replace(
     session: AsyncSession, principal: Principal, draft: _Draft, new_lines: list[NewLine]
 ) -> None:
     """Старые живые позиции мягко удаляются, новые пишутся.
-    Цены старых позиций переносятся по номеру, если в новом списке цена не задана:
-    RLS отдаёт их только тем, у кого есть право на деньги."""
+    Цена старой позиции переходит к позиции с тем же номером (keep_price), если в новом
+    списке цена не задана; RLS отдаёт старые цены только тем, у кого есть право на деньги.
+    RLS отдаёт старые цены только тем, у кого есть право на деньги."""
     old = (
         await session.execute(
             select(DocumentLine.position_no, AMOUNTS.c.unit_price)
@@ -191,7 +195,9 @@ async def _replace(
         created[line.position_no] = row
     await session.flush()
     for line in new_lines:
-        price = line.unit_price if line.unit_price is not None else carried.get(line.position_no)
+        price = line.unit_price
+        if price is None and line.keep_price:
+            price = carried.get(line.position_no)
         if price is None:
             continue
         session.add(
@@ -216,18 +222,37 @@ async def replace_lines(
 ) -> LinesOut:
     draft = await _draft(session, document_id, version_id)
     await _replace_guard(session, principal, draft)
-    new_lines = [
-        NewLine(
-            position_no=index,
-            name=item.name,
-            unit=item.unit,
-            quantity=item.quantity,
-            work_id=item.work_id,
-            project_node_id=item.project_node_id,
-            unit_price=None,
+    given = [item.position_no for item in body.lines if item.position_no is not None]
+    if len(set(given)) != len(given):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "document.lines_invalid")
+    # Номер позиции - её идентичность: удаление строки не сдвигает цены соседей.
+    # Новые позиции получают номера выше всех, какие были в версии (в том числе удалённых),
+    # поэтому цена удалённой позиции не достаётся новой.
+    highest = await session.scalar(
+        select(func.max(DocumentLine.position_no))
+        .where(DocumentLine.version_id == version_id)
+        .execution_options(include_deleted=True)
+    )
+    next_no = max([highest or 0, *given]) + 1
+    new_lines: list[NewLine] = []
+    for item in body.lines:
+        if item.position_no is None:
+            number, keep = next_no, False
+            next_no += 1
+        else:
+            number, keep = item.position_no, True
+        new_lines.append(
+            NewLine(
+                position_no=number,
+                name=item.name,
+                unit=item.unit,
+                quantity=item.quantity,
+                work_id=item.work_id,
+                project_node_id=item.project_node_id,
+                unit_price=None,
+                keep_price=keep,
+            )
         )
-        for index, item in enumerate(body.lines, start=1)
-    ]
     async with db_rules(session):
         await _replace(session, principal, draft, new_lines)
     return await list_lines(session, document_id, version_id)
@@ -241,7 +266,9 @@ async def set_prices(
     body: PricesIn,
 ) -> LinesOut:
     draft = await _draft(session, document_id, version_id)
-    if not _money_allowed(principal, draft.kind):
+    # Цены нужны и право на деньги, и право на позиции: иначе UPDATE не найдёт строку
+    # (RLS отбирает её молча) и ответ будет необработанной ошибкой вместо 403.
+    if not (principal.has(Module.DOCUMENTS, Action.WRITE, "lines") and _money_allowed(principal)):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
     positions = [item.position_no for item in body.prices]
     if len(set(positions)) != len(positions):
@@ -289,9 +316,7 @@ async def import_lines(
     """Импорт XLSX в черновик: полная замена позиций. Цены из файла - только с правом на деньги."""
     draft = await _draft(session, document_id, version_id)
     parsed = lines_import.parse_lines(lines_import.read_rows(data))
-    if any(line.unit_price is not None for line in parsed) and not _money_allowed(
-        principal, draft.kind
-    ):
+    if any(line.unit_price is not None for line in parsed) and not _money_allowed(principal):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
     await _replace_guard(session, principal, draft)
     new_lines = [
@@ -303,6 +328,7 @@ async def import_lines(
             work_id=None,
             project_node_id=None,
             unit_price=line.unit_price,
+            keep_price=True,
         )
         for line in parsed
     ]

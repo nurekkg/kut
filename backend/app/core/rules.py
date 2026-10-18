@@ -121,6 +121,7 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "line.delete_forbidden": (409, "document.line_delete_forbidden"),
     "line.kind_not_allowed": (422, "document.lines_not_allowed"),
     "line.deleted": (409, "document.line_deleted"),
+    "line.node_invalid": (422, "document.line_invalid"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -253,6 +254,8 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "fk_document_link_work_actual_id_work_actual": (422, "document.link_invalid"),
     "fk_document_link_project_node_id_project_node": (422, "document.link_invalid"),
     "fk_document_link_equipment_unit_id_equipment_unit": (422, "document.link_invalid"),
+    "ck_document_line_name_not_blank": (422, "document.line_invalid"),
+    "ck_document_line_unit_not_blank": (422, "document.line_invalid"),
     "fk_document_line_work_id_work": (422, "document.line_invalid"),
     "fk_document_line_project_node_id_project_node": (422, "document.line_invalid"),
 }

@@ -302,7 +302,7 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
             <span aria-hidden>{t("dateFrom")}</span>
             <DateField
               id="documents-filter-from"
-              aria-label={t("dateFrom")}
+              aria-label={t("dateFromAria")}
               value={dateFrom}
               onChange={(next) => {
                 setDateFrom(next);
@@ -316,7 +316,7 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
             <span aria-hidden>{t("dateTo")}</span>
             <DateField
               id="documents-filter-to"
-              aria-label={t("dateTo")}
+              aria-label={t("dateToAria")}
               value={dateTo}
               onChange={(next) => {
                 setDateTo(next);

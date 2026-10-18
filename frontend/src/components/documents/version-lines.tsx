@@ -9,6 +9,7 @@ import { LinePricesDialog, LinesEditDialog } from "@/components/documents/lines-
 import { useDocumentErrorMessage } from "@/components/documents/shared";
 import { Button } from "@/components/ui/button";
 import { newIdempotencyKey } from "@/lib/api";
+import { ApiError } from "@/lib/auth/api";
 import { canSeeLinePrices, canWriteLines, canWritePrices } from "@/lib/documents/access";
 import { formatMoney, formatQuantity } from "@/lib/documents/format";
 import {
@@ -59,6 +60,7 @@ export function VersionLines({
     mutationFn: () => fetchBlob(`${DOCUMENTS_API}/lines/template.xlsx`),
     onSuccess: (blob) => saveBlob(blob, "document-lines-template.xlsx"),
   });
+  const importRows = rowNumbers(importLines.error);
 
   return (
     <section aria-labelledby={`lines-title-${version.id}`} className="grid gap-3" data-testid="document-lines">
@@ -134,6 +136,11 @@ export function VersionLines({
           {message(importLines.error ?? template.error)}
         </p>
       ) : null}
+      {importRows.length > 0 ? (
+        <p className="text-sm text-muted-foreground" data-testid="document-lines-error-rows">
+          {t("rowsHint", { rows: importRows.slice(0, 20).join(", ") })}
+        </p>
+      ) : null}
 
       {data && data.lines.length === 0 ? <p className="text-sm text-muted-foreground">{t("empty")}</p> : null}
       {data && data.lines.length > 0 ? (
@@ -201,9 +208,12 @@ export function VersionLines({
           versionId={version.id}
           versionNo={version.version_no}
           initial={data.lines.map((line) => ({
+            position_no: line.position_no,
             name: line.name,
             unit: line.unit,
             quantity: formatQuantity(line.quantity),
+            work_id: line.work_id,
+            project_node_id: line.project_node_id,
           }))}
           onClose={() => setEditing(false)}
         />
@@ -219,6 +229,15 @@ export function VersionLines({
       ) : null}
     </section>
   );
+}
+
+// Строки с ошибками из ответа импорта: issues (с номерами строк) и rows (у формул). Текст ошибки - по коду.
+function rowNumbers(error: unknown): number[] {
+  if (!(error instanceof ApiError) || typeof error.detail !== "object" || error.detail === null) return [];
+  const { rows, issues } = error.detail as { rows?: unknown; issues?: unknown };
+  const fromIssues = Array.isArray(issues) ? issues.map((item: { row?: unknown }) => item.row) : [];
+  const fromRows = Array.isArray(rows) ? rows : [];
+  return [...fromIssues, ...fromRows].filter((row): row is number => typeof row === "number");
 }
 
 function PriceCells({ line }: { line: LineOut }) {

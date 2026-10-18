@@ -133,8 +133,15 @@ export const documentsApi = {
     }),
 };
 
-// Тело позиции: поля работы и узла сметы в интерфейсе не заполняются (сервер принимает null).
-export type LineBody = { name: string; unit: string; quantity: string; work_id: null; project_node_id: null };
+// Тело позиции: номер позиции (null - новая), связи с работой и узлом сохраняются как пришли.
+export type LineBody = {
+  position_no: number | null;
+  name: string;
+  unit: string;
+  quantity: string;
+  work_id: string | null;
+  project_node_id: string | null;
+};
 
 export function useVersionLines(documentId: string, versionId: string, enabled: boolean) {
   return useQuery({

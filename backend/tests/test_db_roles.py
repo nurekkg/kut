@@ -159,7 +159,7 @@ PORTAL_COLUMNS = {
     | {"document_id", "version_no", "status", "content_type", "size_bytes"},
     "document_amount": BASE_COLUMNS | {"document_id", "amount"},
     "document_version_amount": BASE_COLUMNS | {"version_id", "document_id", "amount"},
-    # S6a-1: позиции версии - порталу только у утверждённых версий (политика); цена - как сумма версии.
+    # S6a-1: позиции версии - порталу только у утверждённых версий; цена - как сумма версии.
     "document_line": BASE_COLUMNS
     | {
         "document_id",

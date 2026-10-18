@@ -5,17 +5,15 @@
 Всё или ничего: при любой ошибке строки не пишутся, ответ 422 несёт номера строк и коды.
 """
 
-import importlib
 import io
 import zipfile
 from dataclasses import dataclass
+from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+import openpyxl  # type: ignore[import-untyped]
 from fastapi import HTTPException, status
-
-# Стабов openpyxl в проекте нет: модуль берётся динамически, как в equipment/imports.py.
-openpyxl = importlib.import_module("openpyxl")
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_LINES = 2000
@@ -25,6 +23,8 @@ MACRO_TYPE = "macroEnabled"
 NAME_MAX = 300
 UNIT_MAX = 20
 FORMULA_ROWS_SHOWN = 50
+# Значения ячейки, которые не бывают формулой: всё прочее (объекты openpyxl формул) - отказ.
+_SCALARS = (str, int, float, bool, Decimal, date, datetime, time)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,32 +48,50 @@ def read_rows(data: bytes) -> list[tuple[int, list[Any]]]:
     """Строки первого листа с номерами строк файла (1 - заголовок). Формулы и макросы - отказ."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile as error:
+        names = set(archive.namelist())
+        content_types = ""
+        if "[Content_Types].xml" in names:
+            content_types = archive.read("[Content_Types].xml").decode("utf-8", "ignore")
+    except Exception as error:  # файл пользователя: повреждённый архив - отказ формата, не 500
         raise _rejected("document.lines_format") from error
-    names = set(archive.namelist())
-    content_types = ""
-    if "[Content_Types].xml" in names:
-        content_types = archive.read("[Content_Types].xml").decode("utf-8", "ignore")
     if names & set(MACRO_PARTS) or MACRO_TYPE in content_types:
         raise _rejected("document.lines_macros")
+    workbook = None
+    rows: list[tuple[int, list[Any]]] = []
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=False)
-    except Exception as error:  # файл пользователя: любой сбой чтения - отказ формата, не 500
-        raise _rejected("document.lines_format") from error
-    try:
         sheet = workbook.worksheets[0]
-        rows = [
-            (number, list(row))
-            for number, row in enumerate(sheet.iter_rows(values_only=True), start=1)
-        ]
+        # Колонки шаблона и строки до лимита - в память; данные за лимитом - отказ, а не обрезка.
+        for number, row in enumerate(
+            sheet.iter_rows(max_col=len(HEADER), values_only=True), start=1
+        ):
+            values = list(row)
+            if number > MAX_LINES + 1:
+                if any(value not in (None, "") for value in values):
+                    raise _rejected("document.lines_too_many")
+                continue
+            rows.append((number, values))
+    except HTTPException:
+        raise
+    except (
+        Exception
+    ) as error:  # сбой разбора листа (усечённый XML, нет листов) - отказ формата, не 500
+        raise _rejected("document.lines_format") from error
     finally:
-        workbook.close()
-    formula_rows = [
-        number for number, row in rows if any(isinstance(v, str) and v.startswith("=") for v in row)
-    ]
+        if workbook is not None:
+            workbook.close()
+    formula_rows = [number for number, values in rows if any(_is_formula(v) for v in values)]
     if formula_rows:
         raise _rejected("document.lines_formula", formula_rows[:FORMULA_ROWS_SHOWN])
     return rows
+
+
+def _is_formula(value: Any) -> bool:
+    """Формула - строка с «=» или объект формулы openpyxl (массивная, таблица данных).
+    Прочее не-скаляр тоже отказ: значение ячейки - только строка, число, дата или логическое."""
+    if isinstance(value, str):
+        return value.startswith("=")
+    return value is not None and not isinstance(value, _SCALARS)
 
 
 def _decimal(value: Any) -> Decimal | None:

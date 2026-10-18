@@ -141,6 +141,11 @@ BEGIN
     IF NOT app.document_kind_lines(d.kind) THEN
         RAISE EXCEPTION 'line.kind_not_allowed';
     END IF;
+    IF NEW.project_node_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM public.project_node n WHERE n.id = NEW.project_node_id AND n.project_id = d.project_id
+    ) THEN
+        RAISE EXCEPTION 'line.node_invalid';
+    END IF;
     RETURN NEW;
 END $$
 """,
