@@ -73,6 +73,7 @@ export type DocumentOut = {
   counterparty_id: string | null;
   created_at: string;
   counterparty_name: string | null;
+  project_name: string | null;
   latest_version_no: number | null;
   latest_status: string | null;
   registration_no: string | null;

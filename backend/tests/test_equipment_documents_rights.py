@@ -4,13 +4,18 @@
 сумма только с equipment:read:rates. Проверяется через API; SQL-политики - в тестах видимости."""
 
 from collections.abc import AsyncIterator
+from typing import Any
 from uuid import UUID
 
 import httpx
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import DBAPIError
 
+from app.core.context import RequestContext, use_context
+from app.core.db import get_sessionmaker
 from app.core.redis import get_redis
 from tests.auth_support import AuthWorld
 from tests.documents_support import (
@@ -22,7 +27,8 @@ from tests.documents_support import (
     leave_no_access_behind,  # noqa: F401
     upload,
 )
-from tests.equipment_support import headers_for, le_east, new_unit
+from tests.equipment_support import API as EQUIPMENT_API
+from tests.equipment_support import headers_for, idem, in_context, le_east, new_unit, rows
 
 DOCS = f"{API}/documents"
 READERS = (
@@ -209,3 +215,99 @@ async def test_the_inspection_of_the_mechanic_is_read_by_the_equipment_readers_o
         assert response.status_code == 200, (who, response.text)
     response = await api.get(f"{DOCS}/{inspection}", headers=heads["lawyer"])
     assert response.status_code == 404, response.text
+
+
+async def execute_as(context: RequestContext, sql: str, params: dict[str, Any]) -> None:
+    with use_context(context):
+        async with get_sessionmaker()() as session:
+            await session.execute(text(sql), params)
+            await session.commit()
+
+
+async def test_the_mechanic_registers_only_the_inspection_in_the_unit_rows(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+) -> None:
+    """Строка срока (PO 2026-10-18): механик - только технический осмотр, страховка - с правом."""
+    _legal, unit, heads = await world(api, auth_world, worker_sync_engine)
+    path = f"{EQUIPMENT_API}/units/{unit}/documents"
+    insurance = {"kind": "insurance", "number": "СТР-7", "valid_until": "2035-12-31"}
+    refused = await api.post(path, json=insurance, headers={**heads["mechanic"], **idem()})
+    assert refused.status_code == 403, refused.text
+    assert refused.json() == {"detail": "equipment.document_kind_forbidden"}
+
+    inspection = {"kind": "technical_inspection", "number": "ТО-7", "valid_until": "2035-12-31"}
+    accepted = await api.post(path, json=inspection, headers={**heads["mechanic"], **idem()})
+    assert accepted.status_code == 201, accepted.text
+    by_head = await api.post(path, json=insurance, headers={**heads["equipment_head"], **idem()})
+    assert by_head.status_code == 201, by_head.text
+
+
+async def test_the_database_refuses_a_mechanics_insurance_row(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+) -> None:
+    """Тот же запрет в политике вставки: прямой INSERT мимо сервиса механику отказывается."""
+    legal, unit, _ = await world(api, auth_world, worker_sync_engine)
+    context = in_context(auth_world.users["mechanic"], (), (legal,))
+    insert = (
+        "INSERT INTO equipment_document (legal_entity_id, equipment_unit_id, kind, number,"
+        " valid_until, version) VALUES (CAST(:le AS uuid), CAST(:unit AS uuid), :kind, 'ПОЛ-9',"
+        " DATE '2035-12-31', :version)"
+    )
+    params = {"le": str(legal), "unit": unit, "kind": "insurance", "version": 2}
+    with pytest.raises(DBAPIError, match="row-level security"):
+        await execute_as(context, insert, params)
+    await execute_as(context, insert, {**params, "kind": "technical_inspection"})
+
+
+async def test_the_passport_file_is_not_downloaded_by_storekeeper_procurement_or_lawyer(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    legal, unit, heads = await world(api, auth_world, worker_sync_engine)
+    passport = await create_ok(api, heads["equipment_head"], legal, unit, "equipment_passport")
+    uploaded = await upload(api, s3, passport, heads["equipment_head"], PDF_OK, PDF)
+    assert uploaded.status_code == 201, uploaded.text
+    version = uploaded.json()["id"]
+
+    for who in ("storekeeper", "procurement", "lawyer"):
+        link = await api.get(
+            f"{DOCS}/{passport}/versions/{version}/download-url", headers=heads[who]
+        )
+        assert link.status_code == 404, (who, link.text)
+    own = await api.get(
+        f"{DOCS}/{passport}/versions/{version}/download-url", headers=heads["mechanic"]
+    )
+    assert own.status_code == 200, own.text
+
+
+async def test_the_insurance_comment_is_read_by_the_rate_holders_only(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    """Комментарий денежного вида - по equipment:read:rates; механику - без комментария."""
+    legal, unit, heads = await world(api, auth_world, worker_sync_engine)
+    insurance = await create_ok(api, heads["equipment_head"], legal, unit, "equipment_insurance")
+    uploaded = await upload(
+        api, s3, insurance, heads["equipment_head"], PDF_OK, PDF, comment="Полис на год"
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    version = uploaded.json()["id"]
+
+    head_view = await api.get(f"{DOCS}/{insurance}", headers=heads["equipment_head"])
+    assert head_view.json()["versions"][0]["comment"] == "Полис на год"
+    mechanic_view = await api.get(f"{DOCS}/{insurance}", headers=heads["mechanic"])
+    assert mechanic_view.status_code == 200, mechanic_view.text
+    assert mechanic_view.json()["versions"][0]["comment"] is None
+
+    sql = "SELECT app.version_comment(CAST(:v AS uuid))"
+    for who, expected in (("mechanic", None), ("equipment_head", "Полис на год")):
+        context = in_context(auth_world.users[who], (), (legal,))
+        assert await rows(sql, context, {"v": version}) == [(expected,)], who

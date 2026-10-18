@@ -101,6 +101,8 @@ class DocumentOut(BaseModel):
     latest_version_no: int | None = None
     latest_status: str | None = None
     counterparty_name: str | None = None
+    # Название объекта: внешним - пока видна строка объекта (RLS портала); иначе пусто.
+    project_name: str | None = None
     legal_entity_name: str | None = None
     # Текущая сумма (R1): сумма действующей версии, иначе последней видимой; номер той версии.
     amount: Decimal | None = None

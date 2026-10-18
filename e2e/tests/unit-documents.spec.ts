@@ -15,7 +15,9 @@ import {
 } from "../../frontend/src/lib/documents/access";
 import { ApiError } from "../../frontend/src/lib/auth/api";
 import { documentErrorKey } from "../../frontend/src/lib/documents/errors";
-import { formatAmount, formatDay, parseAmount } from "../../frontend/src/lib/documents/format";
+import { formatDay, formatMoney, parseAmount } from "../../frontend/src/lib/documents/format";
+import { dateFromIso, isoFromDate, maskDate } from "../../frontend/src/lib/date-input";
+import { formatTermDate } from "../../frontend/src/lib/schedule/dates";
 import {
   equipmentDocumentKind,
   isEquipmentDocumentKind,
@@ -145,9 +147,25 @@ test("контрагенты - по документному праву чтен
   expect(canUseCounterparties(["equipment:write"])).toBe(false);
 });
 
-test("сумма: тысячи через пробел-неразрывный и две цифры после запятой", () => {
-  expect(formatAmount("1234.50")).toBe(`1${NBSP}234,50`);
-  expect(formatAmount("0.5")).toBe("0,50");
+test("сумма: тысячи через пробел-неразрывный, две цифры после запятой и валюта сом", () => {
+  expect(formatMoney("1234.50")).toBe(`1${NBSP}234,50 сом`);
+  expect(formatMoney("0.5")).toBe("0,50 сом");
+});
+
+test("поле даты дд.мм.гггг: маска при вводе, наружу yyyy-mm-dd, несуществующая дата не проходит", () => {
+  expect(maskDate("01102026")).toBe("01.10.2026");
+  expect(maskDate("0110")).toBe("01.10");
+  expect(maskDate("01.10.20x26")).toBe("01.10.2026");
+  expect(isoFromDate("01.10.2026")).toBe("2026-10-01");
+  expect(isoFromDate("31.02.2026")).toBeNull();
+  expect(isoFromDate("01.10.26")).toBeNull();
+  expect(dateFromIso("2026-10-01")).toBe("01.10.2026");
+  expect(dateFromIso("")).toBe("");
+});
+
+test("срок техники: год из четырёх цифр", () => {
+  expect(formatTermDate("2040-12-31")).toBe("31.12.2040");
+  expect(formatTermDate(null)).toBe("—");
 });
 
 test("ввод суммы: пробелы и запятая допустимы, лишние знаки и буквы - нет", () => {

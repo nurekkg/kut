@@ -31,7 +31,7 @@ import {
   canEnterAmount,
   canWriteKind,
 } from "@/lib/documents/access";
-import { formatAmount, formatDay, formatMegabytes, formatMoment } from "@/lib/documents/format";
+import { formatDay, formatMegabytes, formatMoment, formatMoney } from "@/lib/documents/format";
 import { documentsApi, useDocument, useDocumentEvents } from "@/lib/documents/queries";
 import { API, projectKey } from "@/lib/projects/keys";
 import type { Project } from "@/lib/projects/types";
@@ -91,6 +91,8 @@ export function DocumentCard({ documentId }: { documentId: string }) {
   const current = d.current_version;
   const downloadable = canDownload(d, permissions, internal);
   const versions = [...d.versions].sort((a, b) => b.version_no - a.version_no);
+  // Название объекта отдаёт сервер по видимости; внешним справочника объектов не открыт.
+  const projectName = d.project_name ?? project.data?.name ?? common("noValue");
 
   return (
     <Frame backHref={d.project_id ? `/projects/${d.project_id}/documents` : "/projects"}>
@@ -135,13 +137,17 @@ export function DocumentCard({ documentId }: { documentId: string }) {
           {d.registration_no ? <Row label={t("registrationNo")}>{d.registration_no}</Row> : null}
           {d.project_id ? (
             <Row label={t("project")}>
-              <Link
-                href={`/projects/${d.project_id}`}
-                className="underline-offset-4 hover:underline"
-                data-testid="document-project-link"
-              >
-                {project.data?.name ?? t("openProject")}
-              </Link>
+              {internal ? (
+                <Link
+                  href={`/projects/${d.project_id}`}
+                  className="underline-offset-4 hover:underline"
+                  data-testid="document-project-link"
+                >
+                  {projectName}
+                </Link>
+              ) : (
+                <span data-testid="document-project-name">{projectName}</span>
+              )}
             </Row>
           ) : null}
           {d.counterparty_id !== null ? (
@@ -152,7 +158,7 @@ export function DocumentCard({ documentId }: { documentId: string }) {
           {d.archived_at ? <Row label={t("archivedAt")}>{formatMoment(d.archived_at)}</Row> : null}
           {d.amount !== null ? (
             <Row label={t("currentAmount")} testId="document-amount">
-              <span className="tabular-nums">{formatAmount(d.amount)}</span>
+              <span className="tabular-nums">{formatMoney(d.amount)}</span>
               {d.amount_version_no !== null ? (
                 <span className="ml-2 text-muted-foreground">{t("amountVersion", { number: d.amount_version_no })}</span>
               ) : null}
@@ -187,8 +193,17 @@ export function DocumentCard({ documentId }: { documentId: string }) {
               </Button>
             ) : null}
           </div>
-        ) : (
+        ) : versions.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("noVersion")}</p>
+        ) : (
+          <div className="flex flex-col gap-3" data-testid="document-no-approved">
+            <p className="text-sm text-muted-foreground">{t("noApprovedVersion")}</p>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-medium">{t("versionNo", { number: versions[0].version_no })}</span>
+              <StatusBadge status={versions[0].status} />
+              <span className="tabular-nums text-muted-foreground">{formatDay(versions[0].created_at)}</span>
+            </div>
+          </div>
         )}
       </Section>
 
@@ -231,7 +246,7 @@ export function DocumentCard({ documentId }: { documentId: string }) {
                     <span className="tabular-nums">{t("sizeMb", { value: formatMegabytes(version.size_bytes) })}</span>
                     {version.amount !== null ? (
                       <span className="tabular-nums text-foreground" data-testid="document-version-amount">
-                        {t("versionAmount", { amount: formatAmount(version.amount) })}
+                        {t("versionAmount", { amount: formatMoney(version.amount) })}
                       </span>
                     ) : null}
                   </div>

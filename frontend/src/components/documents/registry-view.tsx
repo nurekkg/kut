@@ -2,10 +2,11 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { ArrowLeft, ChevronLeft, ChevronRight, Download, FilePlus } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Download, FilePlus, SlidersHorizontal } from "lucide-react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { cn } from "cn";
 
 import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
@@ -21,10 +22,11 @@ import {
 import { useDebounced } from "@/components/settings/shared";
 import { AppNav } from "@/components/projects/app-nav";
 import { Button } from "@/components/ui/button";
+import { DateField } from "@/components/ui/date-field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { canCreate, canExport, canSeeAmountColumn, canUseCounterparties } from "@/lib/documents/access";
-import { formatAmount, formatDay } from "@/lib/documents/format";
+import { formatDay, formatMoney } from "@/lib/documents/format";
 import { creatableKinds } from "@/lib/documents/kinds";
 import {
   exportPath,
@@ -63,6 +65,7 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const query = useDebounced(search.trim(), 300);
 
   const filters = useMemo<DocumentFilters>(
@@ -143,7 +146,7 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
           row.original.amount === null ? (
             t("noValue")
           ) : (
-            <span className="tabular-nums">{formatAmount(row.original.amount)}</span>
+            <span className="tabular-nums">{formatMoney(row.original.amount)}</span>
           ),
       });
     }
@@ -214,84 +217,108 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
         </div>
       </header>
 
-      <div role="search" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
-        <Input
-          type="search"
-          aria-label={t("searchLabel")}
-          placeholder={t("searchPlaceholder")}
-          maxLength={64}
-          value={search}
-          onChange={(event) => {
-            setSearch(event.target.value);
-            setPage(0);
-          }}
-          data-testid="documents-search"
-        />
-        <NativeSelect
-          aria-label={t("kindLabel")}
-          value={kind}
-          onChange={(event) => {
-            setKind(event.target.value);
-            setPage(0);
-          }}
-          data-testid="documents-filter-kind"
-        >
-          <option value="">{t("allKinds")}</option>
-          {kindsList.map((item) => (
-            <option key={item.code} value={item.code}>
-              {kindLabel(item.code)}
-            </option>
-          ))}
-        </NativeSelect>
-        <NativeSelect
-          aria-label={t("statusLabel")}
-          value={status}
-          onChange={(event) => {
-            setStatus(event.target.value);
-            setPage(0);
-          }}
-          data-testid="documents-filter-status"
-        >
-          <option value="">{t("allStatuses")}</option>
-          {DOCUMENT_STATUSES.map((value) => (
-            <option key={value} value={value}>
-              {statusText(value)}
-            </option>
-          ))}
-        </NativeSelect>
-        {counterpartySource ? (
-          <CounterpartyPicker
-            id="documents-filter-counterparty"
-            label={t("counterpartyLabel")}
-            selected={counterparty}
-            placeholder={t("allCounterparties")}
-            testId="documents-filter-counterparty"
-            onChange={(next) => {
-              setCounterparty(next);
+      <div role="search" className="flex flex-col gap-2">
+        {/* На телефоне рядом с поиском - кнопка «Фильтры»: остальные фильтры раскрываются под ней, чтобы
+            первая строка реестра была на первом экране. На планшете и шире панель видна всегда. */}
+        <div className="flex items-center gap-2">
+          <Input
+            type="search"
+            aria-label={t("searchLabel")}
+            placeholder={t("searchPlaceholder")}
+            maxLength={64}
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
               setPage(0);
             }}
+            className="h-10 min-w-0 flex-1"
+            data-testid="documents-search"
           />
-        ) : null}
-        <Input
-          type="date"
-          aria-label={t("dateFrom")}
-          value={dateFrom}
-          onChange={(event) => {
-            setDateFrom(event.target.value);
-            setPage(0);
-          }}
-          data-testid="documents-filter-from"
-        />
-        <Input
-          type="date"
-          aria-label={t("dateTo")}
-          value={dateTo}
-          onChange={(event) => {
-            setDateTo(event.target.value);
-            setPage(0);
-          }}
-          data-testid="documents-filter-to"
-        />
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            className="h-10 shrink-0 sm:hidden"
+            aria-expanded={filtersOpen}
+            aria-controls="documents-filters"
+            onClick={() => setFiltersOpen((open) => !open)}
+            data-testid="documents-filters-toggle"
+          >
+            <SlidersHorizontal data-icon="inline-start" aria-hidden />
+            {t("filters")}
+          </Button>
+        </div>
+        <div
+          id="documents-filters"
+          className={cn("grid gap-2 sm:grid-cols-2 lg:grid-cols-6", filtersOpen ? "grid" : "hidden sm:grid")}
+          data-testid="documents-filters"
+        >
+          <NativeSelect
+            aria-label={t("kindLabel")}
+            value={kind}
+            onChange={(event) => {
+              setKind(event.target.value);
+              setPage(0);
+            }}
+            data-testid="documents-filter-kind"
+          >
+            <option value="">{t("allKinds")}</option>
+            {kindsList.map((item) => (
+              <option key={item.code} value={item.code}>
+                {kindLabel(item.code)}
+              </option>
+            ))}
+          </NativeSelect>
+          <NativeSelect
+            aria-label={t("statusLabel")}
+            value={status}
+            onChange={(event) => {
+              setStatus(event.target.value);
+              setPage(0);
+            }}
+            data-testid="documents-filter-status"
+          >
+            <option value="">{t("allStatuses")}</option>
+            {DOCUMENT_STATUSES.map((value) => (
+              <option key={value} value={value}>
+                {statusText(value)}
+              </option>
+            ))}
+          </NativeSelect>
+          {counterpartySource ? (
+            <CounterpartyPicker
+              id="documents-filter-counterparty"
+              label={t("counterpartyLabel")}
+              selected={counterparty}
+              placeholder={t("allCounterparties")}
+              testId="documents-filter-counterparty"
+              onChange={(next) => {
+                setCounterparty(next);
+                setPage(0);
+              }}
+            />
+          ) : null}
+          <DateField
+            id="documents-filter-from"
+            aria-label={t("dateFrom")}
+            value={dateFrom}
+            onChange={(next) => {
+              setDateFrom(next);
+              setPage(0);
+            }}
+            data-testid="documents-filter-from"
+          />
+          <DateField
+            id="documents-filter-to"
+            aria-label={t("dateTo")}
+            value={dateTo}
+            onChange={(next) => {
+              setDateTo(next);
+              setPage(0);
+            }}
+            data-testid="documents-filter-to"
+          />
+        </div>
       </div>
 
       {failed ? (
@@ -372,7 +399,7 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
                   {row.counterparty_name ? <span className="min-w-0 break-words">{row.counterparty_name}</span> : null}
                   <span className="tabular-nums">{formatDay(row.created_at)}</span>
                   {showAmount && row.amount !== null ? (
-                    <span className="tabular-nums text-foreground">{formatAmount(row.amount)}</span>
+                    <span className="tabular-nums text-foreground">{formatMoney(row.amount)}</span>
                   ) : null}
                 </div>
               </Link>

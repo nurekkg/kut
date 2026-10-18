@@ -1,9 +1,10 @@
 const AMOUNT = new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Сумма приходит строкой-десятичным ("1234.50"); в интерфейсе - "1 234,50".
-export function formatAmount(value: string): string {
+// Сумма приходит строкой-десятичным ("1234.50"); в интерфейсе - "1 234,50 сом". Валюта одна - сом (KGS),
+// поэтому суффикс добавляет один хелпер на всех экранах документов и в выгрузке.
+export function formatMoney(value: string): string {
   const number = Number(value);
-  return Number.isFinite(number) ? AMOUNT.format(number) : value;
+  return Number.isFinite(number) ? `${AMOUNT.format(number)} сом` : value;
 }
 
 // Ввод суммы: пробелы и запятая допустимы, до двух знаков после разделителя. Иначе null.

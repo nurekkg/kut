@@ -20,7 +20,7 @@ import {
 } from "@/lib/equipment/calendar";
 import { useCalendar, useEquipmentTypes } from "@/lib/equipment/queries";
 import type { CalendarUnit } from "@/lib/equipment/types";
-import { formatShortDate, todayIso } from "@/lib/schedule/dates";
+import { formatShortDate, formatTermDate, todayIso } from "@/lib/schedule/dates";
 import { useRowWindow } from "@/lib/use-row-window";
 import { cn } from "@/lib/utils";
 
@@ -193,7 +193,7 @@ function CalendarRow({
       }),
   });
   const warningText = unit.warnings
-    .map((item) => `${t(`documentKind.${item.kind}`)} · ${formatShortDate(item.valid_until)}`)
+    .map((item) => `${t(`documentKind.${item.kind}`)} · ${formatTermDate(item.valid_until)}`)
     .join("; ");
   return (
     <div className="flex border-b" style={{ height: CALENDAR_ROW_HEIGHT }} data-testid="calendar-row" data-unit={unit.registry_number}>

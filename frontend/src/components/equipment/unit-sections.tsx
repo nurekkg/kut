@@ -16,7 +16,7 @@ import { EQUIPMENT_KEY } from "@/lib/equipment/keys";
 import { EQUIPMENT_API, useOwnRates } from "@/lib/equipment/queries";
 import { documentState, latestDocuments, maintenanceBucket } from "@/lib/equipment/status";
 import type { MaintenanceRow, MaintenanceStatus, UnitCard } from "@/lib/equipment/types";
-import { formatShortDate, todayIso } from "@/lib/schedule/dates";
+import { formatShortDate, formatTermDate, todayIso } from "@/lib/schedule/dates";
 
 // Переходы ТО и ремонта по статусам; сервер проверяет их ещё раз (equipment.transition_forbidden).
 const NEXT: Record<string, { status: MaintenanceStatus; key: "start" | "finish" | "cancel" }[]> = {
@@ -162,7 +162,7 @@ export function UnitDocumentsSection({ unit }: { unit: UnitCard }) {
             <li key={document.id} className="flex flex-wrap items-center gap-2 p-3">
               <span className="min-w-0 flex-1 font-medium">{kindText(document.kind)}</span>
               <span className="text-sm text-muted-foreground">{document.number}</span>
-              <span className="text-sm tabular-nums">{formatShortDate(document.valid_until)}</span>
+              <span className="text-sm tabular-nums">{formatTermDate(document.valid_until)}</span>
               {document.document_id ? (
                 <Link
                   href={`/documents/${document.document_id}`}

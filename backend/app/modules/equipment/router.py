@@ -226,7 +226,7 @@ async def add_document(
         user_id=principal.user_id,
         key=key,
         payload=body,
-        handler=lambda: service.add_document(session, unit_id, body),
+        handler=lambda: service.add_document(session, principal, unit_id, body),
     )
 
 

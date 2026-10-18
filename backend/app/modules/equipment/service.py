@@ -11,6 +11,7 @@ from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
+from app.modules.auth.principal import Principal
 from app.modules.documents.models import Document, DocumentLink
 from app.modules.equipment.models import (
     EquipmentAssignment,
@@ -33,6 +34,7 @@ from app.modules.equipment.schemas import (
     UnitOut,
     UnitPatch,
 )
+from app.modules.rbac.enums import Action, Module
 
 BISHKEK = ZoneInfo("Asia/Bishkek")
 SOON_DAYS = 30
@@ -400,10 +402,22 @@ async def list_documents(session: AsyncSession, unit_id: uuid.UUID) -> list[Docu
     return await document_outs(session, list(rows))
 
 
+def _document_kind_allowed(principal: Principal, kind: str) -> bool:
+    """Строка срока по виду (PO 2026-10-18): технический осмотр - механику
+    (equipment:write:maintenance), остальные виды - по праву загрузки документов техники
+    (equipment:write:documents). Та же проверка стоит в политике вставки equipment_document
+    (миграция c9e2d4b7a1f6)."""
+    return kind == "technical_inspection" or principal.has(
+        Module.EQUIPMENT, Action.WRITE, "documents"
+    )
+
+
 async def add_document(
-    session: AsyncSession, unit_id: uuid.UUID, data: DocumentCreate
+    session: AsyncSession, principal: Principal, unit_id: uuid.UUID, data: DocumentCreate
 ) -> DocumentOut:
     """Новая версия строкой: старые не меняются и не удаляются (ТЗ §2.2)."""
+    if not _document_kind_allowed(principal, data.kind):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "equipment.document_kind_forbidden")
     unit = await _unit(session, unit_id)
     # Блокировка на время транзакции: параллельные добавления этой единицы ждут друг друга, поэтому
     # номер версии идёт без пропусков и не сталкивается с уникальным индексом (F2, ADR-015 часть 3

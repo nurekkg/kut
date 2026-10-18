@@ -74,8 +74,14 @@ XLSX_HEADERS = (
     "Статус последней версии",
     "Дата",
 )
-XLSX_AMOUNT_HEADERS = ("Текущая сумма", "Версия текущей суммы")
-VERSION_AMOUNT_HEADERS = ("Регистрационный номер", "Версия", "Статус версии", "Сумма версии")
+# Суммы в сомах (KGS): валюта - в заголовке колонки, так же как в интерфейсе (formatMoney).
+XLSX_AMOUNT_HEADERS = ("Текущая сумма, сом (KGS)", "Версия текущей суммы")
+VERSION_AMOUNT_HEADERS = (
+    "Регистрационный номер",
+    "Версия",
+    "Статус версии",
+    "Сумма версии, сом (KGS)",
+)
 # Лист выгрузки: название, заголовки, строки, номера денежных колонок (с 1).
 Sheet = tuple[str, list[str], list[list[Any]], tuple[int, ...]]
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -124,7 +130,8 @@ _VER_INTERNAL = (
     DocumentVersion.content_type,
     DocumentVersion.size_bytes,
     DocumentVersion.created_at,
-    DocumentVersion.comment,
+    # Комментарий - по праву на деньги вида (миграция c9e2d4b7a1f6): колонка у kut_app не читается.
+    func.app.version_comment(DocumentVersion.id).label("comment"),
     DocumentVersion.checksum_sha256,
 )
 _VER_EXTERNAL = (
@@ -467,7 +474,7 @@ async def list_events(session: AsyncSession, document_id: uuid.UUID) -> list[Eve
                 DocumentStatusEvent.id,
                 DocumentStatusEvent.from_status,
                 DocumentStatusEvent.to_status,
-                DocumentStatusEvent.comment,
+                func.app.event_comment(DocumentStatusEvent.id).label("comment"),
                 DocumentStatusEvent.created_at,
                 User.full_name.label("actor_name"),
             )

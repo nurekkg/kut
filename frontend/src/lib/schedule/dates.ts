@@ -40,6 +40,16 @@ export function formatShortDate(iso: string | null | undefined): string {
   return SHORT_DATE.format(new Date(year, month - 1, day));
 }
 
+const TERM_DATE = new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+// Срок техники (документы, ТО, назначения): год из четырёх цифр. Двузначный год (31.12.40) путал сроки.
+export function formatTermDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const [year, month, day] = iso.split("-").map(Number);
+  if (!year || !month || !day) return iso;
+  return TERM_DATE.format(new Date(year, month - 1, day));
+}
+
 const MONTH = new Intl.DateTimeFormat("ru-RU", { month: "short", timeZone: "UTC" });
 
 export function monthLabel(day: number): string {

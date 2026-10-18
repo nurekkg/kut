@@ -121,7 +121,7 @@ async def test_the_accountant_downloads_the_registry_with_its_sums_as_an_attachm
     assert response.headers["content-disposition"] == 'attachment; filename="documents.xlsx"'
     assert response.headers["cache-control"] == "no-store"
     header, rows = rows_of(response)
-    assert header[-2:] == ("Текущая сумма", "Версия текущей суммы")
+    assert header[-2:] == ("Текущая сумма, сом (KGS)", "Версия текущей суммы")
     row = next(item for item in rows if item[0] == ks2["registration_no"])
     assert row[5] == "Черновик"  # статус последней видимой версии
     assert row[-2] == 98000.0  # текущая сумма - у утверждённой версии, не у черновика

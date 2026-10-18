@@ -1162,6 +1162,7 @@
       "allKinds": "Все виды",
       "statusLabel": "Статус последней версии",
       "allStatuses": "Все статусы",
+      "filters": "Фильтры",
       "counterpartyLabel": "Контрагент",
       "allCounterparties": "Все контрагенты",
       "dateFrom": "Создан с",
@@ -1173,7 +1174,7 @@
         "counterparty": "Контрагент",
         "status": "Статус",
         "date": "Дата",
-        "amount": "Сумма"
+        "amount": "Сумма, сом (KGS)"
       },
       "empty": "Документов по этим условиям нет.",
       "page": "Страница {page}",
@@ -1226,6 +1227,7 @@
       "amountSave": "Сохранить сумму",
       "currentVersion": "Текущая версия",
       "noVersion": "Версий пока нет. Загрузите файл.",
+      "noApprovedVersion": "Утверждённой версии нет",
       "versions": "Версии",
       "versionNo": "Версия {number}",
       "sizeMb": "{value} МБ",

@@ -125,13 +125,13 @@ async def test_a_prompt_document_expiring_inside_the_period_only_warns(
     api: AsyncClient, auth_world: AuthWorld
 ) -> None:
     head = await headers_for(api, "equipment_head")
-    mechanic = await headers_for(api, "mechanic")
     unit = await new_unit(api, head, auth_world)
-    await api.post(
+    passport = await api.post(
         f"{API}/units/{unit['id']}/documents",
         json={"kind": "passport", "number": "ПС-1", "valid_until": day(3)},
-        headers={**mechanic, **idem()},
+        headers={**head, **idem()},
     )
+    assert passport.status_code == 201, passport.text
     created = await assign(
         api, head, unit_id=unit["id"], project_id=east(auth_world), start=0, end=6, hours="8"
     )
