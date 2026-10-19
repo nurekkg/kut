@@ -90,7 +90,8 @@ def _outbox(engine: Engine, version: str, position: int | None = None) -> list[A
             text(
                 "SELECT o.id, o.recipient_user_id, o.event_type, o.status, o.attempts,"
                 " o.next_attempt_at, o.last_error_code, o.dedup_key"
-                " FROM notification_outbox o JOIN document_version v ON v.document_id = o.document_id"
+                " FROM notification_outbox o"
+                " JOIN document_version v ON v.document_id = o.document_id"
                 " WHERE v.id = CAST(:v AS uuid) ORDER BY o.dedup_key"
             ),
             {"v": version},
@@ -269,7 +270,8 @@ async def test_a_rejection_tells_the_author_once_and_a_full_approval_tells_the_a
         headers={**desk.heads["estimator"], **idem()},
     )
     assert rejected.status_code == 200, rejected.text
-    told = [row for row in _outbox(worker_sync_engine, version) if row.event_type == "approval_rejected"]
+    found = _outbox(worker_sync_engine, version)
+    told = [row for row in found if row.event_type == "approval_rejected"]
     assert [row.recipient_user_id for row in told] == [auth_world.users["accountant"]]
     assert told[0].dedup_key == f"rej:{version}:1:{auth_world.users['accountant']}"
     # Повторная отправка и согласование: подписчиком стал автор, шаги проходят по очереди.
@@ -277,7 +279,8 @@ async def test_a_rejection_tells_the_author_once_and_a_full_approval_tells_the_a
     for who, position in (("foreman", 1), ("estimator", 2), ("techdir", 3), ("finance", 4)):
         decided = await _decide(api, desk.heads[who], document, version, position)
         assert decided.status_code == 200, decided.text
-    approved = [row for row in _outbox(worker_sync_engine, version) if row.event_type == "approval_approved"]
+    found = _outbox(worker_sync_engine, version)
+    approved = [row for row in found if row.event_type == "approval_approved"]
     assert [row.recipient_user_id for row in approved] == [auth_world.users["accountant"]]
 
 
@@ -472,7 +475,11 @@ async def test_a_client_error_is_failed_at_once_without_a_retry(
     assert [row.status for row in _deliveries(worker_sync_engine, queued.id)] == ["failed"]
     assert (
         dispatch_due(
-            worker_sync_engine, adapter, base_url=BASE_URL, now=start + timedelta(days=1), ids=[queued.id]
+            worker_sync_engine,
+            adapter,
+            base_url=BASE_URL,
+            now=start + timedelta(days=1),
+            ids=[queued.id],
         )
         == 0
     )
@@ -582,13 +589,18 @@ def test_the_delivery_journal_is_append_only(
     """Воркер пишет только INSERT: UPDATE и DELETE отказаны правами. Триггер - в каталоге."""
     with owner_sync_engine.connect() as connection:
         trigger = connection.execute(
-            text("SELECT count(*) FROM pg_trigger WHERE tgname = 'notification_delivery_append_only'")
+            text(
+                "SELECT count(*) FROM pg_trigger"
+                " WHERE tgname = 'notification_delivery_append_only'"
+            )
         ).scalar_one()
     assert trigger == 1
     for statement in (
         "UPDATE notification_delivery SET status = 'sent'",
         "DELETE FROM notification_delivery",
     ):
-        with pytest.raises(DBAPIError, match="permission denied"):
-            with worker_sync_engine.begin() as connection:
-                connection.execute(text(statement))
+        with (
+            pytest.raises(DBAPIError, match="permission denied"),
+            worker_sync_engine.begin() as connection,
+        ):
+            connection.execute(text(statement))

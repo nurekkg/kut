@@ -1053,7 +1053,7 @@ async def test_a_portal_user_cannot_be_a_delegate(
     assert refused.json()["detail"] == "approval.delegate_not_internal"
     with owner_sync_engine.begin() as connection:
         connection.execute(text("SET LOCAL ROLE kut_auth"))
-        with pytest.raises(DBAPIError, match="approval.delegate_not_internal"):
+        with pytest.raises(DBAPIError, match=r"approval\.delegate_not_internal"):
             connection.execute(
                 text(
                     "INSERT INTO document_delegation"

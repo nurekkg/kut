@@ -11,8 +11,8 @@ from app.core.log import configure_logging
 from app.core.redis import close_redis
 from app.core.request_id import RequestIdMiddleware
 from app.modules.auth.keys import validate_auth_config
-from app.modules.notifications.adapters import validate_notification_config
 from app.modules.health.router import router as health_router
+from app.modules.notifications.adapters import validate_notification_config
 
 
 @asynccontextmanager

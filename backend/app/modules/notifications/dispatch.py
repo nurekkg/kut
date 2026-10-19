@@ -77,7 +77,8 @@ def _deliver(
     now: datetime,
 ) -> None:
     attempt = row.attempts + 1
-    if row.phone is None or not row.is_active or row.deleted_at is not None or not row.notify_whatsapp:
+    notifiable = row.is_active and row.deleted_at is None and row.notify_whatsapp
+    if row.phone is None or not notifiable:
         _record(connection, row, attempt, "failed", "failed", "recipient.not_notifiable")
         return
     if adapter.requires_approved_template and row.approval != "approved":

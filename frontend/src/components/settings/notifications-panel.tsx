@@ -12,7 +12,20 @@ import { DELIVERIES_KEY, NOTIFICATIONS_API, type Delivery } from "@/lib/notifica
 
 const EVENT_TYPES = ["approval_requested", "approval_approved", "approval_rejected", "delegation_assigned"] as const;
 const STATUSES = ["logged", "sent", "retry", "failed", "dead"] as const;
-const ERRORS = ["recipient.not_notifiable", "template.not_approved", "timeout", "network", "bad_response"] as const;
+// Коды ошибок доставки -> ключи сообщений (точка в ключе next-intl не годится).
+const ERROR_KEYS = {
+  "recipient.not_notifiable": "recipient_not_notifiable",
+  "template.not_approved": "template_not_approved",
+  timeout: "timeout",
+  network: "network",
+  bad_response: "bad_response",
+} as const;
+
+type ErrorCode = keyof typeof ERROR_KEYS;
+
+function isErrorCode(value: string): value is ErrorCode {
+  return Object.hasOwn(ERROR_KEYS, value);
+}
 
 type Known<T extends readonly string[]> = T[number];
 
@@ -69,7 +82,7 @@ export function NotificationsPanel() {
         cell: ({ row }) => {
           const code = row.original.error_code;
           if (code === null) return common("dash");
-          if (known(ERRORS, code)) return t(`errors.${code.replace(".", "_")}`);
+          if (isErrorCode(code)) return t(`errors.${ERROR_KEYS[code]}`);
           if (code.startsWith("http_")) return t("errors.http", { code: code.slice("http_".length) });
           return code;
         },

@@ -121,8 +121,9 @@ def _failure(error_code: str, provider_status: int | None, *, retryable: bool) -
 def get_adapter(settings: Settings) -> NotificationAdapter:
     if not settings.whatsapp_enabled:
         return LogNotificationAdapter()
-    assert settings.whatsapp_phone_number_id is not None
-    assert settings.whatsapp_access_token is not None
+    validate_notification_config(settings)
+    if settings.whatsapp_phone_number_id is None or settings.whatsapp_access_token is None:
+        raise RuntimeError("WhatsApp: нет номера или токена")
     return WhatsAppCloudAdapter(
         phone_number_id=settings.whatsapp_phone_number_id,
         access_token=settings.whatsapp_access_token.get_secret_value(),
@@ -131,7 +132,7 @@ def get_adapter(settings: Settings) -> NotificationAdapter:
 
 
 def validate_notification_config(settings: Settings) -> None:
-    """Включённый WhatsApp без номера или токена - ошибка при старте, а не тихий отказ при отправке."""
+    """Включённый WhatsApp без номера или токена - ошибка при старте, не тихий отказ."""
     if not settings.whatsapp_enabled:
         return
     if not settings.whatsapp_phone_number_id or settings.whatsapp_access_token is None:
