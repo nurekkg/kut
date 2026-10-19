@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import { apiLogin, get, jwtSubject, type Session } from "../helpers/api";
 import { createDocument, DOCUMENTS, documentById, uploadVersion } from "../helpers/documents";
-import { EAST_NAME, projectNamed, signInWithCode, totp, TOTP_SECRET } from "../helpers/equipment";
+import { EAST_NAME, projectNamed, totp, TOTP_SECRET } from "../helpers/equipment";
 import { PASSWORD, today } from "../helpers/env";
 import { expect, test } from "../helpers/test";
 import {
@@ -29,6 +29,30 @@ function withKey(session: Session): Record<string, string> {
   return { Authorization: `Bearer ${session.token}`, "Idempotency-Key": randomUUID() };
 }
 
+// Код 2FA действует одно окно (30 с) и повторно не принимается: если этот человек уже входил в текущем окне,
+// ждём следующее. Карта живёт в одном процессе; сценарии идут по очереди (workers: 1).
+const usedWindow = new Map<string, number>();
+
+async function freshCode(user: string): Promise<string> {
+  const window = () => Math.floor(Date.now() / 30_000);
+  if (usedWindow.get(user) === window()) {
+    await new Promise((resolve) => setTimeout(resolve, 30_000 - (Date.now() % 30_000) + 500));
+  }
+  usedWindow.set(user, window());
+  return totp(TOTP_SECRET);
+}
+
+async function signInWithFreshCode(page: Page, user: string): Promise<void> {
+  await page.goto("/login");
+  await page.locator("#identifier").fill(`${user}@kut.test`);
+  await page.locator("#password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Войти" }).click();
+  await page.locator("#totp-code").waitFor({ timeout: 40_000 });
+  await page.locator("#totp-code").fill(await freshCode(user));
+  await page.getByRole("button", { name: "Подтвердить" }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 40_000 });
+}
+
 async function loginWithCode(request: APIRequestContext, user: string): Promise<Session> {
   const first = await request.post("/api/v1/auth/login", {
     data: { identifier: `${user}@kut.test`, password: PASSWORD },
@@ -36,7 +60,7 @@ async function loginWithCode(request: APIRequestContext, user: string): Promise<
   expect(first.ok(), `вход ${user}: ${first.status()}`).toBeTruthy();
   const challenge = (await first.json()) as { mfa_token: string };
   const verified = await request.post("/api/v1/auth/mfa/verify", {
-    data: { mfa_token: challenge.mfa_token, code: totp(TOTP_SECRET) },
+    data: { mfa_token: challenge.mfa_token, code: await freshCode(user) },
   });
   expect(verified.ok(), `2FA ${user}: ${verified.status()}`).toBeTruthy();
   return { token: ((await verified.json()) as { access_token: string }).access_token };
@@ -182,7 +206,7 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
   // Финдиректор - последний шаг: после него версия утверждена, маршрут пройден.
   const financeContext = await desktopContext(browser);
   const finance = await financeContext.newPage();
-  await signInWithCode(finance, "finance", TOTP_SECRET);
+  await signInWithFreshCode(finance, "finance");
   await openCard(finance, ids.document);
   await finance.getByTestId("route-approve").click();
   await expect(finance.getByTestId("document-route-status")).toContainText("Маршрут пройден", { timeout: 20_000 });
@@ -287,7 +311,7 @@ test("замещение: финдиректор назначил владель
   const context = await desktopContext(browser);
   const page = await context.newPage();
   const errors = watchErrors(page);
-  await signInWithCode(page, "owner", TOTP_SECRET);
+  await signInWithFreshCode(page, "owner");
   await openCard(page, ids.document);
   await page.getByTestId("route-approve").click();
   await expect(page.getByTestId("route-step").nth(3)).toHaveAttribute("data-status", "approved", {
@@ -326,7 +350,7 @@ test("подписанный скан: к согласованной верси�
   const context = await desktopContext(browser);
   const page = await context.newPage();
   const errors = watchErrors(page);
-  await signIn(page, "lawyer");
+  await signIn(page, "techdir");
   await openCard(page, ids.document);
   await page.getByTestId("route-scan-open").click();
   await page.getByTestId("route-scan-file").setInputFiles({ name: "scan.pdf", mimeType: "application/pdf", buffer: SCAN });

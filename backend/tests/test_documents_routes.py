@@ -237,6 +237,10 @@ async def test_a_template_change_does_not_touch_a_running_route(
         "technical_director",
         "finance_director",
     ]
+    approved = await decide(api, desk.heads["foreman"], document, version, 1, "approve")
+    assert approved.status_code == 200, approved.text
+    by_snapshot = await decide(api, desk.heads["estimator"], document, version, 2, "approve")
+    assert by_snapshot.status_code == 200, by_snapshot.text
     restored = await api.put(
         f"{API}/documents/route-templates/money",
         json={"roles": ["foreman", "estimator", "technical_director", "finance_director"]},
@@ -414,7 +418,7 @@ async def test_a_signed_scan_becomes_the_effective_version(
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     document, version = await money_version(api, s3, desk, "accountant", auth_world)
-    draft_scan = await _signed_scan(api, s3, desk, document, version, PDF_OK, "accountant")
+    draft_scan = await _signed_scan(api, s3, desk, document, version, PDF_OK, "techdir")
     assert draft_scan.status_code == 409, draft_scan.text
     assert draft_scan.json()["detail"] == "document.parent_not_approved"
     assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
@@ -425,7 +429,7 @@ async def test_a_signed_scan_becomes_the_effective_version(
     assert (
         await decide(api, desk.heads["finance"], document, version, 4, "approve")
     ).status_code == 200
-    signed = await _signed_scan(api, s3, desk, document, version, PDF_OK, "accountant")
+    signed = await _signed_scan(api, s3, desk, document, version, PDF_OK, "techdir")
     assert signed.status_code == 201, signed.text
     body = signed.json()
     assert body["status"] == "signed"
@@ -568,5 +572,127 @@ async def test_a_signed_version_of_another_document_is_refused(
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     _, version = await money_version(api, s3, desk, "accountant", auth_world)
     other_document, _ = await money_version(api, s3, desk, "accountant", auth_world)
-    response = await _signed_scan(api, s3, desk, other_document, version, PDF_OK, "accountant")
+    response = await _signed_scan(api, s3, desk, other_document, version, PDF_OK, "techdir")
     assert response.status_code == 404, response.text
+
+
+async def test_a_delegation_that_has_not_started_does_not_make_the_delegate_a_participant(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = await local_today(worker_sync_engine)
+    start = str(date.fromisoformat(today) + timedelta(days=1))
+    end = str(date.fromisoformat(today) + timedelta(days=2))
+    delegated = await api.post(
+        f"{API}/documents/delegations",
+        json={
+            "delegate_id": str(auth_world.users["master"]),
+            "role_code": "technical_director",
+            "valid_from": start,
+            "valid_to": end,
+        },
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert delegated.status_code == 201, delegated.text
+    document, version = await money_version(api, s3, desk, "accountant", auth_world)
+    assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
+    rejected = await decide(
+        api, desk.heads["foreman"], document, version, 1, "reject", reason="Не сходятся объёмы"
+    )
+    assert rejected.status_code == 200, rejected.text
+    outsider = await route_of(api, desk.heads["master"], document, version)
+    assert outsider["decisions"][-1]["reason"] is None
+    revoked = await api.post(
+        f"{API}/documents/delegations/{delegated.json()['id']}/revoke",
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert revoked.status_code == 204, revoked.text
+
+
+async def test_an_author_cannot_hand_the_step_over_to_decide_their_own_version(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = await local_today(worker_sync_engine)
+    tomorrow = str(date.fromisoformat(today) + timedelta(days=1))
+    delegated = await api.post(
+        f"{API}/documents/delegations",
+        json={
+            "delegate_id": str(auth_world.users["estimator"]),
+            "role_code": "technical_director",
+            "valid_from": today,
+            "valid_to": tomorrow,
+        },
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert delegated.status_code == 201, delegated.text
+    document, version = await money_version(api, s3, desk, "techdir", auth_world)
+    assert (await send(api, desk.heads["techdir"], document, version)).status_code == 200
+    for position, who in ((1, "foreman"), (2, "estimator")):
+        assert (
+            await decide(api, desk.heads[who], document, version, position, "approve")
+        ).status_code == 200
+    handed = await decide(api, desk.heads["estimator"], document, version, 3, "approve")
+    assert handed.status_code == 403, handed.text
+    assert handed.json()["detail"] == "approval.author_forbidden"
+    revoked = await api.post(
+        f"{API}/documents/delegations/{delegated.json()['id']}/revoke",
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert revoked.status_code == 204, revoked.text
+
+
+async def test_only_an_approver_signs_the_scan(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await money_version(api, s3, desk, "accountant", auth_world)
+    assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
+    for position, who in ((1, "foreman"), (2, "estimator"), (3, "techdir")):
+        assert (
+            await decide(api, desk.heads[who], document, version, position, "approve")
+        ).status_code == 200
+    assert (
+        await decide(api, desk.heads["finance"], document, version, 4, "approve")
+    ).status_code == 200
+    refused = await _signed_scan(api, s3, desk, document, version, PDF_OK, "accountant")
+    assert refused.status_code == 403, refused.text
+
+
+async def test_an_archived_document_refuses_decisions(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await money_version(api, s3, desk, "accountant", auth_world)
+    assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
+    archived = await api.post(f"{API}/documents/{document}/archive", headers=desk.heads["owner"])
+    assert archived.status_code == 204, archived.text
+    refused = await decide(api, desk.heads["foreman"], document, version, 1, "approve")
+    assert refused.status_code == 409, refused.text
+    assert "archived" in str(refused.json()["detail"])
+
+
+async def test_the_journal_keeps_no_reason_of_a_decision(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await money_version(api, s3, desk, "accountant", auth_world)
+    assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
+    reason = "Причина не для журнала"
+    rejected = await decide(
+        api, desk.heads["foreman"], document, version, 1, "reject", reason=reason
+    )
+    assert rejected.status_code == 200, rejected.text
+    with worker_sync_engine.connect() as connection:
+        leaked = connection.execute(
+            text(
+                "SELECT count(*) FROM audit_log WHERE table_name = 'approval_decision'"
+                " AND (new::text LIKE :p OR old::text LIKE :p)"
+            ),
+            {"p": f"%{reason}%"},
+        ).scalar_one()
+        journaled = connection.execute(
+            text("SELECT count(*) FROM audit_log WHERE table_name = 'approval_decision'")
+        ).scalar_one()
+    assert journaled >= 1
+    assert leaked == 0

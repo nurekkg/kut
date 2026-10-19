@@ -171,7 +171,7 @@ export function RouteBlock({
               </Button>
             </div>
           ) : null}
-          {version.status === "approved" && writable ? (
+          {version.status === "approved" && writable && permissions.includes("documents:approve") ? (
             <Button
               type="button"
               variant="outline"

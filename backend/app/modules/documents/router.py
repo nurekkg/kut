@@ -511,6 +511,7 @@ async def revoke_delegation(
     "/{document_id}/versions/{version_id}/signed",
     status_code=status.HTTP_201_CREATED,
     response_model=VersionOut,
+    dependencies=[Depends(internal_only(require(Module.DOCUMENTS, Action.APPROVE)))],
 )
 async def upload_signed_scan(
     document_id: uuid.UUID,

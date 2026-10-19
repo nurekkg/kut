@@ -214,7 +214,11 @@ export function DocumentCard({ documentId }: { documentId: string }) {
       </Section>
 
       {internal && versions.length > 0 ? (
-        <RouteBlock doc={d} version={versions[0]} permissions={permissions} />
+        <RouteBlock
+          doc={d}
+          version={versions.find((item) => item.status === "on_approval") ?? versions[0]}
+          permissions={permissions}
+        />
       ) : null}
 
       <Section

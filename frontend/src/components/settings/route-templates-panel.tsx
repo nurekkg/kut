@@ -83,7 +83,7 @@ function TemplateEditor({ template }: { template: RouteTemplate }) {
       {steps.length === 0 ? <p className="text-sm text-destructive">{t("empty")}</p> : null}
       <ol className="flex flex-col gap-2">
         {steps.map((role, index) => (
-          <li key={`${index}-${role}`} className="flex items-center gap-2" data-testid="route-template-step">
+          <li key={index} className="flex items-center gap-2" data-testid="route-template-step">
             <span className="w-6 shrink-0 text-sm tabular-nums text-muted-foreground">{index + 1}</span>
             <select
               value={role}

@@ -126,6 +126,9 @@ BEGIN
         RAISE EXCEPTION 'approval.author_forbidden';
     END IF;
     SELECT * INTO d FROM public.document WHERE id = v.document_id;
+    IF d.archived_at IS NOT NULL THEN
+        RAISE EXCEPTION 'document.archived';
+    END IF;
     IF NOT app.document_allowed(d.id) OR NOT app.has_permission('documents', 'approve') THEN
         RAISE EXCEPTION 'approval.forbidden';
     END IF;
@@ -135,9 +138,15 @@ BEGIN
     SELECT dl.delegator_id INTO deleg FROM public.document_delegation dl
     WHERE dl.delegate_id = actor AND dl.role_code = st.role_code AND dl.revoked_at IS NULL
       AND app.local_today() BETWEEN dl.valid_from AND dl.valid_to
+      AND EXISTS (SELECT 1 FROM public."user" u JOIN public.role r ON r.id = u.role_id
+                  WHERE u.id = dl.delegator_id AND u.is_active AND u.deleted_at IS NULL
+                    AND r.code = dl.role_code)
     LIMIT 1;
     IF deleg IS NULL THEN
         RAISE EXCEPTION 'approval.not_your_step';
+    END IF;
+    IF deleg = v.created_by THEN
+        RAISE EXCEPTION 'approval.author_forbidden';
     END IF;
     RETURN deleg;
 END $$
@@ -155,6 +164,7 @@ BEGIN
     IF actor IS NULL THEN
         RAISE EXCEPTION 'approval.forbidden';
     END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended(p_version::text, 0));
     SELECT * INTO prev FROM public.approval_decision x
     WHERE x.version_id = p_version AND x.position = p_position
       AND x.attempt = (SELECT max(y.attempt) FROM public.version_route_step y
@@ -192,6 +202,7 @@ BEGIN
     IF app.user_id() IS NULL THEN
         RAISE EXCEPTION 'approval.forbidden';
     END IF;
+    PERFORM pg_advisory_xact_lock(hashtextextended(p_version::text, 0));
     SELECT * INTO v FROM public.document_version WHERE id = p_version;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'document.not_found';
@@ -262,6 +273,7 @@ BEGIN
                    JOIN public.document_delegation dl
                      ON dl.role_code = s.role_code AND dl.delegate_id = app.user_id()
                     AND dl.revoked_at IS NULL
+                    AND app.local_today() BETWEEN dl.valid_from AND dl.valid_to
                    WHERE s.version_id = p_version);
 END $$
 """,
@@ -933,6 +945,7 @@ def upgrade() -> None:
             table,
             project_column=project,
             legal_entity_column=legal,
+            hidden_columns=("reason",) if table == "approval_decision" else (),
             frozen_columns=frozen,
         )
 

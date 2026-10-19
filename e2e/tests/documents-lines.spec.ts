@@ -143,8 +143,8 @@ test("позиции версии: ПТО импортирует и видит �
   await expect(foremanTable.getByRole("columnheader")).toHaveCount(4);
   await expect(foremanPage.getByTestId("document-lines-total")).toHaveCount(0);
   await expect(foremanPage.getByTestId("document-lines")).not.toContainText("сом");
-  await expect(foremanPage.getByTestId("document-lines-edit")).toHaveCount(0);
-  await expect(foremanPage.getByTestId("document-lines-import")).toHaveCount(0);
+  await expect(foremanPage.getByTestId("document-lines-edit")).toHaveCount(1);
+  await expect(foremanPage.getByTestId("document-lines-import")).toHaveCount(1);
   await shot(foremanPage, "lines-foreman-1280");
   expect(foremanErrors).toEqual([]);
 

@@ -141,7 +141,7 @@ export const documentsApi = {
   decide: (id: string, versionId: string, body: DecisionBody, key: string) =>
     api.post<RouteOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/decisions`, body, key),
   saveRouteTemplate: (code: string, roles: string[]) =>
-    api.put<RouteTemplate>(`${DOCUMENTS_API}/route-templates/${code}`, { roles }),
+    api.put<RouteTemplate[]>(`${DOCUMENTS_API}/route-templates/${code}`, { roles }),
   signedScan: (id: string, versionId: string, body: SignedScanBody, key: string) =>
     api.post<VersionOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/signed`, body, key),
 };
