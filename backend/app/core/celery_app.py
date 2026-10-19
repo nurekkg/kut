@@ -2,7 +2,11 @@ from celery import Celery
 
 from app.core.config import get_settings
 
-TASK_MODULES = ["app.modules.health.tasks", "app.modules.maintenance.tasks"]
+TASK_MODULES = [
+    "app.modules.health.tasks",
+    "app.modules.maintenance.tasks",
+    "app.modules.notifications.tasks",
+]
 
 
 def create_celery() -> Celery:
@@ -28,6 +32,10 @@ def create_celery() -> Celery:
             "purge-auth-data": {
                 "task": "maintenance.purge_auth_data",
                 "schedule": float(settings.maintenance_purge_seconds),
+            },
+            "notification-dispatch": {
+                "task": "notification.dispatch",
+                "schedule": 60.0,
             },
             "ensure-audit-partitions": {
                 "task": "maintenance.ensure_audit_partitions",

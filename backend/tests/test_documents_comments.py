@@ -66,7 +66,7 @@ async def comment_as(
 def transit(engine: Engine, version: str, target: str, comment: str | None) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text("SELECT app.document_version_transition(CAST(:v AS uuid), :to, :comment)"),
+            text("SELECT app.version_move(CAST(:v AS uuid), :to, :comment, NULL)"),
             {"v": version, "to": target, "comment": comment},
         )
 

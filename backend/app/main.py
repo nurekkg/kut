@@ -11,6 +11,7 @@ from app.core.log import configure_logging
 from app.core.redis import close_redis
 from app.core.request_id import RequestIdMiddleware
 from app.modules.auth.keys import validate_auth_config
+from app.modules.notifications.adapters import validate_notification_config
 from app.modules.health.router import router as health_router
 
 
@@ -24,6 +25,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     configure_logging()
     validate_auth_config()
+    validate_notification_config(get_settings())
     settings = get_settings()
     docs_enabled = settings.docs_enabled
     app = FastAPI(

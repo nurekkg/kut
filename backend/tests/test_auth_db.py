@@ -25,10 +25,10 @@ from tests.db_support import (
 USER_READABLE = {
     "id", "created_at", "updated_at", "created_by", "updated_by", "deleted_at", "phone", "email",
     "full_name", "role_id", "counterparty_id", "is_active", "role_ver", "totp_confirmed_at",
-    "password_changed_at",
+    "password_changed_at", "notify_whatsapp",
 }  # fmt: skip
 USER_SECRET = {"password_hash", "totp_secret_enc", "totp_key_id"}
-USER_WRITABLE = {"phone", "email", "full_name", "updated_at", "updated_by"}
+USER_WRITABLE = {"phone", "email", "full_name", "updated_at", "updated_by", "notify_whatsapp"}
 
 # Кому разрешён EXECUTE: независимый от миграции перечень (ADR-001 §2, S1b).
 EXECUTE_GRANTS: dict[str, set[str]] = {

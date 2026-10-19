@@ -250,6 +250,6 @@ def approve(engine: Engine, version_id: str) -> None:
     for target in ("on_approval", "approved"):
         with engine.begin() as connection:
             connection.execute(
-                text("SELECT app.document_version_transition(CAST(:v AS uuid), :to, NULL)"),
+                text("SELECT app.version_move(CAST(:v AS uuid), :to, NULL, NULL)"),
                 {"v": version_id, "to": target},
             )

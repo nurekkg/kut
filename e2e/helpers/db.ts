@@ -9,7 +9,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // утверждения в API пока нет (S6a), поэтому фикстура переводит версию через базу dev-стенда.
 export async function transitionVersion(versionId: string, to: "on_approval" | "approved"): Promise<void> {
   if (!UUID.test(versionId)) throw new Error(`не идентификатор версии: ${versionId}`);
-  const sql = `SELECT app.document_version_transition(CAST('${versionId}' AS uuid), '${to}', NULL)`;
+  const sql = `SELECT app.version_move(CAST('${versionId}' AS uuid), '${to}', NULL, NULL)`;
   await run("docker", [
     "exec",
     "kut-postgres-1",

@@ -26,6 +26,7 @@ class User(BusinessBase):
     )
     is_active: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
     role_ver: Mapped[int] = mapped_column(default=1, server_default=text("1"))
+    notify_whatsapp: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
 
     __table_args__ = (
         CheckConstraint("phone IS NOT NULL OR email IS NOT NULL", name="contact_required"),

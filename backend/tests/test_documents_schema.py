@@ -150,7 +150,7 @@ async def test_the_number_counter_is_invisible_to_the_application(
         await rows("SELECT count(*) FROM document_number_counter", context)
 
 
-async def test_the_application_cannot_move_a_version_through_the_transition_function(
+async def test_the_application_cannot_move_a_version_through_the_worker_function(
     api: AsyncClient, worker_sync_engine: Engine, auth_world: AuthWorld, s3: httpx.AsyncClient
 ) -> None:
     """Переход статуса - путь воркера: приложению EXECUTE не выдан, даже в системной сессии."""
@@ -162,7 +162,7 @@ async def test_the_application_cannot_move_a_version_through_the_transition_func
     context = in_context(auth_world.users["estimator"], (identifier,), (legal,))
     with pytest.raises(DBAPIError, match="permission denied"):
         await rows(
-            "SELECT app.document_version_transition(CAST(:v AS uuid), 'on_approval', NULL)",
+            "SELECT app.version_move(CAST(:v AS uuid), 'on_approval', NULL, NULL)",
             context,
             {"v": version_id},
         )
@@ -181,12 +181,12 @@ async def test_the_worker_path_follows_the_route_of_the_statuses(
         worker_sync_engine.begin() as connection,
     ):
         connection.execute(
-            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'approved', NULL)"),
+            text("SELECT app.version_move(CAST(:v AS uuid), 'approved', NULL, NULL)"),
             {"v": version_id},
         )
     with worker_sync_engine.begin() as connection:
         connection.execute(
-            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'on_approval', NULL)"),
+            text("SELECT app.version_move(CAST(:v AS uuid), 'on_approval', NULL, NULL)"),
             {"v": version_id},
         )
     with (
@@ -194,7 +194,7 @@ async def test_the_worker_path_follows_the_route_of_the_statuses(
         worker_sync_engine.begin() as connection,
     ):
         connection.execute(
-            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'draft', ' ')"),
+            text("SELECT app.version_move(CAST(:v AS uuid), 'draft', ' ', NULL)"),
             {"v": version_id},
         )
 

@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 
-from app.core.context import use_context
+from app.core.context import RequestContext, use_context
 from app.core.db import get_sessionmaker
 from app.core.redis import get_redis
 from app.modules.auth import devseed
@@ -829,7 +829,7 @@ async def test_a_delegation_longer_than_sixty_days_is_refused(
             "delegate_id": str(auth_world.users["estimator"]),
             "role_code": "technical_director",
             "valid_from": today,
-            "valid_to": str(date.fromisoformat(today) + timedelta(days=61)),
+            "valid_to": str(date.fromisoformat(today) + timedelta(days=60)),
         },
         headers={**desk.heads["techdir"], **idem()},
     )
@@ -841,7 +841,7 @@ async def test_a_delegation_longer_than_sixty_days_is_refused(
             "delegate_id": str(auth_world.users["estimator"]),
             "role_code": "technical_director",
             "valid_from": today,
-            "valid_to": str(date.fromisoformat(today) + timedelta(days=60)),
+            "valid_to": str(date.fromisoformat(today) + timedelta(days=59)),
         },
         headers={**desk.heads["techdir"], **idem()},
     )
@@ -871,7 +871,7 @@ async def test_the_database_refuses_a_delegation_longer_than_sixty_days(
                     "a": str(auth_world.users["techdir"]),
                     "b": str(auth_world.users["estimator"]),
                     "f": today,
-                    "t": str(date.fromisoformat(today) + timedelta(days=61)),
+                    "t": str(date.fromisoformat(today) + timedelta(days=60)),
                 },
             )
 
@@ -934,6 +934,7 @@ async def test_a_delegation_does_not_decide_once_its_period_is_over(
     listed = await api.get(f"{API}/documents/delegations", headers=desk.heads["techdir"])
     assert listed.status_code == 200, listed.text
     assert delegation_id not in {row["id"] for row in listed.json()}
+    _revoke_in_the_database(owner_sync_engine, delegation_id)
 
 
 async def test_a_money_reason_and_the_current_step_are_hidden_without_access_to_the_document(
@@ -981,3 +982,137 @@ async def test_two_simultaneous_approvals_make_one_decision(
     assert {first.status_code, second.status_code} == {200}, (first.text, second.text)
     state = await route_of(api, desk.heads["foreman"], document, version)
     assert [row["position"] for row in state["decisions"]].count(2) == 1
+
+
+def _revoke_in_the_database(owner_sync_engine: Engine, delegation_id: str) -> None:
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
+        connection.execute(
+            text("UPDATE document_delegation SET revoked_at = now() WHERE id = CAST(:i AS uuid)"),
+            {"i": delegation_id},
+        )
+
+
+async def test_a_delegation_overlapping_the_same_role_is_refused_and_back_to_back_is_allowed(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = date.fromisoformat(await local_today(worker_sync_engine))
+
+    def body(delegate: str, first: int, last: int) -> dict[str, str]:
+        return {
+            "delegate_id": str(auth_world.users[delegate]),
+            "role_code": "owner",
+            "valid_from": str(today + timedelta(days=first)),
+            "valid_to": str(today + timedelta(days=last)),
+        }
+
+    first = await api.post(
+        f"{API}/documents/delegations",
+        json=body("estimator", 0, 10),
+        headers={**desk.heads["owner"], **idem()},
+    )
+    assert first.status_code == 201, first.text
+    overlap = await api.post(
+        f"{API}/documents/delegations",
+        json=body("techdir", 5, 15),
+        headers={**desk.heads["owner"], **idem()},
+    )
+    assert overlap.status_code == 409, overlap.text
+    assert overlap.json()["detail"] == "approval.delegation_overlap"
+    back_to_back = await api.post(
+        f"{API}/documents/delegations",
+        json=body("techdir", 11, 20),
+        headers={**desk.heads["owner"], **idem()},
+    )
+    assert back_to_back.status_code == 201, back_to_back.text
+    for created in (first, back_to_back):
+        revoked = await api.post(
+            f"{API}/documents/delegations/{created.json()['id']}/revoke",
+            headers={**desk.heads["owner"], **idem()},
+        )
+        assert revoked.status_code == 204, revoked.text
+
+
+async def test_a_portal_user_cannot_be_a_delegate(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, owner_sync_engine: Engine
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = await local_today(worker_sync_engine)
+    refused = await api.post(
+        f"{API}/documents/delegations",
+        json={
+            "delegate_id": str(auth_world.users["customer"]),
+            "role_code": "owner",
+            "valid_from": today,
+            "valid_to": today,
+        },
+        headers={**desk.heads["owner"], **idem()},
+    )
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == "approval.delegate_not_internal"
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
+        with pytest.raises(DBAPIError, match="approval.delegate_not_internal"):
+            connection.execute(
+                text(
+                    "INSERT INTO document_delegation"
+                    " (delegator_id, delegate_id, role_code, valid_from, valid_to)"
+                    " VALUES (CAST(:a AS uuid), CAST(:b AS uuid), 'owner',"
+                    " CAST(:f AS date), CAST(:f AS date))"
+                ),
+                {
+                    "a": str(auth_world.users["owner"]),
+                    "b": str(auth_world.users["customer"]),
+                    "f": today,
+                },
+            )
+
+
+async def test_an_estimator_sees_the_names_of_the_deciders_and_a_customer_sees_none(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK, "customer")
+    document, version = await _approved_money(api, s3, desk, auth_world)
+    route = await api.get(
+        f"{API}/documents/{document}/versions/{version}/route", headers=desk.heads["estimator"]
+    )
+    assert route.status_code == 200, route.text
+    names = {step["position"]: step["decided_by_name"] for step in route.json()["steps"]}
+    with worker_sync_engine.connect() as connection:
+        full = {
+            who: connection.scalar(
+                text('SELECT full_name FROM "user" WHERE id = CAST(:u AS uuid)'),
+                {"u": str(auth_world.users[who])},
+            )
+            for who in ("techdir", "finance")
+        }
+    assert full["techdir"] and full["finance"]
+    assert names[3] == full["techdir"], names
+    assert names[4] == full["finance"], names
+    internal = await _scalar(
+        "SELECT count(*) FROM app.document_person_names(ARRAY[CAST(:d AS uuid)])",
+        in_context(auth_world.users["estimator"], (desk.project,), (desk.legal,)),
+        {"d": document},
+    )
+    assert internal >= 3
+    outsider = RequestContext(
+        user_id=auth_world.users["customer"],
+        is_internal=False,
+        project_ids=frozenset(),
+        legal_entity_ids=frozenset(),
+        counterparty_id=None,
+        request_id=None,
+        sees_all_users=False,
+    )
+    assert (
+        await _scalar(
+            "SELECT count(*) FROM app.document_person_names(ARRAY[CAST(:d AS uuid)])",
+            outsider,
+            {"d": document},
+        )
+        == 0
+    )
+    customer = await api.get(f"{API}/documents/{document}", headers=desk.heads["customer"])
+    assert customer.status_code == 200, customer.text
+    assert {version_row["author_name"] for version_row in customer.json()["versions"]} == {None}

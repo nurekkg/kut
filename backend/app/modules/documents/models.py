@@ -481,7 +481,7 @@ class DocumentDelegation(BusinessBase):
 
     __table_args__ = (
         CheckConstraint("valid_to >= valid_from", name="period"),
-        CheckConstraint("valid_to - valid_from <= 60", name="max_period"),
+        CheckConstraint("valid_to - valid_from <= 59", name="max_period"),
         CheckConstraint("delegator_id <> delegate_id", name="not_self"),
         CheckConstraint(
             ROUTE_ROLE_CHECK,

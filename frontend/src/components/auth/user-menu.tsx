@@ -39,6 +39,12 @@ export function UserMenu() {
             {settings("title")}
           </Link>
         ) : null}
+        <Link
+          href="/profile"
+          className={buttonVariants({ variant: "outline", size: "lg", className: "h-10" })}
+        >
+          {t("profile")}
+        </Link>
         <Button variant="outline" size="lg" className="h-10" onClick={() => void logout()} disabled={pending}>
           <LogOut data-icon="inline-start" aria-hidden />
           {t("logout")}

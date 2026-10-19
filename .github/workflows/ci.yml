@@ -46,6 +46,8 @@ jobs:
     env:
       UV_FROZEN: "1"
       APP_ENV: test
+      APP_PUBLIC_URL: https://kut.example
+      WHATSAPP_ENABLED: "false"
       # Одноразовые учётки job-а (контейнер postgres живёт только на время прогона). Суперпользователь
       # postgres нужен лишь шагу bootstrap; приложение и тесты работают под ролями kut_*.
       KUT_OWNER_PASSWORD: ci_owner_password

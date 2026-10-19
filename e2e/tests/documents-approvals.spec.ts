@@ -215,6 +215,34 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
   const after = await documentById(request, author, ids.document);
   expect(after.effective_version_no).toBe(1);
   expect(after.current_version?.status).toBe("approved");
+
+  // Журнал уведомлений (S6b): шаги отправлены в очередь; владелец видит строки с маской телефона.
+  // Рассылку делает beat раз в минуту (стенд dev, лог-адаптер), поэтому ждём несколько минут.
+  const ownerContext = await desktopContext(browser);
+  const owner = await ownerContext.newPage();
+  await signInWithFreshCode(owner, "owner");
+  await owner.goto("/settings/notifications");
+  await expect
+    .poll(
+      async () => {
+        await owner.reload();
+        return (await owner.getByTestId("notifications-journal").textContent()) ?? "";
+      },
+      { timeout: 240_000, intervals: [10_000] },
+    )
+    .toContain("+996 *** *** 01");
+  await expect(owner.getByTestId("notifications-journal")).toContainText("Нужно решение");
+  await fullShot(owner, "notifications-1280-journal");
+  // Тот же журнал на телефоне 375 px: без горизонтальной прокрутки.
+  const ownerPhone = await phoneContext(browser);
+  const ownerOnPhone = await ownerPhone.newPage();
+  await signInWithFreshCode(ownerOnPhone, "owner");
+  await ownerOnPhone.goto("/settings/notifications");
+  await expect(ownerOnPhone.getByTestId("notifications-journal")).toContainText("+996 *** *** 01", {
+    timeout: 60_000,
+  });
+  await expectNoHorizontalScroll(ownerOnPhone);
+  await shot(ownerOnPhone, "notifications-375-journal", true);
   expect(estimatorErrors).toEqual([]);
 });
 
@@ -265,6 +293,16 @@ test("отказ на шаге ПТО с причиной: черновик, п�
   await page.reload();
   await page.getByTestId("route-send").click();
   await expect(page.getByTestId("document-route-status")).toContainText("Попытка 2", { timeout: 20_000 });
+
+  // Прошлые попытки: отдельным списком - решение прораба и возврат сметчика с причиной (S6b, STEP 0).
+  const past = page.getByTestId("route-past-attempts");
+  await expect(past).toBeVisible({ timeout: 20_000 });
+  await expect(past.getByTestId("route-decision")).toHaveCount(2);
+  const returned = past.getByTestId("route-decision").filter({ hasText: "Вернул" });
+  await expect(returned).toHaveCount(1);
+  await expect(returned).toContainText("Сметчик (dev)");
+  await expect(past.getByTestId("route-decision-reason")).toContainText("Не сходятся объёмы в позиции 1");
+  await fullShot(page, "approvals-1280-2-past-attempts");
 
   await decideApi(request, foreman, ids, 1, "approve");
   await decideApi(request, estimator, ids, 2, "approve");

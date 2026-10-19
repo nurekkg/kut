@@ -52,7 +52,6 @@ from app.modules.documents.types import (
     Link,
     Scope,
 )
-from app.modules.identity.models import User
 from app.modules.objects.models import Project
 from app.modules.org.models import Counterparty, LegalEntity
 from app.modules.rbac.enums import Action, Module
@@ -199,11 +198,30 @@ def _money_allowed(principal: Principal, kind: str) -> bool:
     return principal.has(Module.DOCUMENTS, Action.READ, "financial")
 
 
-def _version_out(row: Any, internal: bool) -> VersionOut:
+def _version_out(row: Any, internal: bool, names: dict[uuid.UUID, str] | None = None) -> VersionOut:
     data = row._asdict()
     if not internal:
         data = {**data, "comment": None, "checksum_sha256": None}
+    else:
+        author_id = data.pop("author_id", None)
+        data["author_name"] = names.get(author_id) if names and author_id else None
     return VersionOut.model_validate(data)
+
+
+async def document_names(
+    session: AsyncSession, document_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Имена авторов и решивших по документам: только внутренним, видящим документ (см. БД)."""
+    rows = (
+        await session.execute(
+            text(
+                "SELECT o_user_id, o_full_name FROM "
+                "app.document_person_names(CAST(:docs AS uuid[]))"
+            ),
+            {"docs": [str(item) for item in document_ids]},
+        )
+    ).all()
+    return {row.o_user_id: row.o_full_name for row in rows}
 
 
 def _versions(internal: bool) -> Select[Any]:
@@ -215,11 +233,9 @@ def _versions(internal: bool) -> Select[Any]:
         return select(*_VER_EXTERNAL, amount, source_no).outerjoin(
             DocumentVersionAmount, DocumentVersionAmount.version_id == source
         )
-    return (
-        select(*_VER_INTERNAL, User.full_name.label("author_name"), amount, source_no)
-        .outerjoin(User, User.id == DocumentVersion.created_by)
-        .outerjoin(DocumentVersionAmount, DocumentVersionAmount.version_id == source)
-    )
+    return select(
+        *_VER_INTERNAL, DocumentVersion.created_by.label("author_id"), amount, source_no
+    ).outerjoin(DocumentVersionAmount, DocumentVersionAmount.version_id == source)
 
 
 def _latest(column: Any) -> Any:
@@ -287,6 +303,7 @@ async def _assemble(
         .order_by(DocumentVersion.document_id, DocumentVersion.version_no)
     ):
         versions_by_document[version.document_id].append(version)
+    names = await document_names(session, ids) if internal else {}
     links: dict[uuid.UUID, list[LinkOut]] = defaultdict(list)
     legal_names: dict[uuid.UUID, str] = {}
     if internal:
@@ -323,7 +340,7 @@ async def _assemble(
         current_row = effective_row or (versions[-1] if versions else None)
         current_version = next(
             (
-                _version_out(version, internal)
+                _version_out(version, internal, names)
                 for version in versions
                 if version.id == row.current_version_id
             ),
@@ -443,8 +460,9 @@ async def get_document(
     if row is None:
         raise _not_found()
     [document] = await _assemble(session, principal, [row])
+    names = await document_names(session, [document_id]) if principal.is_internal else {}
     versions = [
-        _version_out(version, principal.is_internal)
+        _version_out(version, principal.is_internal, names)
         for version in await session.execute(
             _versions(principal.is_internal)
             .where(DocumentVersion.document_id == document_id)
@@ -478,16 +496,19 @@ async def list_events(session: AsyncSession, document_id: uuid.UUID) -> list[Eve
                 DocumentStatusEvent.to_status,
                 func.app.event_comment(DocumentStatusEvent.id).label("comment"),
                 DocumentStatusEvent.created_at,
-                User.full_name.label("actor_name"),
+                DocumentStatusEvent.actor_id,
             )
             .join(DocumentVersion, DocumentVersion.id == DocumentStatusEvent.document_version_id)
-            .outerjoin(User, User.id == DocumentStatusEvent.actor_id)
             .where(DocumentVersion.document_id == document_id)
             .order_by(DocumentStatusEvent.created_at.desc(), DocumentStatusEvent.id.desc())
             .limit(EVENTS_LIMIT)
         )
     ).all()
-    return [EventOut.model_validate(row._asdict()) for row in reversed(rows)]
+    names = await document_names(session, [document_id])
+    return [
+        EventOut.model_validate({**row._asdict(), "actor_name": names.get(row.actor_id)})
+        for row in reversed(rows)
+    ]
 
 
 # Символы, которые XLSX не принимает: openpyxl на них бросает IllegalCharacterError (выгрузка 500).
@@ -748,9 +769,11 @@ async def confirm(
                 )
             )
             await session.flush()
+    names = await document_names(session, [version.document_id])
     return _version_out(
         (await session.execute(_versions(True).where(DocumentVersion.id == version.id))).one(),
         internal=True,
+        names=names,
     )
 
 

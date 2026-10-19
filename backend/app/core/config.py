@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     maintenance_purge_seconds: int = 3600
     maintenance_partitions_seconds: int = 86400
     audit_partitions_ahead: int = 24
+    # Уведомления согласования (S6b): реальная отправка в WhatsApp выключена по умолчанию.
+    whatsapp_enabled: bool = False
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_access_token: SecretStr | None = None
+    whatsapp_api_version: str = "v21.0"
+    app_public_url: str
 
     @property
     def docs_enabled(self) -> bool:

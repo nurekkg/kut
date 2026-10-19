@@ -266,7 +266,7 @@ def ensure_documents(
         if demo.approve:
             for step in ("on_approval", "approved"):
                 connection.execute(
-                    text("SELECT app.document_version_transition(:v, :to, NULL)"),
+                    text("SELECT app.version_move(:v, :to, NULL, NULL)"),
                     {"v": version_id, "to": step},
                 )
     return counts
