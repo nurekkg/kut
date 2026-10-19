@@ -49,14 +49,16 @@ async def read_settings(session: Db, principal: Me) -> NotifySettingsOut:
 async def update_settings(body: NotifySettingsIn, session: Db, principal: Me) -> NotifySettingsOut:
     if not principal.is_internal:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
-    result = await session.execute(
-        text(
-            'UPDATE "user" SET notify_whatsapp = :value, updated_at = now() '
-            "WHERE id = app.user_id() AND deleted_at IS NULL"
-        ),
-        {"value": body.notify_whatsapp},
-    )
-    if result.rowcount != 1:
+    updated = (
+        await session.execute(
+            text(
+                'UPDATE "user" SET notify_whatsapp = :value, updated_at = now() '
+                "WHERE id = app.user_id() AND deleted_at IS NULL RETURNING id"
+            ),
+            {"value": body.notify_whatsapp},
+        )
+    ).first()
+    if updated is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
     await session.commit()
     return NotifySettingsOut(notify_whatsapp=body.notify_whatsapp, can_notify=True)
