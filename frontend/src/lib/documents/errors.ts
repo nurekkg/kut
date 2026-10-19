@@ -68,6 +68,7 @@ const KEYS = {
   "approval.period_in_past": "periodInPast",
   "approval.period_invalid": "periodInvalid",
   "approval.delegate_not_found": "delegateNotFound",
+  "approval.period_too_long": "periodTooLong",
   "equipment.document_kind_mismatch": "equipmentDocumentKindMismatch",
   "equipment.document_unit_mismatch": "equipmentDocumentUnitMismatch",
 } as const;

@@ -125,7 +125,7 @@ class DocumentVersion(BusinessBase):
     comment: Mapped[str | None] = mapped_column(String(2000), default=None)
     status: Mapped[str] = mapped_column(String(16), server_default="draft")
     parent_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("document_version.id"), default=None
+        ForeignKey("document_version.id"), default=None, index=True
     )
 
     __table_args__ = (

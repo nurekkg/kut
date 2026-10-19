@@ -330,6 +330,11 @@ async def test_a_substitute_decides_for_the_delegator_and_the_record_names_both(
     assert decision["actor_name"] == "Владелец (dev)"
     assert decision["on_behalf_of_name"] == "Финансовый директор (dev)"
     assert by_substitute.json()["version_status"] == "approved"
+    revoked = await api.post(
+        f"{API}/documents/delegations/{created.json()['id']}/revoke",
+        headers={**desk.heads["finance"], **idem()},
+    )
+    assert revoked.status_code == 204, revoked.text
 
 
 async def test_the_author_cannot_decide_even_with_a_substitution_in_place(
@@ -358,6 +363,11 @@ async def test_the_author_cannot_decide_even_with_a_substitution_in_place(
     assert author.json()["detail"] == "approval.author_forbidden"
     unchanged = await route_of(api, desk.heads["owner"], document, version)
     assert unchanged["current_position"] == 2
+    revoked = await api.post(
+        f"{API}/documents/delegations/{delegated.json()['id']}/revoke",
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert revoked.status_code == 204, revoked.text
 
 
 async def test_the_reason_of_a_money_rejection_is_visible_to_participants_only(
@@ -805,6 +815,7 @@ async def test_a_customer_sees_the_sum_of_the_signed_version(
     detail = await api.get(f"{API}/documents/{document}", headers=desk.heads["customer"])
     assert detail.status_code == 200, detail.text
     assert detail.json()["amount"] == "1000.00"
+    assert detail.json()["amount_version_no"] == 1
 
 
 async def test_a_delegation_longer_than_sixty_days_is_refused(

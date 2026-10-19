@@ -30,6 +30,15 @@ PORTAL_POLICIES = (
     ("document_version_amount", "document_version_amount_select_portal"),
 )
 
+DELEGATION_PRECHECK = """
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.document_delegation WHERE valid_to - valid_from > 60) THEN
+        RAISE EXCEPTION 'approval.period_too_long: есть замещения дольше 60 дней, миграция остановлена, данные не изменены';
+    END IF;
+END $$
+"""
+
 DELEGATION_CREATE = """
 CREATE OR REPLACE FUNCTION app.delegation_create(p_delegate uuid, p_role text, p_from date, p_to date)
 RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
@@ -155,6 +164,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
 $$
 """
 
+VERSION_SOURCE_NO = """
+CREATE FUNCTION app.version_source_no(p_version uuid) RETURNS integer
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT s.version_no FROM public.document_version v
+    JOIN public.document_version s ON s.id = COALESCE(v.parent_version_id, v.id)
+    WHERE v.id = p_version AND app.document_allowed(v.document_id)
+$$
+"""
+
 PORTAL_VERSION_VISIBLE = """
 CREATE FUNCTION app.portal_version_visible(p_version uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
@@ -167,19 +185,30 @@ $$
 
 
 def upgrade() -> None:
+    op.execute("SET LOCAL ROLE kut_auth")
+    op.execute(DELEGATION_PRECHECK)
+    op.execute("RESET ROLE")
     op.create_check_constraint(
         op.f("ck_document_delegation_max_period"),
         "document_delegation",
         sa.text("valid_to - valid_from <= 60"),
+    )
+    op.create_index(
+        op.f("ix_document_version_parent_version_id"),
+        "document_version",
+        ["parent_version_id"],
     )
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute(DELEGATION_CREATE)
     op.execute(ROUTE_CURRENT_POSITION)
     op.execute(DECISION_REASON)
     op.execute(VERSION_SOURCE)
+    op.execute(VERSION_SOURCE_NO)
     op.execute(PORTAL_VERSION_VISIBLE)
     op.execute("REVOKE ALL ON FUNCTION app.version_source(uuid) FROM PUBLIC")
     op.execute(f"GRANT EXECUTE ON FUNCTION app.version_source(uuid) TO {LOGINS}")
+    op.execute("REVOKE ALL ON FUNCTION app.version_source_no(uuid) FROM PUBLIC")
+    op.execute(f"GRANT EXECUTE ON FUNCTION app.version_source_no(uuid) TO {LOGINS}")
     op.execute("REVOKE ALL ON FUNCTION app.portal_version_visible(uuid) FROM PUBLIC")
     op.execute(f"GRANT EXECUTE ON FUNCTION app.portal_version_visible(uuid) TO {LOGINS}")
     op.execute("RESET ROLE")
@@ -198,15 +227,15 @@ def downgrade() -> None:
             f"CREATE POLICY {policy} ON {table} FOR SELECT TO kut_portal"
             " USING (EXISTS (SELECT 1 FROM public.document_version v WHERE v.id = version_id))"
         )
-    op.execute("REVOKE ALL ON FUNCTION app.portal_version_visible(uuid) FROM PUBLIC")
-    op.execute("REVOKE ALL ON FUNCTION app.version_source(uuid) FROM PUBLIC")
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute("DROP FUNCTION IF EXISTS app.portal_version_visible(uuid)")
+    op.execute("DROP FUNCTION IF EXISTS app.version_source_no(uuid)")
     op.execute("DROP FUNCTION IF EXISTS app.version_source(uuid)")
     op.execute(DELEGATION_CREATE_OLD)
     op.execute(ROUTE_CURRENT_POSITION_OLD)
     op.execute(DECISION_REASON_OLD)
     op.execute("RESET ROLE")
+    op.drop_index(op.f("ix_document_version_parent_version_id"), table_name="document_version")
     op.drop_constraint(
         op.f("ck_document_delegation_max_period"), "document_delegation", type_="check"
     )

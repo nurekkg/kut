@@ -58,9 +58,10 @@ export function RouteBlock({
   const decisions = route.data?.decisions ?? [];
   const currentDecisions = decisions.filter((decision) => decision.attempt === lastAttempt);
   const pastDecisions = decisions.filter((decision) => decision.attempt !== lastAttempt);
-  const reasonOf = (step: RouteStep): string | null => {
+  const reasonLine = (step: RouteStep): string | null => {
     const matches = currentDecisions.filter((decision) => decision.position === step.position);
-    return matches.length > 0 ? matches[matches.length - 1].reason : null;
+    const reason = matches.length > 0 ? matches[matches.length - 1].reason : null;
+    return reason !== null ? t("reason", { reason }) : null;
   };
   const failure = send.error ?? approve.error;
   const describe = (step: RouteStep): string | null => {
@@ -107,7 +108,7 @@ export function RouteBlock({
                   label={roleLabel(step.role_code)}
                   statusLabel={t(`status.${step.status}`)}
                   decidedText={describe(step)}
-                  reasonText={reasonOf(step) !== null ? t("reason", { reason: reasonOf(step) ?? "" }) : null}
+                  reasonText={reasonLine(step)}
                 />
               ))}
             </ol>
