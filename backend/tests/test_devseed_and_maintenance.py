@@ -29,6 +29,8 @@ def worker_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[pytest.MonkeyPatch]:
 
 # --- Celery beat ---
 
+import app.modules.notifications.tasks  # noqa: E402,F401
+
 
 def test_beat_schedules_both_maintenance_tasks_with_the_configured_intervals() -> None:
     schedule = celery_app.conf.beat_schedule

@@ -6,7 +6,7 @@
 
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 
+import app.modules.notifications.tasks  # noqa: F401
 from app.core.config import get_settings
 from app.modules.auth import devseed
 from app.modules.notifications.adapters import (
@@ -41,6 +42,32 @@ BASE_URL = "https://kut.example"
 async def s3() -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(timeout=10) as client:
         yield client
+
+
+# В сиде телефон есть у прораба и мастера. Роли шагов получают тестовые телефоны на время теста.
+STEP_PHONES = {
+    "estimator": "+996700000002",
+    "techdir": "+996700000003",
+    "finance": "+996700000004",
+    "accountant": "+996700000005",
+}
+
+
+@pytest.fixture(autouse=True)
+def step_roles_have_phones(worker_sync_engine: Engine, auth_world: AuthWorld) -> Iterator[None]:
+    def set_phones(phones: dict[str, str | None]) -> None:
+        with worker_sync_engine.begin() as connection:
+            for login, phone in phones.items():
+                connection.execute(
+                    text('UPDATE "user" SET phone = :p WHERE id = CAST(:u AS uuid)'),
+                    {"p": phone, "u": str(auth_world.users[login])},
+                )
+
+    set_phones(dict(STEP_PHONES))
+    try:
+        yield
+    finally:
+        set_phones({login: None for login in STEP_PHONES})
 
 
 async def _money_version(
