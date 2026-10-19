@@ -183,7 +183,7 @@ jobs:
       - name: Dev placeholders
         run: cp .env.example .env
       - name: Build images
-        run: docker compose build migrate api dev-seed web
+        run: docker compose build migrate api worker dev-seed web
       - name: Postgres, Redis, MinIO
         run: |
           docker compose up -d --wait postgres redis minio
@@ -203,6 +203,12 @@ jobs:
         run: |
           docker compose run --rm --no-deps dev-seed
           docker compose run --rm --no-deps dev-seed python -m app.modules.schedule.devseed_load
+      # Уведомления согласования (S6b): очередь разбирает воркер, расписание даёт beat. Без них
+      # журнал уведомлений в E2E пуст. Образ worker/beat собран тем же build api (backend-build).
+      - name: Worker and beat (notification queue)
+        run: |
+          docker compose up -d --no-deps worker beat
+          docker compose ps worker beat
       - name: Web (production build and start)
         run: |
           docker compose run -d --no-deps --service-ports --name kut-web web sh -c "npm run build && npx next start -p 3000 -H 0.0.0.0"
