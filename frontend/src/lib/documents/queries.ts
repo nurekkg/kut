@@ -19,6 +19,11 @@ import type {
   PresignOut,
   PriceDraft,
   VersionOut,
+  ApprovalQueueItem,
+  DecisionBody,
+  RouteOut,
+  RouteTemplate,
+  SignedScanBody,
 } from "./types";
 
 export const DOCUMENTS_API = `${API}/documents`;
@@ -131,6 +136,14 @@ export const documentsApi = {
       headers: { "Content-Type": file.type || "application/octet-stream", "Idempotency-Key": key },
       body: await file.arrayBuffer(),
     }),
+  sendRoute: (id: string, versionId: string, key: string) =>
+    api.post<RouteOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/send`, undefined, key),
+  decide: (id: string, versionId: string, body: DecisionBody, key: string) =>
+    api.post<RouteOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/decisions`, body, key),
+  saveRouteTemplate: (code: string, roles: string[]) =>
+    api.put<RouteTemplate>(`${DOCUMENTS_API}/route-templates/${code}`, { roles }),
+  signedScan: (id: string, versionId: string, body: SignedScanBody, key: string) =>
+    api.post<VersionOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/signed`, body, key),
 };
 
 // Тело позиции: номер позиции (null - новая), связи с работой и узлом сохраняются как пришли.
@@ -158,4 +171,31 @@ export function versionTransport(documentId: string): VersionTransport {
       api.post<VersionOut>(`${DOCUMENTS_API}/${documentId}/versions/confirm`, body, key),
     put: putObject,
   };
+}
+
+export function useVersionRoute(documentId: string, versionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "route", documentId, versionId],
+    queryFn: () => api.get<RouteOut>(`${DOCUMENTS_API}/${documentId}/versions/${versionId}/route`),
+    enabled,
+  });
+}
+
+// Очередь согласования: документы, где текущий шаг мой. Общий кэш с счётчиком в навигации.
+export function useDocumentApprovals(enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "approvals"],
+    queryFn: () => api.get<ApprovalQueueItem[]>(`${DOCUMENTS_API}/approvals`),
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  });
+}
+
+export function useRouteTemplates(enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "route-templates"],
+    queryFn: () => api.get<RouteTemplate[]>(`${DOCUMENTS_API}/route-templates`),
+    enabled,
+  });
 }

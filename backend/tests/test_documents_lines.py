@@ -251,7 +251,8 @@ async def test_a_list_with_prices_is_replaced_only_with_the_money_right(
     )
     assert accepted.status_code == 200, accepted.text
 
-    # Прораб не вносит позиции (нет documents:write:lines) и не ставит цены (нет права на деньги).
+    # Прораб (S6a-2, решение PO 2026-10-19) не удаляет позицию с ценой: список без неё - 403 гарда.
+    # Цены ставит только право на деньги.
     assert (
         await put_lines(api, desk.heads["foreman"], document, version, [line("Бетон")])
     ).status_code == 403
@@ -401,23 +402,23 @@ async def test_the_database_refuses_rows_that_point_at_another_document_version(
 async def test_a_writer_without_the_lines_right_cannot_add_a_line_and_cannot_change_a_price(
     api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
 ) -> None:
-    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "accountant")
     document, version = await priced_draft(api, s3, desk, auth_world)
-    foreman = ctx(auth_world, "foreman", desk)
+    writer = ctx(auth_world, "accountant", desk)
     params = {"d": document, "v": version, "le": str(desk.legal), "p": str(desk.project)}
 
     with pytest.raises(DBAPIError, match=r"document\.forbidden|row-level security"):
         await write(
             "INSERT INTO document_line (document_id, version_id, legal_entity_id, project_id,"
             " position_no, name, unit, quantity) VALUES (CAST(:d AS uuid), CAST(:v AS uuid),"
-            " CAST(:le AS uuid), CAST(:p AS uuid), 9, 'Прорабская', 'шт', 1)",
-            foreman,
+            " CAST(:le AS uuid), CAST(:p AS uuid), 9, 'Бухгалтерская', 'шт', 1)",
+            writer,
             params,
         )
     # Цены прораб не видит: политика отбирает строки, UPDATE их не находит и ничего не меняет.
     await write(
         "UPDATE document_line_price SET unit_price = 1 WHERE version_id = CAST(:v AS uuid)",
-        foreman,
+        writer,
         params,
     )
     kept = await rows(
@@ -772,3 +773,154 @@ async def test_a_money_user_without_the_lines_right_cannot_change_prices(
     refused = await put_prices(api, desk.heads["accountant"], document, version, [(1, "999.00")])
     assert refused.status_code == 403, refused.text
     assert refused.json()["detail"] == "forbidden"
+
+
+async def test_a_foreman_edits_a_priced_position_and_the_price_stays(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    """Прораб правит объём позиции с ценой: строка та же, цена на месте; цены он не видит."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
+    document, version = await priced_draft(api, s3, desk, auth_world)
+    edited = await put_lines(
+        api,
+        desk.heads["foreman"],
+        document,
+        version,
+        [
+            {"position_no": 1, **line("Бетон B25", "5")},
+            {"position_no": 2, **line("Арматура", "1.5", "т")},
+        ],
+    )
+    assert edited.status_code == 200, edited.text
+    assert all(item["unit_price"] is None for item in edited.json()["lines"])
+    estimator = await api.get(lines_url(document, version), headers=desk.heads["estimator"])
+    first = estimator.json()["lines"][0]
+    assert (first["quantity"], first["unit_price"]) == ("5.0000", "100.00")
+
+
+async def test_a_foreman_adds_an_unpriced_position_and_deletes_it_but_not_a_priced_one(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
+    document, version = await priced_draft(api, s3, desk, auth_world)
+    headers = desk.heads["foreman"]
+    added = await put_lines(
+        api,
+        headers,
+        document,
+        version,
+        [
+            {"position_no": 1, **line("Бетон B25")},
+            {"position_no": 2, **line("Арматура", "1.5", "т")},
+            line("Щебень", "4"),
+        ],
+    )
+    assert added.status_code == 200, added.text
+    assert [item["position_no"] for item in added.json()["lines"]] == [1, 2, 3]
+    dropped_unpriced = await put_lines(
+        api,
+        headers,
+        document,
+        version,
+        [
+            {"position_no": 1, **line("Бетон B25")},
+            {"position_no": 2, **line("Арматура", "1.5", "т")},
+        ],
+    )
+    assert dropped_unpriced.status_code == 200, dropped_unpriced.text
+    refused = await put_lines(
+        api, headers, document, version, [{"position_no": 2, **line("Арматура", "1.5", "т")}]
+    )
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["detail"] == "line.priced_delete_forbidden"
+
+
+async def test_a_money_user_clears_a_price_and_restores_it_in_the_draft(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
+    document, version = await priced_draft(api, s3, desk, auth_world)
+    headers = desk.heads["estimator"]
+    cleared = await api.put(
+        f"{API}/documents/{document}/versions/{version}/line-prices",
+        json={"prices": [{"position_no": 1, "unit_price": None}]},
+        headers={**headers, **idem()},
+    )
+    assert cleared.status_code == 200, cleared.text
+    prices = {item["position_no"]: item["unit_price"] for item in cleared.json()["lines"]}
+    assert prices == {1: None, 2: "50.50"}
+    assert cleared.json()["total"] is None
+    restored = await put_prices(api, headers, document, version, [(1, "77.00")])
+    assert restored.status_code == 200, restored.text
+    assert {item["position_no"]: item["unit_price"] for item in restored.json()["lines"]} == {
+        1: "77.00",
+        2: "50.50",
+    }
+    writer = ctx(auth_world, "foreman", desk)
+    await write(
+        "UPDATE document_line_price SET deleted_at = now() WHERE version_id = CAST(:v AS uuid)",
+        writer,
+        {"v": version},
+    )
+    kept = await rows(
+        "SELECT count(*) FROM document_line_price p WHERE p.version_id = CAST(:v AS uuid)"
+        " AND p.deleted_at IS NULL",
+        ctx(auth_world, "estimator", desk),
+        {"v": version},
+    )
+    assert kept == [(2,)]
+
+
+async def test_the_database_refuses_clearing_outside_draft_and_deleting_a_priced_line(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
+    _, version = await priced_draft(api, s3, desk, auth_world)
+    foreman = ctx(auth_world, "foreman", desk)
+    with pytest.raises(DBAPIError, match=r"line\.priced_delete_forbidden"):
+        await write(
+            "UPDATE document_line SET deleted_at = now() WHERE version_id = CAST(:v AS uuid)"
+            " AND position_no = 1",
+            foreman,
+            {"v": version},
+        )
+    approve(worker_sync_engine, version)
+    estimator = ctx(auth_world, "estimator", desk)
+    with pytest.raises(DBAPIError, match=r"line\.version_not_draft"):
+        await write(
+            "UPDATE document_line_price SET deleted_at = now() WHERE version_id = CAST(:v AS uuid)",
+            estimator,
+            {"v": version},
+        )
+
+
+async def test_an_archived_document_refuses_line_and_price_writes_in_the_database(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    """Архивный документ: гарды БД отказывают сами, без опоры на API (решение оркестратора C2)."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "owner")
+    document, version = await priced_draft(api, s3, desk, auth_world)
+    archived = await api.post(f"{API}/documents/{document}/archive", headers=desk.heads["owner"])
+    assert archived.status_code == 204, archived.text
+    estimator = ctx(auth_world, "estimator", desk)
+    params = {"d": document, "v": version, "le": str(desk.legal), "p": str(desk.project)}
+    with pytest.raises(DBAPIError, match=r"document\.archived"):
+        await write(
+            "INSERT INTO document_line (document_id, version_id, legal_entity_id, project_id,"
+            " position_no, name, unit, quantity) VALUES (CAST(:d AS uuid), CAST(:v AS uuid),"
+            " CAST(:le AS uuid), CAST(:p AS uuid), 9, 'Архив', 'шт', 1)",
+            estimator,
+            params,
+        )
+    with pytest.raises(DBAPIError, match=r"document\.archived"):
+        await write(
+            "UPDATE document_line SET name = 'Архив' WHERE version_id = CAST(:v AS uuid)",
+            estimator,
+            params,
+        )
+    with pytest.raises(DBAPIError, match=r"document\.archived"):
+        await write(
+            "UPDATE document_line_price SET unit_price = 1 WHERE version_id = CAST(:v AS uuid)",
+            estimator,
+            params,
+        )

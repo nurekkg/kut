@@ -8,10 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.deps import get_db, get_principal, internal_only, require
 from app.modules.auth.principal import Principal
-from app.modules.documents import lines, lines_import, service
+from app.modules.documents import lines, lines_import, routes, service
 from app.modules.documents.schemas import (
     AmountIn,
     CounterpartyOut,
+    DecisionIn,
+    DelegationIn,
+    DelegationOut,
     DocumentCreate,
     DocumentDetail,
     DocumentOut,
@@ -23,6 +26,11 @@ from app.modules.documents.schemas import (
     PresignOut,
     PresignRequest,
     PricesIn,
+    QueueItemOut,
+    RouteOut,
+    SignedScanIn,
+    TemplateIn,
+    TemplateOut,
     VersionConfirm,
     VersionOut,
 )
@@ -56,6 +64,11 @@ Internal = Annotated[Principal, Depends(internal_only(get_principal))]
 Archiver = Annotated[
     Principal,
     Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="archive"))),
+]
+# Шаблоны маршрута (S6a-2): право documents:write:routes (владелец, техдиректор).
+RoutesWriter = Annotated[
+    Principal,
+    Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="routes"))),
 ]
 # Позиции версии: право documents:write:lines (ADR-015 часть 4); деньги проверяют сервис и БД.
 LinesWriter = Annotated[
@@ -172,6 +185,28 @@ async def create_document(
         handler=handler,
     )
     return result.to_response()
+
+
+# --- маршруты согласования (S6a-2): списки и шаблоны ---------------------------------------------
+
+
+@router.get("/approvals", response_model=list[QueueItemOut])
+async def approvals_queue(session: Db, _principal: Viewer) -> list[QueueItemOut]:
+    """Очередь «На согласовании»: версии, где текущий шаг мой (роль или замещение) и я вправе
+    решать."""
+    return await routes.queue(session)
+
+
+@router.get("/route-templates", response_model=list[TemplateOut])
+async def route_templates(session: Db, _principal: Viewer) -> list[TemplateOut]:
+    return await routes.templates(session)
+
+
+@router.get("/delegations", response_model=list[DelegationOut])
+async def list_delegations(session: Db, _principal: Viewer) -> list[DelegationOut]:
+    """Замещения, в которых участвую я (делегирующий или замещающий), действующие и отозванные
+    недавно."""
+    return await routes.delegations(session)
 
 
 @router.get("/{document_id}", response_model=DocumentDetail)
@@ -368,6 +403,136 @@ async def import_version_lines(
         request_hash=fingerprint(
             request.method, request.url.path, {"sha256": hashlib.sha256(data).hexdigest()}
         ),
+        handler=handler,
+    )
+    return result.to_response()
+
+
+# --- маршруты согласования (S6a-2): отправка, решения, замещение, подписанный скан ---------------
+
+
+@router.put("/route-templates/{code}", response_model=list[TemplateOut])
+async def save_route_template(
+    code: str, body: TemplateIn, session: Db, _principal: RoutesWriter
+) -> list[TemplateOut]:
+    """Шаги шаблона целиком, по порядку. Владелец и техдиректор; уже отправленные маршруты не
+    меняются."""
+    return await routes.save_template(session, code, list(body.roles))
+
+
+@router.get("/{document_id}/versions/{version_id}/route", response_model=RouteOut)
+async def version_route(
+    document_id: uuid.UUID, version_id: uuid.UUID, session: Db, _principal: Viewer
+) -> RouteOut:
+    return await routes.route(session, document_id, version_id)
+
+
+@router.post("/{document_id}/versions/{version_id}/send", response_model=RouteOut)
+async def send_for_approval(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: Internal,
+) -> Response:
+    """Отправка версии на согласование: снимок шагов шаблона, попытка N, версия на согласовании."""
+
+    async def handler() -> tuple[int, RouteOut]:
+        return status.HTTP_200_OK, await routes.send(session, document_id, version_id)
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, {}),
+        handler=handler,
+    )
+    return result.to_response()
+
+
+@router.post("/{document_id}/versions/{version_id}/decisions", response_model=RouteOut)
+async def decide_step(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    body: DecisionIn,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: Internal,
+) -> Response:
+    """Решение по текущему шагу. Повтор того же решения по тому же шагу - no-op, ответ 200."""
+
+    async def handler() -> tuple[int, RouteOut]:
+        return status.HTTP_200_OK, await routes.decide(session, document_id, version_id, body)
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, body.model_dump(mode="json")),
+        handler=handler,
+    )
+    return result.to_response()
+
+
+@router.post("/delegations", status_code=status.HTTP_201_CREATED, response_model=DelegationOut)
+async def create_delegation(
+    body: DelegationIn,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: Internal,
+) -> Response:
+    """Замещение на шаге: делегирует держатель роли, на период не раньше сегодня."""
+
+    async def handler() -> tuple[int, DelegationOut]:
+        return status.HTTP_201_CREATED, await routes.create_delegation(session, body)
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, body.model_dump(mode="json")),
+        handler=handler,
+    )
+    return result.to_response()
+
+
+@router.post("/delegations/{delegation_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_delegation(
+    delegation_id: uuid.UUID, session: Db, _principal: Internal
+) -> Response:
+    await routes.revoke_delegation(session, delegation_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{document_id}/versions/{version_id}/signed",
+    status_code=status.HTTP_201_CREATED,
+    response_model=VersionOut,
+)
+async def upload_signed_scan(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    body: SignedScanIn,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: Internal,
+) -> Response:
+    """Подписанный скан к согласованной версии: новая версия `signed`, она действующая."""
+
+    async def handler() -> tuple[int, VersionOut]:
+        return status.HTTP_201_CREATED, await routes.sign_scan(
+            session, principal, document_id, version_id, body
+        )
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, body.model_dump(mode="json")),
         handler=handler,
     )
     return result.to_response()

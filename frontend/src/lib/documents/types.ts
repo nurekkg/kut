@@ -152,3 +152,61 @@ export type CreateBody = {
   title: string;
   links: DocumentLink[];
 };
+
+// Маршрут согласования (ADR-015 часть 5): шаги - снимок на попытку, решения - журнал решений.
+export type RouteStepStatus = "pending" | "approved" | "rejected" | "skipped";
+
+export type RouteStep = {
+  attempt: number;
+  position: number;
+  role_code: string;
+  status: RouteStepStatus;
+  decided_by_name: string | null;
+  on_behalf_of_name: string | null;
+  decided_at: string | null;
+};
+
+export type RouteDecision = {
+  id: string;
+  attempt: number;
+  position: number;
+  role_code: string;
+  decision: "approve" | "reject";
+  // Причину отдаёт сервер только тем, кто её видит (ADR-015 часть 5, раздел 4); иначе null.
+  reason: string | null;
+  actor_name: string | null;
+  on_behalf_of_name: string | null;
+  decided_at: string;
+};
+
+export type RouteOut = {
+  version_id: string;
+  version_status: string;
+  attempts: number;
+  current_position: number | null;
+  can_decide: boolean;
+  steps: RouteStep[];
+  decisions: RouteDecision[];
+};
+
+export type RouteTemplateStep = { position: number; role_code: string };
+
+export type RouteTemplate = { code: string; name: string; steps: RouteTemplateStep[] };
+
+// Очередь /approvals: документы, где текущий шаг мой (роль или замещение).
+export type ApprovalQueueItem = {
+  document_id: string;
+  version_id: string;
+  version_no: number;
+  document_title: string;
+  kind: string;
+  project_id: string | null;
+  project_name: string | null;
+  attempt: number;
+  position: number;
+  role_code: string;
+};
+
+export type DecisionBody = { position: number; decision: "approve" | "reject"; reason?: string };
+
+export type SignedScanBody = { key: string; comment: string | null };

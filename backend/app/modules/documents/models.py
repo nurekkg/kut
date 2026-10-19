@@ -1,17 +1,20 @@
 import uuid
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
+    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -338,4 +341,149 @@ class DocumentLinePrice(BusinessBase):
             name="fk_document_line_price_project_id_project",
         ),
         CheckConstraint("unit_price >= 0", name="unit_price_not_negative"),
+    )
+
+
+ROUTE_ROLE_CHECK = (
+    "role_code IN ('foreman', 'estimator', 'technical_director', 'finance_director', 'owner')"
+)
+
+
+class ApprovalRouteTemplate(BusinessBase):
+    """Шаблон маршрута по группе видов (S6a-2, ADR-015 часть 5): `money` или `other`."""
+
+    __tablename__ = "approval_route_template"
+
+    code: Mapped[str] = mapped_column(String(40), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+
+    __table_args__ = (CheckConstraint("code IN ('money', 'other')", name="code"),)
+
+
+class ApprovalRouteStepTemplate(BusinessBase):
+    """Шаг шаблона маршрута: порядок и роль. Меняется функцией сохранения шаблона."""
+
+    __tablename__ = "approval_route_step_template"
+
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("approval_route_template.id"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    role_code: Mapped[str] = mapped_column(String(40))
+
+    __table_args__ = (
+        Index(
+            "uq_approval_route_step_template_template_id_position",
+            "template_id",
+            "position",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        CheckConstraint("position >= 1", name="position"),
+        CheckConstraint(
+            ROUTE_ROLE_CHECK,
+            name="role_code",
+        ),
+    )
+
+
+class VersionRouteStep(BusinessBase):
+    """Шаг снимка маршрута на попытку (S6a-2). Снимок создаёт `route_send`;
+    меняется только статус решения."""
+
+    __tablename__ = "version_route_step"
+
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document.id"), index=True)
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_version.id"), index=True)
+    legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    attempt: Mapped[int] = mapped_column(Integer)
+    position: Mapped[int] = mapped_column(Integer)
+    role_code: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(20))
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id"), default=None)
+    on_behalf_of: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id"), default=None)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "legal_entity_id"],
+            ["project.id", "project.legal_entity_id"],
+            name="fk_version_route_step_project_id_project",
+        ),
+        UniqueConstraint(
+            "version_id",
+            "attempt",
+            "position",
+            name="uq_version_route_step_version_attempt_pos",
+        ),
+        CheckConstraint("attempt >= 1", name="attempt"),
+        CheckConstraint("position >= 1", name="position"),
+        CheckConstraint("status IN ('pending', 'approved', 'rejected', 'skipped')", name="status"),
+        CheckConstraint(
+            "(status = 'pending' AND decided_at IS NULL)"
+            " OR (status IN ('approved', 'rejected') AND decided_at IS NOT NULL)"
+            " OR (status = 'skipped' AND decided_at IS NULL)",
+            name="decided_consistent",
+        ),
+    )
+
+
+class ApprovalDecision(BusinessBase):
+    """Решение по шагу (S6a-2), APPEND_ONLY: UPDATE и DELETE запрещены гардом. Причину приложение
+    читает только функцией `app.decision_reason` (колоночный грант без `reason`)."""
+
+    __tablename__ = "approval_decision"
+
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document.id"), index=True)
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_version.id"), index=True)
+    legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    attempt: Mapped[int] = mapped_column(Integer)
+    position: Mapped[int] = mapped_column(Integer)
+    role_code: Mapped[str] = mapped_column(String(40))
+    decision: Mapped[str] = mapped_column(String(10))
+    reason: Mapped[str | None] = mapped_column(Text, default=None)
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id"))
+    on_behalf_of: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user.id"), default=None)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "legal_entity_id"],
+            ["project.id", "project.legal_entity_id"],
+            name="fk_approval_decision_project_id_project",
+        ),
+        UniqueConstraint(
+            "version_id",
+            "attempt",
+            "position",
+            name="uq_approval_decision_version_attempt_pos",
+        ),
+        CheckConstraint("decision IN ('approve', 'reject')", name="decision"),
+        CheckConstraint("decision = 'approve' OR btrim(reason) <> ''", name="reason_required"),
+    )
+
+
+class DocumentDelegation(BusinessBase):
+    """Замещение на шаге (S6a-2, Q9): замещающий решает за замещаемого по роли на период."""
+
+    __tablename__ = "document_delegation"
+
+    delegator_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id"), index=True)
+    delegate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id"), index=True)
+    role_code: Mapped[str] = mapped_column(String(40))
+    valid_from: Mapped[date] = mapped_column(Date)
+    valid_to: Mapped[date] = mapped_column(Date)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    __table_args__ = (
+        CheckConstraint("valid_to >= valid_from", name="period"),
+        CheckConstraint("delegator_id <> delegate_id", name="not_self"),
+        CheckConstraint(
+            ROUTE_ROLE_CHECK,
+            name="role_code",
+        ),
     )

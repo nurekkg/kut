@@ -53,6 +53,8 @@ QUALIFIED_PERMISSIONS: Final[tuple[tuple[Module, Action, str], ...]] = (
     (Module.DOCUMENTS, Action.WRITE, "archive"),
     # Позиции версии (ADR-015 часть 4): вносят сметчик, снабженец, техдиректор.
     (Module.DOCUMENTS, Action.WRITE, "lines"),
+    # Шаблоны маршрута согласования (S6a-2): владелец и техдиректор.
+    (Module.DOCUMENTS, Action.WRITE, "routes"),
 )
 
 

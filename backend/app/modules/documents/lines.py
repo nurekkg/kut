@@ -45,9 +45,6 @@ class NewLine:
     work_id: uuid.UUID | None
     project_node_id: uuid.UUID | None
     unit_price: Decimal | None
-    # Цена держится за номером только у позиции, чей номер пришёл от клиента или из файла;
-    # у новой позиции цены нет.
-    keep_price: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,14 +88,6 @@ async def _draft(session: AsyncSession, document_id: uuid.UUID, version_id: uuid
     if row.status != "draft":
         raise HTTPException(status.HTTP_409_CONFLICT, "document.lines_not_draft")
     return _Draft(document_id, version_id, row.legal_entity_id, row.project_id, row.kind)
-
-
-async def _replace_guard(session: AsyncSession, principal: Principal, draft: _Draft) -> None:
-    """Замена списка с ценами - только с правом на деньги: без него цены теряются при переносе."""
-    if _money_allowed(principal):
-        return
-    if await session.scalar(select(func.app.version_priced_lines(draft.version_id))):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
 
 
 async def list_lines(
@@ -155,30 +144,53 @@ async def list_lines(
 async def _replace(
     session: AsyncSession, principal: Principal, draft: _Draft, new_lines: list[NewLine]
 ) -> None:
-    """Старые живые позиции мягко удаляются, новые пишутся.
-    Цена старой позиции переходит к позиции с тем же номером (keep_price), если в новом
-    списке цена не задана; RLS отдаёт старые цены только тем, у кого есть право на деньги.
-    RLS отдаёт старые цены только тем, у кого есть право на деньги."""
-    old = (
+    """Список сводится к нему по номерам. Совпавшая позиция меняет содержимое на месте, её цена
+    остаётся.
+    Отсутствующая мягко удаляется (с ценой - только с правом на деньги, гард БД); новый номер -
+    новая строка.
+    Удаления идут раньше вставок, чтобы номер освобождённой позиции не занял новый до её
+    удаления."""
+    live = (
         await session.execute(
-            select(DocumentLine.position_no, AMOUNTS.c.unit_price)
-            .select_from(DocumentLine)
-            .join(AMOUNTS, AMOUNTS.c.line_id == DocumentLine.id)
-            .where(
-                DocumentLine.version_id == draft.version_id,
-                DocumentLine.deleted_at.is_(None),
+            select(DocumentLine.id, DocumentLine.position_no).where(
+                DocumentLine.version_id == draft.version_id, DocumentLine.deleted_at.is_(None)
             )
         )
     ).all()
-    carried: dict[int, Decimal | None] = {row.position_no: row.unit_price for row in old}
-    await session.execute(
-        update(DocumentLine)
-        .where(DocumentLine.version_id == draft.version_id, DocumentLine.deleted_at.is_(None))
-        .values(deleted_at=func.now(), updated_at=func.now(), updated_by=principal.user_id)
-        .execution_options(synchronize_session=False)
-    )
+    id_by_position = {row.position_no: row.id for row in live}
+    wanted = {line.position_no for line in new_lines}
+    gone = [row_id for number, row_id in id_by_position.items() if number not in wanted]
+    if gone:
+        await session.execute(
+            update(DocumentLine)
+            .where(DocumentLine.id.in_(gone))
+            .values(deleted_at=func.now(), updated_at=func.now(), updated_by=principal.user_id)
+            .execution_options(synchronize_session=False)
+        )
+    line_ids: dict[int, uuid.UUID] = {}
+    for line in new_lines:
+        existing = id_by_position.get(line.position_no)
+        if existing is None:
+            continue
+        await session.execute(
+            update(DocumentLine)
+            .where(DocumentLine.id == existing)
+            .values(
+                name=line.name,
+                unit=line.unit,
+                quantity=line.quantity,
+                work_id=line.work_id,
+                project_node_id=line.project_node_id,
+                updated_at=func.now(),
+                updated_by=principal.user_id,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        line_ids[line.position_no] = existing
     created: dict[int, DocumentLine] = {}
     for line in new_lines:
+        if line.position_no in id_by_position:
+            continue
         row = DocumentLine(
             document_id=draft.document_id,
             version_id=draft.version_id,
@@ -194,15 +206,43 @@ async def _replace(
         session.add(row)
         created[line.position_no] = row
     await session.flush()
+    for number, row in created.items():
+        line_ids[number] = row.id
     for line in new_lines:
-        price = line.unit_price
-        if price is None and line.keep_price:
-            price = carried.get(line.position_no)
-        if price is None:
-            continue
+        if line.unit_price is not None:
+            await _write_price(
+                session, principal, draft, line_ids[line.position_no], line.unit_price
+            )
+    await session.flush()
+
+
+async def _write_price(
+    session: AsyncSession,
+    principal: Principal,
+    draft: _Draft,
+    line_id: uuid.UUID,
+    price: Decimal | None,
+) -> None:
+    """Цена позиции: одна строка на позицию. Очистка - мягкое удаление строки (deleted_at), значение
+    возвращает строку. Права и черновик проверяет гард БД."""
+    existing = await session.scalar(
+        select(DocumentLinePrice)
+        .where(DocumentLinePrice.line_id == line_id)
+        .execution_options(include_deleted=True)
+    )
+    if price is None:
+        if existing is not None and existing.deleted_at is None:
+            await session.execute(
+                update(DocumentLinePrice)
+                .where(DocumentLinePrice.id == existing.id)
+                .values(deleted_at=func.now(), updated_at=func.now(), updated_by=principal.user_id)
+                .execution_options(synchronize_session=False)
+            )
+        return
+    if existing is None:
         session.add(
             DocumentLinePrice(
-                line_id=created[line.position_no].id,
+                line_id=line_id,
                 document_id=draft.document_id,
                 version_id=draft.version_id,
                 legal_entity_id=draft.legal_entity_id,
@@ -210,7 +250,9 @@ async def _replace(
                 unit_price=price,
             )
         )
-    await session.flush()
+    else:
+        existing.unit_price = price
+        existing.deleted_at = None
 
 
 async def replace_lines(
@@ -221,13 +263,11 @@ async def replace_lines(
     body: LinesIn,
 ) -> LinesOut:
     draft = await _draft(session, document_id, version_id)
-    await _replace_guard(session, principal, draft)
     given = [item.position_no for item in body.lines if item.position_no is not None]
     if len(set(given)) != len(given):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "document.lines_invalid")
-    # Номер позиции - её идентичность: удаление строки не сдвигает цены соседей.
-    # Новые позиции получают номера выше всех, какие были в версии (в том числе удалённых),
-    # поэтому цена удалённой позиции не достаётся новой.
+    # Новые позиции получают номера выше всех, какие были в версии (в том числе удалённых).
+    # Цена держится за строкой позиции, поэтому номер удалённой позиции новой цену не даёт.
     highest = await session.scalar(
         select(func.max(DocumentLine.position_no))
         .where(DocumentLine.version_id == version_id)
@@ -237,10 +277,10 @@ async def replace_lines(
     new_lines: list[NewLine] = []
     for item in body.lines:
         if item.position_no is None:
-            number, keep = next_no, False
+            number = next_no
             next_no += 1
         else:
-            number, keep = item.position_no, True
+            number = item.position_no
         new_lines.append(
             NewLine(
                 position_no=number,
@@ -250,7 +290,6 @@ async def replace_lines(
                 work_id=item.work_id,
                 project_node_id=item.project_node_id,
                 unit_price=None,
-                keep_price=keep,
             )
         )
     async with db_rules(session):
@@ -286,22 +325,7 @@ async def set_prices(
             line_id = line_by_position.get(item.position_no)
             if line_id is None:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "document.line_unknown")
-            existing = await session.scalar(
-                select(DocumentLinePrice).where(DocumentLinePrice.line_id == line_id)
-            )
-            if existing is None:
-                session.add(
-                    DocumentLinePrice(
-                        line_id=line_id,
-                        document_id=draft.document_id,
-                        version_id=draft.version_id,
-                        legal_entity_id=draft.legal_entity_id,
-                        project_id=draft.project_id,
-                        unit_price=item.unit_price,
-                    )
-                )
-            else:
-                existing.unit_price = item.unit_price
+            await _write_price(session, principal, draft, line_id, item.unit_price)
         await session.flush()
     return await list_lines(session, document_id, version_id)
 
@@ -313,22 +337,31 @@ async def import_lines(
     version_id: uuid.UUID,
     data: bytes,
 ) -> LinesOut:
-    """Импорт XLSX в черновик: полная замена позиций. Цены из файла - только с правом на деньги."""
+    """Импорт XLSX в черновик: список сводится к файлу по номерам. Пустая цена в файле цену не
+    меняет.
+    Цены из файла - только с правом на деньги. Работа и узел позиции, пришедшей по номеру,
+    сохраняются."""
     draft = await _draft(session, document_id, version_id)
     parsed = lines_import.parse_lines(lines_import.read_rows(data))
     if any(line.unit_price is not None for line in parsed) and not _money_allowed(principal):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
-    await _replace_guard(session, principal, draft)
+    live_links = (
+        await session.execute(
+            select(
+                DocumentLine.position_no, DocumentLine.work_id, DocumentLine.project_node_id
+            ).where(DocumentLine.version_id == version_id, DocumentLine.deleted_at.is_(None))
+        )
+    ).all()
+    links = {row.position_no: (row.work_id, row.project_node_id) for row in live_links}
     new_lines = [
         NewLine(
             position_no=line.position_no,
             name=line.name,
             unit=line.unit,
             quantity=line.quantity,
-            work_id=None,
-            project_node_id=None,
+            work_id=links.get(line.position_no, (None, None))[0],
+            project_node_id=links.get(line.position_no, (None, None))[1],
             unit_price=line.unit_price,
-            keep_price=True,
         )
         for line in parsed
     ]

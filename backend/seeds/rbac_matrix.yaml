@@ -295,7 +295,18 @@ extra:
   - {role: finance_director, permission: "documents:export"}
   - {role: accountant, permission: "documents:export"}
   - {role: lawyer, permission: "documents:export"}
-  # Позиции версии (S6a-1, ADR-015 часть 4): вносят сметчик (ПТО), снабженец и техдиректор; прораб - только видит.
+  # Позиции версии (S6a-1, ADR-015 часть 4; решение PO 2026-10-19): вносят прораб (объёмы КС-2), сметчик (ПТО,
+  # цены), снабженец и техдиректор.
   - {role: estimator, permission: "documents:write:lines"}
   - {role: procurement, permission: "documents:write:lines"}
+  - {role: foreman, permission: "documents:write:lines"}
+  # Согласование документов (S6a-2, ADR-015 часть 2 раздел 6): решают роли шагов шаблона.
+  - {role: foreman, permission: "documents:approve"}
+  - {role: estimator, permission: "documents:approve"}
+  - {role: technical_director, permission: "documents:approve"}
+  - {role: finance_director, permission: "documents:approve"}
+  - {role: owner, permission: "documents:approve"}
+  # Шаблоны маршрута (S6a-2): правят владелец и техдиректор.
+  - {role: owner, permission: "documents:write:routes"}
+  - {role: technical_director, permission: "documents:write:routes"}
   - {role: technical_director, permission: "documents:write:lines"}

@@ -10,6 +10,7 @@ import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
 import { Section } from "@/components/equipment/section";
 import { ArchiveDialog, VersionAmountDialog } from "@/components/documents/document-dialogs";
+import { RouteBlock } from "@/components/documents/route-block";
 import { UploadVersionDialog } from "@/components/documents/upload-version-dialog";
 import { VersionLines } from "@/components/documents/version-lines";
 import {
@@ -211,6 +212,10 @@ export function DocumentCard({ documentId }: { documentId: string }) {
           </div>
         )}
       </Section>
+
+      {internal && versions.length > 0 ? (
+        <RouteBlock doc={d} version={versions[0]} permissions={permissions} />
+      ) : null}
 
       <Section
         id="document-versions-title"

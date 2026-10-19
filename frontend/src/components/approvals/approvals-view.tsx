@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
 import { ApprovalCard } from "@/components/approvals/approval-card";
+import { DocumentApprovals } from "@/components/approvals/document-approvals";
 import { EquipmentApprovals } from "@/components/approvals/equipment-approvals";
 import { RejectDialog } from "@/components/approvals/reject-dialog";
 import { PhotoLightbox } from "@/components/field/photo-lightbox";
@@ -62,6 +63,8 @@ export function ApprovalsView() {
   );
   const canEquipApprove = permissions.includes("equipment:approve:shift");
   const canEquipEdit = permissions.includes("equipment:write:after_approval");
+  // Документы: маршруты, где мой шаг (роль или замещение); сервер отбирает очередь сам.
+  const canDocs = permissions.includes("documents:approve");
   const queue = useApprovalQueue(canApprove);
   const tally = approvalTotal(queue.perProject, APPROVAL_LIMIT);
   const message = useErrorMessage();
@@ -169,7 +172,7 @@ export function ApprovalsView() {
       <UserMenu />
       <AppNav />
       <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
-      {!canApprove && !canEquip ? (
+      {!canApprove && !canEquip && !canDocs ? (
         <div role="alert" className="space-y-1 rounded-xl border p-4" data-testid="approvals-forbidden">
           <p className="font-medium">{t("forbiddenTitle")}</p>
           <p className="text-sm text-muted-foreground">{t("forbiddenText")}</p>
@@ -271,6 +274,7 @@ export function ApprovalsView() {
       {canEquip && user ? (
         <EquipmentApprovals userId={user.id} canApprove={canEquipApprove} canEdit={canEquipEdit} />
       ) : null}
+      {canDocs ? <DocumentApprovals /> : null}
 
       {rejecting ? (
         <RejectDialog
