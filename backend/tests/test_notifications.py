@@ -292,7 +292,7 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
     worker_sync_engine: Engine,
     s3: httpx.AsyncClient,
 ) -> None:
-    """Замещающий с телефоном получает уведомление о замещении и о шаге, который решает за замещаемого."""
+    """Замещающий с телефоном получает уведомление о замещении и о шаге за замещаемого."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     today = date.fromisoformat(_local_today(worker_sync_engine))
     delegated = await api.post(
