@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -25,6 +25,7 @@ class KindOut(BaseModel):
     counterparty_required: bool
     contract_required: bool
     links: list[str]
+    lines: bool
 
 
 class LinkIn(BaseModel):
@@ -150,3 +151,170 @@ class AmountIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     amount: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
+
+
+class LineIn(BaseModel):
+    """Позиция черновика (ADR-015 часть 4): наименование, ед., количество.
+    Цена - отдельным запросом. Номер позиции, пришедший с версией, - её идентичность:
+    цена держится за номером, а не за порядком в списке. Без номера - новая позиция."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    position_no: int | None = Field(default=None, ge=1, le=2000000)
+    name: str = Field(min_length=1, max_length=300)
+    unit: str = Field(min_length=1, max_length=20)
+    quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
+    work_id: uuid.UUID | None = None
+    project_node_id: uuid.UUID | None = None
+
+
+class LinesIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lines: list[LineIn] = Field(max_length=2000)
+
+
+class PriceIn(BaseModel):
+    """Цена позиции. Null - очистить цену (мягко, в черновике, с правом на деньги). Ключ
+    обязателен."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    position_no: int = Field(ge=1, le=2000000)
+    unit_price: Decimal | None = Field(ge=0, max_digits=14, decimal_places=2)
+
+
+class PricesIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prices: list[PriceIn] = Field(max_length=2000)
+
+
+class LineOut(BaseModel):
+    position_no: int
+    name: str
+    unit: str
+    quantity: Decimal
+    work_id: uuid.UUID | None = None
+    project_node_id: uuid.UUID | None = None
+    # Цена и сумма - только с правом на деньги вида (RLS представления); без права - null.
+    unit_price: Decimal | None = None
+    amount: Decimal | None = None
+
+
+class LinesOut(BaseModel):
+    lines: list[LineOut]
+    # Итог по позициям - справочно, только если сумма видна по каждой позиции.
+    total: Decimal | None = None
+
+
+ROUTE_ROLES = Literal["foreman", "estimator", "technical_director", "finance_director", "owner"]
+
+
+class TemplateStepOut(BaseModel):
+    position: int
+    role_code: str
+
+
+class TemplateOut(BaseModel):
+    code: str
+    name: str
+    steps: list[TemplateStepOut]
+
+
+class TemplateIn(BaseModel):
+    """Шаги шаблона по порядку: роли. Владелец и техдиректор; повтор роли и пустой список -
+    отказ."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    roles: list[ROUTE_ROLES] = Field(min_length=1, max_length=10)
+
+
+class RouteStepOut(BaseModel):
+    attempt: int
+    position: int
+    role_code: str
+    status: str
+    decided_by_name: str | None
+    on_behalf_of_name: str | None
+    decided_at: datetime | None
+
+
+class RouteDecisionOut(BaseModel):
+    id: uuid.UUID
+    attempt: int
+    position: int
+    role_code: str
+    decision: str
+    # Причина видна по правилу `app.decision_reason`: иначе null.
+    reason: str | None
+    actor_name: str | None
+    on_behalf_of_name: str | None
+    decided_at: datetime
+
+
+class RouteOut(BaseModel):
+    version_id: uuid.UUID
+    version_status: str
+    source_version_no: int | None = None
+    attempts: int
+    current_position: int | None
+    can_decide: bool
+    steps: list[RouteStepOut]
+    decisions: list[RouteDecisionOut]
+
+
+class DecisionIn(BaseModel):
+    """Решение по текущему шагу. Шаг указывает клиент, как его видит: повтор того же решения -
+    no-op."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    position: int = Field(ge=1, le=100)
+    decision: Literal["approve", "reject"]
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class DelegationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    delegate_id: uuid.UUID
+    role_code: ROUTE_ROLES
+    valid_from: date
+    valid_to: date
+
+
+class DelegationOut(BaseModel):
+    id: uuid.UUID
+    delegator_id: uuid.UUID
+    delegator_name: str | None
+    delegate_id: uuid.UUID
+    delegate_name: str | None
+    role_code: str
+    valid_from: date
+    valid_to: date
+    revoked: bool
+
+
+class QueueItemOut(BaseModel):
+    document_id: uuid.UUID
+    version_id: uuid.UUID
+    version_no: int
+    document_title: str
+    kind: str
+    project_id: uuid.UUID | None
+    project_name: str | None
+    attempt: int
+    position: int
+    role_code: str
+
+
+class SignedScanIn(BaseModel):
+    """Подписанный скан: ключ уже загруженного файла (как у версии), родитель - согласованная
+    версия."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    comment: str | None = Field(default=None, max_length=500)

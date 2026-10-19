@@ -159,6 +159,19 @@ PORTAL_COLUMNS = {
     | {"document_id", "version_no", "status", "content_type", "size_bytes"},
     "document_amount": BASE_COLUMNS | {"document_id", "amount"},
     "document_version_amount": BASE_COLUMNS | {"version_id", "document_id", "amount"},
+    # S6a-1: позиции версии - порталу только у утверждённых версий; цена - как сумма версии.
+    "document_line": BASE_COLUMNS
+    | {
+        "document_id",
+        "version_id",
+        "position_no",
+        "name",
+        "unit",
+        "quantity",
+        "work_id",
+        "project_node_id",
+    },
+    "document_line_price": BASE_COLUMNS | {"line_id", "document_id", "version_id", "unit_price"},
     "user": BASE_COLUMNS
     | {"phone", "email", "full_name", "role_id", "counterparty_id", "is_active", "role_ver"},
     "project": BASE_COLUMNS | {"legal_entity_id", "name", "status"},

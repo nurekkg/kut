@@ -143,7 +143,7 @@ function isUsable(presign: IssuedPresign | null, now: number): presign is Issued
 }
 
 // Файл в хранилище: presign и PUT. Истёкшая ссылка (403) перевыпускается один раз; ключ S3 возвращается.
-async function storeFile(
+export async function storeFile(
   work: UploadWork,
   transport: VersionTransport,
   options: UploadOptions,

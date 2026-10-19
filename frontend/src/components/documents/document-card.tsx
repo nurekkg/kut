@@ -4,13 +4,15 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Archive, ArrowLeft, Download, FilePlus, Pencil } from "lucide-react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
 import { UserMenu } from "@/components/auth/user-menu";
 import { Section } from "@/components/equipment/section";
 import { ArchiveDialog, VersionAmountDialog } from "@/components/documents/document-dialogs";
+import { RouteBlock } from "@/components/documents/route-block";
 import { UploadVersionDialog } from "@/components/documents/upload-version-dialog";
+import { VersionLines } from "@/components/documents/version-lines";
 import {
   EffectiveMark,
   openDownload,
@@ -32,7 +34,7 @@ import {
   canWriteKind,
 } from "@/lib/documents/access";
 import { formatDay, formatMegabytes, formatMoment, formatMoney } from "@/lib/documents/format";
-import { documentsApi, useDocument, useDocumentEvents } from "@/lib/documents/queries";
+import { documentsApi, useDocument, useDocumentEvents, useDocumentKinds } from "@/lib/documents/queries";
 import { API, projectKey } from "@/lib/projects/keys";
 import type { Project } from "@/lib/projects/types";
 
@@ -67,6 +69,9 @@ export function DocumentCard({ documentId }: { documentId: string }) {
   const [uploading, setUploading] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [amountOf, setAmountOf] = useState<{ id: string; number: number; amount: string | null } | null>(null);
+  const [linesOf, setLinesOf] = useState<string | null>(null);
+  const kinds = useDocumentKinds();
+  const linesT = useTranslations("Documents.lines");
 
   if (doc.isPending) {
     return (
@@ -91,6 +96,7 @@ export function DocumentCard({ documentId }: { documentId: string }) {
   const current = d.current_version;
   const downloadable = canDownload(d, permissions, internal);
   const versions = [...d.versions].sort((a, b) => b.version_no - a.version_no);
+  const usesLines = kinds.data?.some((kind) => kind.code === d.kind && kind.lines) ?? false;
   // Название объекта отдаёт сервер по видимости; внешним справочника объектов не открыт.
   const projectName = d.project_name ?? project.data?.name ?? common("noValue");
 
@@ -207,6 +213,14 @@ export function DocumentCard({ documentId }: { documentId: string }) {
         )}
       </Section>
 
+      {internal && versions.length > 0 ? (
+        <RouteBlock
+          doc={d}
+          version={versions.find((item) => item.status === "on_approval") ?? versions[0]}
+          permissions={permissions}
+        />
+      ) : null}
+
       <Section
         id="document-versions-title"
         title={t("versions")}
@@ -230,58 +244,83 @@ export function DocumentCard({ documentId }: { documentId: string }) {
         ) : (
           <ul data-testid="document-versions" className="flex flex-col divide-y rounded-lg border">
             {versions.map((version) => (
-              <li
-                key={version.id}
-                data-testid="document-version-row"
-                className="flex flex-col gap-2 p-3 sm:flex-row sm:items-start sm:justify-between"
-              >
-                <div className="min-w-0 space-y-1 text-sm">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{t("versionNo", { number: version.version_no })}</span>
-                    <StatusBadge status={version.status} />
+              <Fragment key={version.id}>
+                <li
+                  data-testid="document-version-row"
+                  className="flex flex-col gap-2 p-3 sm:flex-row sm:items-start sm:justify-between"
+                >
+                  <div className="min-w-0 space-y-1 text-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{t("versionNo", { number: version.version_no })}</span>
+                      <StatusBadge status={version.status} />
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                      {version.author_name ? <span>{t("authorValue", { name: version.author_name })}</span> : null}
+                      <span className="tabular-nums">{formatDay(version.created_at)}</span>
+                      <span className="tabular-nums">{t("sizeMb", { value: formatMegabytes(version.size_bytes) })}</span>
+                      {version.amount !== null ? (
+                        <span className="tabular-nums text-foreground" data-testid="document-version-amount">
+                          {t("versionAmount", { amount: formatMoney(version.amount) })}
+                        </span>
+                      ) : null}
+                    </div>
+                    {version.comment ? <p className="break-words">{version.comment}</p> : null}
                   </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
-                    {version.author_name ? <span>{t("authorValue", { name: version.author_name })}</span> : null}
-                    <span className="tabular-nums">{formatDay(version.created_at)}</span>
-                    <span className="tabular-nums">{t("sizeMb", { value: formatMegabytes(version.size_bytes) })}</span>
-                    {version.amount !== null ? (
-                      <span className="tabular-nums text-foreground" data-testid="document-version-amount">
-                        {t("versionAmount", { amount: formatMoney(version.amount) })}
-                      </span>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {canEditVersionAmount(d, version, permissions, internal) ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setAmountOf({ id: version.id, number: version.version_no, amount: version.amount })
+                        }
+                        data-testid="document-version-amount-open"
+                      >
+                        <Pencil data-icon="inline-start" aria-hidden />
+                        {version.amount === null ? t("setAmount") : t("editAmount")}
+                      </Button>
+                    ) : null}
+                    {usesLines ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        aria-expanded={linesOf === version.id}
+                        onClick={() => setLinesOf(linesOf === version.id ? null : version.id)}
+                        data-testid="document-version-lines-toggle"
+                      >
+                        {linesOf === version.id ? linesT("close") : linesT("title")}
+                      </Button>
+                    ) : null}
+                    {downloadable ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={download.isPending}
+                        onClick={() => download.mutate(version.id)}
+                        data-testid="document-version-download"
+                      >
+                        <Download data-icon="inline-start" aria-hidden />
+                        {t("download")}
+                      </Button>
                     ) : null}
                   </div>
-                  {version.comment ? <p className="break-words">{version.comment}</p> : null}
-                </div>
-                <div className="flex shrink-0 flex-wrap gap-2">
-                  {canEditVersionAmount(d, version, permissions, internal) ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setAmountOf({ id: version.id, number: version.version_no, amount: version.amount })
-                      }
-                      data-testid="document-version-amount-open"
-                    >
-                      <Pencil data-icon="inline-start" aria-hidden />
-                      {version.amount === null ? t("setAmount") : t("editAmount")}
-                    </Button>
-                  ) : null}
-                  {downloadable ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={download.isPending}
-                      onClick={() => download.mutate(version.id)}
-                      data-testid="document-version-download"
-                    >
-                      <Download data-icon="inline-start" aria-hidden />
-                      {t("download")}
-                    </Button>
-                  ) : null}
-                </div>
-              </li>
+                </li>
+              {usesLines && linesOf === version.id ? (
+                <li className="p-3">
+                  <VersionLines
+                    documentId={documentId}
+                    kind={d.kind}
+                    archivedAt={d.archived_at}
+                    version={version}
+                    permissions={permissions}
+                    internal={internal}
+                  />
+                </li>
+              ) : null}
+              </Fragment>
             ))}
           </ul>
         )}

@@ -3,6 +3,7 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { apiFetch } from "@/lib/auth/session";
 import { API } from "@/lib/projects/keys";
 
 import { putObject, type VersionTransport } from "./upload";
@@ -14,8 +15,15 @@ import type {
   DownloadOut,
   EventOut,
   KindOut,
+  LinesOut,
   PresignOut,
+  PriceDraft,
   VersionOut,
+  ApprovalQueueItem,
+  DecisionBody,
+  RouteOut,
+  RouteTemplate,
+  SignedScanBody,
 } from "./types";
 
 export const DOCUMENTS_API = `${API}/documents`;
@@ -118,7 +126,43 @@ export const documentsApi = {
     api.put<void>(`${DOCUMENTS_API}/${id}/versions/${versionId}/amount`, { amount }),
   downloadUrl: (id: string, versionId: string) =>
     api.get<DownloadOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/download-url`),
+  putLines: (id: string, versionId: string, lines: LineBody[], key: string) =>
+    api.put<LinesOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/lines`, { lines }, key),
+  putPrices: (id: string, versionId: string, prices: PriceDraft[], key: string) =>
+    api.put<LinesOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/line-prices`, { prices }, key),
+  importLines: async (id: string, versionId: string, file: File, key: string) =>
+    apiFetch<LinesOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/lines/import`, {
+      method: "POST",
+      headers: { "Content-Type": file.type || "application/octet-stream", "Idempotency-Key": key },
+      body: await file.arrayBuffer(),
+    }),
+  sendRoute: (id: string, versionId: string, key: string) =>
+    api.post<RouteOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/send`, undefined, key),
+  decide: (id: string, versionId: string, body: DecisionBody, key: string) =>
+    api.post<RouteOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/decisions`, body, key),
+  saveRouteTemplate: (code: string, roles: string[]) =>
+    api.put<RouteTemplate[]>(`${DOCUMENTS_API}/route-templates/${code}`, { roles }),
+  signedScan: (id: string, versionId: string, body: SignedScanBody, key: string) =>
+    api.post<VersionOut>(`${DOCUMENTS_API}/${id}/versions/${versionId}/signed`, body, key),
 };
+
+// Тело позиции: номер позиции (null - новая), связи с работой и узлом сохраняются как пришли.
+export type LineBody = {
+  position_no: number | null;
+  name: string;
+  unit: string;
+  quantity: string;
+  work_id: string | null;
+  project_node_id: string | null;
+};
+
+export function useVersionLines(documentId: string, versionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "lines", documentId, versionId],
+    queryFn: () => api.get<LinesOut>(`${DOCUMENTS_API}/${documentId}/versions/${versionId}/lines`),
+    enabled,
+  });
+}
 
 export function versionTransport(documentId: string): VersionTransport {
   return {
@@ -127,4 +171,31 @@ export function versionTransport(documentId: string): VersionTransport {
       api.post<VersionOut>(`${DOCUMENTS_API}/${documentId}/versions/confirm`, body, key),
     put: putObject,
   };
+}
+
+export function useVersionRoute(documentId: string, versionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "route", documentId, versionId],
+    queryFn: () => api.get<RouteOut>(`${DOCUMENTS_API}/${documentId}/versions/${versionId}/route`),
+    enabled,
+  });
+}
+
+// Очередь согласования: документы, где текущий шаг мой. Общий кэш с счётчиком в навигации.
+export function useDocumentApprovals(enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "approvals"],
+    queryFn: () => api.get<ApprovalQueueItem[]>(`${DOCUMENTS_API}/approvals`),
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  });
+}
+
+export function useRouteTemplates(enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "route-templates"],
+    queryFn: () => api.get<RouteTemplate[]>(`${DOCUMENTS_API}/route-templates`),
+    enabled,
+  });
 }

@@ -298,28 +298,34 @@ export function DocumentsRegistry({ projectId }: { projectId: string }) {
               }}
             />
           ) : null}
-          <DateField
-            id="documents-filter-from"
-            aria-label={t("dateFrom")}
-            value={dateFrom}
-            onChange={(next) => {
-              setDateFrom(next);
-              setPage(0);
-            }}
-            placeholder={t("datePlaceholder")}
-            data-testid="documents-filter-from"
-          />
-          <DateField
-            id="documents-filter-to"
-            aria-label={t("dateTo")}
-            value={dateTo}
-            onChange={(next) => {
-              setDateTo(next);
-              setPage(0);
-            }}
-            placeholder={t("datePlaceholder")}
-            data-testid="documents-filter-to"
-          />
+          <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <span aria-hidden>{t("dateFrom")}</span>
+            <DateField
+              id="documents-filter-from"
+              aria-label={t("dateFromAria")}
+              value={dateFrom}
+              onChange={(next) => {
+                setDateFrom(next);
+                setPage(0);
+              }}
+              placeholder={t("datePlaceholder")}
+              data-testid="documents-filter-from"
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <span aria-hidden>{t("dateTo")}</span>
+            <DateField
+              id="documents-filter-to"
+              aria-label={t("dateToAria")}
+              value={dateTo}
+              onChange={(next) => {
+                setDateTo(next);
+                setPage(0);
+              }}
+              placeholder={t("datePlaceholder")}
+              data-testid="documents-filter-to"
+            />
+          </label>
         </div>
       </div>
 

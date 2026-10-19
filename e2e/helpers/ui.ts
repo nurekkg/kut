@@ -84,14 +84,14 @@ export async function desktopContext(browser: Browser): Promise<BrowserContext> 
 }
 
 // Снимок экрана после загрузки картинок: фото идут по подписанным ссылкам и грузятся лениво.
-export async function shot(page: Page, name: string): Promise<void> {
+export async function shot(page: Page, name: string, fullPage = false): Promise<void> {
   fs.mkdirSync(SCREENS, { recursive: true });
   await page
     .waitForFunction(() => Array.from(document.images).every((image) => image.complete), undefined, {
       timeout: 10_000,
     })
     .catch(() => undefined);
-  await page.screenshot({ path: path.join(SCREENS, `${name}.png`), fullPage: false });
+  await page.screenshot({ path: path.join(SCREENS, `${name}.png`), fullPage });
 }
 
 // Горизонтальной прокрутки на телефоне быть не должно: экран 375 px помещается целиком.

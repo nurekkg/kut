@@ -69,6 +69,43 @@ export function canEnterAmount(
   return internal && doc.financial && canSeeMoney(doc.kind, permissions);
 }
 
+// Позиции версии вносит право documents:write:lines (сметчик, снабженец, техдиректор), только в черновике
+// (ADR-015 часть 4). Прораб видит объёмы, но не пишет.
+export function canWriteLines(
+  doc: { archived_at: string | null },
+  version: { status: string },
+  permissions: readonly string[],
+  internal = true,
+): boolean {
+  return (
+    internal &&
+    doc.archived_at === null &&
+    version.status === "draft" &&
+    permissions.includes("documents:write:lines")
+  );
+}
+
+// Цены позиций ставит тот, кто вносит позиции и видит деньги вида (как сумму версии).
+export function canWritePrices(
+  doc: { kind: string; archived_at: string | null },
+  version: { status: string },
+  permissions: readonly string[],
+  internal = true,
+): boolean {
+  return canWriteLines(doc, version, permissions, internal) && canSeeMoney(doc.kind, permissions);
+}
+
+// Колонки цены и суммы: внутреннему - по праву на деньги вида; внешним - когда сервер отдал цены (их видимость
+// задаёт БД). Без цен в DOM колонок и строки «Итого» нет.
+export function canSeeLinePrices(
+  kind: string,
+  lines: readonly { unit_price: string | null }[],
+  permissions: readonly string[],
+  internal = true,
+): boolean {
+  return (internal && canSeeMoney(kind, permissions)) || lines.some((line) => line.unit_price !== null);
+}
+
 // Контрагенты для выбора: справочник отдаёт только внутренним с правом на документы (GET /documents/counterparties).
 export function canUseCounterparties(permissions: readonly string[], internal = true): boolean {
   return internal && permissions.includes("documents:read");

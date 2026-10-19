@@ -228,6 +228,17 @@ async def test_two_factor_is_required_for_owner_finance_director_and_accountant_
 # ADR-015 часть 2 раздел 6 и решения PO Q2, Q3: право на финансовые виды и архив документов.
 ADR_DOCUMENT_GRANTS = {
     ("owner", "documents", "read", "financial"),
+    ("estimator", "documents", "write", "lines"),
+    ("procurement", "documents", "write", "lines"),
+    ("technical_director", "documents", "write", "lines"),
+    ("foreman", "documents", "write", "lines"),
+    ("foreman", "documents", "approve", None),
+    ("estimator", "documents", "approve", None),
+    ("technical_director", "documents", "approve", None),
+    ("finance_director", "documents", "approve", None),
+    ("owner", "documents", "approve", None),
+    ("owner", "documents", "write", "routes"),
+    ("technical_director", "documents", "write", "routes"),
     ("finance_director", "documents", "read", "financial"),
     ("technical_director", "documents", "read", "financial"),
     ("accountant", "documents", "read", "financial"),

@@ -209,14 +209,16 @@ def _version_out(row: Any, internal: bool) -> VersionOut:
 def _versions(internal: bool) -> Select[Any]:
     """Версии с суммой версии (RLS отбирает видимые суммы) и с автором - только внутренним."""
     amount = DocumentVersionAmount.amount.label("amount")
+    source = func.app.version_source(DocumentVersion.id)
+    source_no = func.app.version_source_no(DocumentVersion.id).label("source_no")
     if not internal:
-        return select(*_VER_EXTERNAL, amount).outerjoin(
-            DocumentVersionAmount, DocumentVersionAmount.version_id == DocumentVersion.id
+        return select(*_VER_EXTERNAL, amount, source_no).outerjoin(
+            DocumentVersionAmount, DocumentVersionAmount.version_id == source
         )
     return (
-        select(*_VER_INTERNAL, User.full_name.label("author_name"), amount)
+        select(*_VER_INTERNAL, User.full_name.label("author_name"), amount, source_no)
         .outerjoin(User, User.id == DocumentVersion.created_by)
-        .outerjoin(DocumentVersionAmount, DocumentVersionAmount.version_id == DocumentVersion.id)
+        .outerjoin(DocumentVersionAmount, DocumentVersionAmount.version_id == source)
     )
 
 
@@ -335,7 +337,7 @@ async def _assemble(
                     "current_version": current_version,
                     "amount": current_row.amount if current_row is not None else None,
                     "amount_version_no": (
-                        current_row.version_no
+                        current_row.source_no
                         if current_row is not None and current_row.amount is not None
                         else None
                     ),
@@ -678,6 +680,29 @@ async def presign(
     return PresignOut(key=key, upload_url=url, headers=headers, expires_in=UPLOAD_TTL_SECONDS)
 
 
+async def stored_upload(document: _Doc, key: str) -> Any:
+    """Файл, загруженный по ключу документа: тип, размер и хэш - из S3, содержимое - files.inspect.
+    Общий путь черновика версии и подписанного скана (S6a-2)."""
+    if not key.startswith(_prefix(document)) or not _KEY.fullmatch(key):
+        raise _unprocessable("document.key_invalid")
+    try:
+        stored = await storage.head_object(key)
+    except (ClientError, BotoCoreError) as error:
+        raise _storage_unavailable() from error
+    if stored is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "document.not_uploaded")
+    if stored.content_type not in EXTENSIONS:
+        raise _unprocessable("document.type_not_allowed")
+    if not key.endswith(f".{EXTENSIONS[stored.content_type]}"):
+        raise _unprocessable("document.type_mismatch")
+    if not 0 < stored.size <= MAX_FILE_BYTES:
+        raise _unprocessable("document.too_large")
+    if stored.checksum_sha256 is None:
+        raise _unprocessable("document.checksum_missing")
+    await files.inspect(key, stored.size, stored.content_type)
+    return stored
+
+
 async def confirm(
     session: AsyncSession, principal: Principal, document_id: uuid.UUID, body: VersionConfirm
 ) -> VersionOut:
@@ -692,21 +717,7 @@ async def confirm(
             raise _unprocessable("document.amount_not_financial")
         if not _money_allowed(principal, document.kind):
             raise _forbidden()
-    try:
-        stored = await storage.head_object(body.key)
-    except (ClientError, BotoCoreError) as error:
-        raise _storage_unavailable() from error
-    if stored is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "document.not_uploaded")
-    if stored.content_type not in EXTENSIONS:
-        raise _unprocessable("document.type_not_allowed")
-    if not body.key.endswith(f".{EXTENSIONS[stored.content_type]}"):
-        raise _unprocessable("document.type_mismatch")
-    if not 0 < stored.size <= MAX_FILE_BYTES:
-        raise _unprocessable("document.too_large")
-    if stored.checksum_sha256 is None:
-        raise _unprocessable("document.checksum_missing")
-    await files.inspect(body.key, stored.size, stored.content_type)
+    stored = await stored_upload(document, body.key)
     await _lock_live(session, document_id)
     version_no = await session.scalar(
         text("SELECT app.document_next_version(:document)"), {"document": document_id}

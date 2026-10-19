@@ -43,6 +43,7 @@ export type KindOut = {
   counterparty_required: boolean;
   contract_required: boolean;
   links: string[];
+  lines: boolean;
 };
 
 export type VersionOut = {
@@ -114,6 +115,33 @@ export type PresignBody = { content_type: string; size_bytes: number; checksum_s
 
 export type ConfirmBody = { key: string; comment: string | null; amount: string | null };
 
+// Позиции версии (ADR-015 часть 4): цена и сумма - null, если право на деньги не выдано (сервер отдаёт null).
+export type LineOut = {
+  position_no: number;
+  name: string;
+  unit: string;
+  quantity: string;
+  work_id: string | null;
+  project_node_id: string | null;
+  unit_price: string | null;
+  amount: string | null;
+};
+
+export type LinesOut = { lines: LineOut[]; total: string | null };
+
+// Черновик позиции в форме: количество - строкой, как введено; проверка - в диалоге. Номер позиции (position_no)
+// держит идентичность: цена и связи переходят к той же позиции после сохранения; у новой позиции номера нет.
+export type LineDraft = {
+  position_no: number | null;
+  name: string;
+  unit: string;
+  quantity: string;
+  work_id: string | null;
+  project_node_id: string | null;
+};
+
+export type PriceDraft = { position_no: number; unit_price: string };
+
 // Создание: поля вне контракта бэкенд отвергает (extra=forbid), поэтому тело собирается по полям.
 // Сумма в создании не передаётся: она принадлежит версии и вносится при загрузке (R1).
 export type CreateBody = {
@@ -124,3 +152,63 @@ export type CreateBody = {
   title: string;
   links: DocumentLink[];
 };
+
+// Маршрут согласования (ADR-015 часть 5): шаги - снимок на попытку, решения - журнал решений.
+export type RouteStepStatus = "pending" | "approved" | "rejected" | "skipped";
+
+export type RouteStep = {
+  attempt: number;
+  position: number;
+  role_code: string;
+  status: RouteStepStatus;
+  decided_by_name: string | null;
+  on_behalf_of_name: string | null;
+  decided_at: string | null;
+};
+
+export type RouteDecision = {
+  id: string;
+  attempt: number;
+  position: number;
+  role_code: string;
+  decision: "approve" | "reject";
+  // Причину отдаёт сервер только тем, кто её видит (ADR-015 часть 5, раздел 4); иначе null.
+  reason: string | null;
+  actor_name: string | null;
+  on_behalf_of_name: string | null;
+  decided_at: string;
+};
+
+export type RouteOut = {
+  version_id: string;
+  version_status: string;
+  // Версия, откуда взят маршрут: у подписанной - родительская согласованная; иначе null.
+  source_version_no: number | null;
+  attempts: number;
+  current_position: number | null;
+  can_decide: boolean;
+  steps: RouteStep[];
+  decisions: RouteDecision[];
+};
+
+export type RouteTemplateStep = { position: number; role_code: string };
+
+export type RouteTemplate = { code: string; name: string; steps: RouteTemplateStep[] };
+
+// Очередь /approvals: документы, где текущий шаг мой (роль или замещение).
+export type ApprovalQueueItem = {
+  document_id: string;
+  version_id: string;
+  version_no: number;
+  document_title: string;
+  kind: string;
+  project_id: string | null;
+  project_name: string | null;
+  attempt: number;
+  position: number;
+  role_code: string;
+};
+
+export type DecisionBody = { position: number; decision: "approve" | "reject"; reason?: string };
+
+export type SignedScanBody = { key: string; comment: string | null };

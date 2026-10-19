@@ -15,6 +15,7 @@ import {
 } from "../../frontend/src/lib/documents/access";
 import { ApiError } from "../../frontend/src/lib/auth/api";
 import { documentErrorKey } from "../../frontend/src/lib/documents/errors";
+import { isRouteRoleCode, ROUTE_ROLE_CODES } from "../../frontend/src/lib/documents/route";
 import { formatDay, formatMoney, parseAmount } from "../../frontend/src/lib/documents/format";
 import { dateFromIso, isoFromDate, maskDate } from "../../frontend/src/lib/date-input";
 import { formatTermDate } from "../../frontend/src/lib/schedule/dates";
@@ -389,4 +390,18 @@ test("после записи файла срок ссылки не важен: 
   await uploadVersion(work, fake.transport, { comment: null, amount: null, now: () => start });
   await uploadVersion(work, fake.transport, { comment: null, amount: null, now: () => start + 900_000 });
   expect(fake.presignBodies).toHaveLength(1);
+});
+
+test("коды маршрута и правил позиций переводятся в тексты; неизвестный код - общий текст", () => {
+  expect(documentErrorKey("approval.not_current_step")).toBe("approvalNotCurrentStep");
+  expect(documentErrorKey("approval.author_forbidden")).toBe("approvalAuthorForbidden");
+  expect(documentErrorKey("document.parent_not_approved")).toBe("parentNotApproved");
+  expect(documentErrorKey("line.priced_delete_forbidden")).toBe("linePricedDeleteForbidden");
+  expect(documentErrorKey("approval.unknown_code")).toBe("unknown");
+});
+
+test("роли шагов маршрута: список и проверка совпадают с сервером", () => {
+  expect(ROUTE_ROLE_CODES).toEqual(["foreman", "estimator", "technical_director", "finance_director", "owner"]);
+  expect(isRouteRoleCode("foreman")).toBe(true);
+  expect(isRouteRoleCode("accountant")).toBe(false);
 });

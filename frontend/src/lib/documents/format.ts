@@ -13,6 +13,24 @@ export function parseAmount(input: string): string | null {
   return /^\d{1,12}(\.\d{1,2})?$/.test(text) ? text : null;
 }
 
+// Количество позиции: пробелы и запятая допустимы, до четырёх знаков; сервер принимает только точку.
+export function normalizeQuantity(input: string): string {
+  return input.replace(/\s/g, "").replace(",", ".");
+}
+
+const QUANTITY = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 4 });
+
+// Количество с сервера - "2.5000"; показываем без лишних нулей: "2,5".
+export function formatQuantity(value: string): string {
+  const number = Number(value);
+  return Number.isFinite(number) ? QUANTITY.format(number) : value;
+}
+
+export function parseQuantity(input: string): string | null {
+  const text = normalizeQuantity(input);
+  return /^\d{1,14}(\.\d{1,4})?$/.test(text) && Number(text) > 0 ? text : null;
+}
+
 const DAY = new Intl.DateTimeFormat("ru-RU", {
   timeZone: "Asia/Bishkek",
   day: "2-digit",

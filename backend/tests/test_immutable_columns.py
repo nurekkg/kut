@@ -47,7 +47,14 @@ AUDITED_TABLES = (
     "document_status_event",
     "document_link",
     "document_amount",
+    "approval_route_template",
+    "approval_route_step_template",
+    "version_route_step",
+    "approval_decision",
+    "document_delegation",
     "document_version_amount",
+    "document_line",
+    "document_line_price",
 )
 # Колонки, которые обязаны быть неизменяемыми (id есть у всех, у project ещё и юрлицо, у узла
 # объект и юрлицо, у таблиц S3a - объект, юрлицо и то, что определяет смысл строки).
@@ -94,6 +101,22 @@ FROZEN = {table: {"id"} for table in AUDITED_TABLES} | {
     },
     "document_amount": {"id", "document_id"},
     "document_version_amount": {"id", "document_id", "version_id"},
+    "document_line": {
+        "id",
+        "version_id",
+        "document_id",
+        "legal_entity_id",
+        "project_id",
+        "position_no",
+    },
+    "document_line_price": {
+        "id",
+        "line_id",
+        "version_id",
+        "document_id",
+        "legal_entity_id",
+        "project_id",
+    },
     "project_node": {"id", "project_id", "legal_entity_id"},
     "project_finance": {"id", "project_id", "legal_entity_id"},
     "schedule_item": {"id", "project_id", "legal_entity_id", "node_id", "work_id"},

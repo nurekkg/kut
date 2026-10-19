@@ -9,18 +9,20 @@ import { useAuth } from "@/components/auth/auth-provider";
 import { cn } from "@/lib/utils";
 
 const TABS = [
-  { href: "/settings/legal-entities", key: "legalEntities" },
-  { href: "/settings/counterparties", key: "counterparties" },
-  { href: "/settings/users", key: "users" },
-  { href: "/settings/events", key: "events" },
+  { href: "/settings/legal-entities", key: "legalEntities", permission: "settings:admin" },
+  { href: "/settings/counterparties", key: "counterparties", permission: "settings:admin" },
+  { href: "/settings/users", key: "users", permission: "settings:admin" },
+  { href: "/settings/events", key: "events", permission: "settings:admin" },
+  { href: "/settings/routes", key: "routes", permission: "documents:write:routes" },
 ] as const;
 
 export function SettingsNav() {
   const t = useTranslations("Settings.nav");
   const pathname = usePathname();
+  const { user } = useAuth();
   return (
     <nav aria-label={t("label")} className="flex flex-wrap items-center gap-1 border-b">
-      {TABS.map((tab) => {
+      {TABS.filter((tab) => user?.permissions.includes(tab.permission)).map((tab) => {
         const active = pathname.startsWith(tab.href);
         return (
           <Link
@@ -52,7 +54,11 @@ export function SettingsNav() {
 export function AdminGate({ children }: { children: ReactNode }) {
   const t = useTranslations("Settings");
   const { user } = useAuth();
-  if (!user?.permissions.includes("settings:admin")) {
+  const pathname = usePathname();
+  // Шаблоны маршрутов правят владелец и техдиректор (ADR-015 часть 5): их страница открыта по своему праву.
+  const routesPage =
+    pathname.startsWith("/settings/routes") && (user?.permissions.includes("documents:write:routes") ?? false);
+  if (!user?.permissions.includes("settings:admin") && !routesPage) {
     return (
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 py-6">
         <p role="alert" className="text-sm">

@@ -7,19 +7,31 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth/auth-provider";
 import { APPROVAL_LIMIT, useApprovalQueue } from "@/lib/approvals";
 import { approvalTotal } from "@/lib/approvals-count";
+import { useDocumentApprovals } from "@/lib/documents/queries";
 import { useShifts } from "@/lib/equipment/shifts";
 import { cn } from "@/lib/utils";
 
 // Счётчик «на согласовании»: сумма очередей по всем видимым объектам. Те же запросы, что у очереди
 // (общий кэш), обновление раз в минуту. «N+» - только если хотя бы один объект упёрся в лимит выборки.
-function ApprovalsCount({ approveFacts, equipment }: { approveFacts: boolean; equipment: boolean }) {
+function ApprovalsCount({
+  approveFacts,
+  equipment,
+  documents,
+}: {
+  approveFacts: boolean;
+  equipment: boolean;
+  documents: boolean;
+}) {
   const t = useTranslations("AppNav");
   // Факты считает только тот, кто их подтверждает (work_actual:approve); мастер счётчик фактов не видит.
   const { perProject } = useApprovalQueue(approveFacts);
   // Листы техники, которые пользователь может подтвердить: сервер отбирает по правилу гарда (approvable).
   const shifts = useShifts({ status: "submitted", approvable: true }, equipment);
   const { total: facts, capped } = approvalTotal(perProject, APPROVAL_LIMIT);
-  const total = facts + (equipment ? (shifts.data?.length ?? 0) : 0);
+  // Документы: маршруты, где мой шаг (роль или замещение); список уже отобран сервером.
+  const documentsQueue = useDocumentApprovals(documents);
+  const total =
+    facts + (equipment ? (shifts.data?.length ?? 0) : 0) + (documents ? (documentsQueue.data?.length ?? 0) : 0);
   if (total === 0) return null;
   return (
     <span
@@ -43,6 +55,7 @@ export function AppNav() {
   const can = (permission: string) => user?.permissions.includes(permission) ?? false;
   const equipmentApprover = can("equipment:approve:shift") || can("equipment:write:after_approval");
   const equipmentListed = equipmentApprover || can("equipment:write:shift");
+  const documentApprover = can("documents:approve");
   const items = [
     { href: "/projects", label: t("projects"), show: can("objects:read"), counter: false },
     { href: "/dashboard", label: dash("nav"), show: user?.scope === "group" && can("objects:read"), counter: false },
@@ -51,7 +64,7 @@ export function AppNav() {
       href: "/approvals",
       label: t("approvals"),
       // Очередь читает список объектов (objects:read): без него раздела нет, счётчик не запрашивает /projects.
-      show: can("objects:read") && (can("work_actual:approve") || equipmentListed),
+      show: can("objects:read") && (can("work_actual:approve") || equipmentListed || documentApprover),
       counter: true,
     },
     { href: "/m", label: t("field"), show: can("work_actual:write"), counter: false },
@@ -81,6 +94,7 @@ export function AppNav() {
               <ApprovalsCount
                 approveFacts={can("work_actual:approve")}
                 equipment={equipmentListed}
+                documents={documentApprover}
               />
             ) : null}
           </Link>
