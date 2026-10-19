@@ -209,14 +209,17 @@ def _version_out(row: Any, internal: bool) -> VersionOut:
 def _versions(internal: bool) -> Select[Any]:
     """Версии с суммой версии (RLS отбирает видимые суммы) и с автором - только внутренним."""
     amount = DocumentVersionAmount.amount.label("amount")
+    source = func.app.version_source(DocumentVersion.id)
     if not internal:
-        return select(*_VER_EXTERNAL, amount).outerjoin(
-            DocumentVersionAmount, DocumentVersionAmount.version_id == DocumentVersion.id
+        return select(*_VER_EXTERNAL, amount, source.label("source_id")).outerjoin(
+            DocumentVersionAmount, DocumentVersionAmount.version_id == source
         )
     return (
-        select(*_VER_INTERNAL, User.full_name.label("author_name"), amount)
+        select(
+            *_VER_INTERNAL, User.full_name.label("author_name"), amount, source.label("source_id")
+        )
         .outerjoin(User, User.id == DocumentVersion.created_by)
-        .outerjoin(DocumentVersionAmount, DocumentVersionAmount.version_id == DocumentVersion.id)
+        .outerjoin(DocumentVersionAmount, DocumentVersionAmount.version_id == source)
     )
 
 
@@ -319,6 +322,14 @@ async def _assemble(
         effective = [version for version in versions if version.status in ("approved", "signed")]
         effective_row = effective[-1] if effective else None
         current_row = effective_row or (versions[-1] if versions else None)
+        source_row = next(
+            (
+                version
+                for version in versions
+                if current_row and version.id == current_row.source_id
+            ),
+            None,
+        )
         current_version = next(
             (
                 _version_out(version, internal)
@@ -335,8 +346,10 @@ async def _assemble(
                     "current_version": current_version,
                     "amount": current_row.amount if current_row is not None else None,
                     "amount_version_no": (
-                        current_row.version_no
-                        if current_row is not None and current_row.amount is not None
+                        source_row.version_no
+                        if source_row is not None
+                        and current_row is not None
+                        and current_row.amount is not None
                         else None
                     ),
                     "effective_version_no": (

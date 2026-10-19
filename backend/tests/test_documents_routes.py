@@ -3,6 +3,7 @@
 замещение, видимость причин, подписанный скан, очередь, права шаблона; прямой SQL мимо сервиса
 на гарды."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import date, timedelta
 from typing import Any
@@ -704,3 +705,268 @@ async def test_the_journal_keeps_no_reason_of_a_decision(
         ).scalar_one()
     assert journaled >= 1
     assert leaked == 0
+
+
+async def _approved_money(
+    api: AsyncClient, s3: httpx.AsyncClient, desk: Desk, auth_world: AuthWorld
+) -> tuple[str, str]:
+    """КС-2 с объёмом, ценой и суммой, согласованная по всем четырём шагам."""
+    document, version = await money_version(api, s3, desk, "accountant", auth_world)
+    lines = await api.put(
+        f"{API}/documents/{document}/versions/{version}/lines",
+        json={
+            "lines": [
+                {
+                    "position_no": None,
+                    "name": "Бетон B25",
+                    "unit": "м3",
+                    "quantity": "10",
+                    "work_id": None,
+                    "project_node_id": None,
+                }
+            ]
+        },
+        headers={**desk.heads["foreman"], **idem()},
+    )
+    assert lines.status_code == 200, lines.text
+    priced = await api.put(
+        f"{API}/documents/{document}/versions/{version}/line-prices",
+        json={"prices": [{"position_no": 1, "unit_price": "100.00"}]},
+        headers={**desk.heads["estimator"], **idem()},
+    )
+    assert priced.status_code == 200, priced.text
+    total = await api.put(
+        f"{API}/documents/{document}/versions/{version}/amount",
+        json={"amount": "1000.00"},
+        headers=desk.heads["accountant"],
+    )
+    assert total.status_code == 204, total.text
+    assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
+    for position, who in ((1, "foreman"), (2, "estimator"), (3, "techdir")):
+        assert (
+            await decide(api, desk.heads[who], document, version, position, "approve")
+        ).status_code == 200
+    assert (
+        await decide(api, desk.heads["finance"], document, version, 4, "approve")
+    ).status_code == 200
+    return document, version
+
+
+async def test_a_signed_version_carries_the_sum_and_the_positions_of_its_parent(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _approved_money(api, s3, desk, auth_world)
+    signed = await _signed_scan(api, s3, desk, document, version, PDF_OK, "techdir")
+    assert signed.status_code == 201, signed.text
+    signed_id = signed.json()["id"]
+    assert signed.json()["amount"] == "1000.00"
+    parent_lines = await api.get(
+        f"{API}/documents/{document}/versions/{version}/lines", headers=desk.heads["estimator"]
+    )
+    signed_lines = await api.get(
+        f"{API}/documents/{document}/versions/{signed_id}/lines", headers=desk.heads["estimator"]
+    )
+    assert parent_lines.status_code == signed_lines.status_code == 200
+    assert signed_lines.json() == parent_lines.json()
+    assert signed_lines.json()["lines"][0]["unit_price"] == "100.00"
+    current = await api.get(f"{API}/documents/{document}", headers=desk.heads["accountant"])
+    assert current.json()["amount"] == "1000.00"
+    assert current.json()["amount_version_no"] == 1
+
+
+async def test_a_foreman_sees_no_sum_or_price_of_a_signed_version(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _approved_money(api, s3, desk, auth_world)
+    signed = await _signed_scan(api, s3, desk, document, version, PDF_OK, "techdir")
+    assert signed.status_code == 201, signed.text
+    detail = await api.get(f"{API}/documents/{document}", headers=desk.heads["foreman"])
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["amount"] is None
+    lines = await api.get(
+        f"{API}/documents/{document}/versions/{signed.json()['id']}/lines",
+        headers=desk.heads["foreman"],
+    )
+    assert lines.status_code == 200, lines.text
+    assert lines.json()["lines"][0]["unit_price"] is None
+    assert lines.json()["lines"][0]["amount"] is None
+    assert lines.json()["total"] is None
+
+
+async def test_a_customer_sees_the_sum_of_the_signed_version(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK, "customer")
+    document, version = await _approved_money(api, s3, desk, auth_world)
+    signed = await _signed_scan(api, s3, desk, document, version, PDF_OK, "techdir")
+    assert signed.status_code == 201, signed.text
+    detail = await api.get(f"{API}/documents/{document}", headers=desk.heads["customer"])
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["amount"] == "1000.00"
+
+
+async def test_a_delegation_longer_than_sixty_days_is_refused(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = await local_today(worker_sync_engine)
+    refused = await api.post(
+        f"{API}/documents/delegations",
+        json={
+            "delegate_id": str(auth_world.users["estimator"]),
+            "role_code": "technical_director",
+            "valid_from": today,
+            "valid_to": str(date.fromisoformat(today) + timedelta(days=61)),
+        },
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == "approval.period_too_long"
+    allowed = await api.post(
+        f"{API}/documents/delegations",
+        json={
+            "delegate_id": str(auth_world.users["estimator"]),
+            "role_code": "technical_director",
+            "valid_from": today,
+            "valid_to": str(date.fromisoformat(today) + timedelta(days=60)),
+        },
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert allowed.status_code == 201, allowed.text
+    revoked = await api.post(
+        f"{API}/documents/delegations/{allowed.json()['id']}/revoke",
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert revoked.status_code == 204, revoked.text
+
+
+async def test_the_database_refuses_a_delegation_longer_than_sixty_days(
+    auth_world: AuthWorld, worker_sync_engine: Engine, owner_sync_engine: Engine
+) -> None:
+    today = await local_today(worker_sync_engine)
+    with owner_sync_engine.connect() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
+        with pytest.raises(DBAPIError, match="ck_document_delegation_max_period"):
+            connection.execute(
+                text(
+                    "INSERT INTO document_delegation"
+                    " (delegator_id, delegate_id, role_code, valid_from, valid_to)"
+                    " VALUES (CAST(:a AS uuid), CAST(:b AS uuid), 'technical_director',"
+                    " CAST(:f AS date), CAST(:t AS date))"
+                ),
+                {
+                    "a": str(auth_world.users["techdir"]),
+                    "b": str(auth_world.users["estimator"]),
+                    "f": today,
+                    "t": str(date.fromisoformat(today) + timedelta(days=61)),
+                },
+            )
+
+
+def _move_delegation_into_the_past(
+    owner_sync_engine: Engine, delegation_id: str, today: str
+) -> None:
+    """Тестовая фикстура времени: период замещения сдвигается в прошлое (вчера - вчера минус день).
+    Гард неизменяемости отключается владельцем таблицы только на время правки и включается обратно.
+    app.local_today() не меняется: проверка срока видит, что период уже прошёл."""
+    past = date.fromisoformat(today) - timedelta(days=2)
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("ALTER TABLE document_delegation DISABLE TRIGGER USER"))
+    try:
+        with owner_sync_engine.begin() as connection:
+            connection.execute(text("SET LOCAL ROLE kut_auth"))
+            connection.execute(
+                text(
+                    "UPDATE document_delegation SET valid_from = CAST(:f AS date),"
+                    " valid_to = CAST(:t AS date) WHERE id = CAST(:i AS uuid)"
+                ),
+                {"f": str(past), "t": str(past + timedelta(days=1)), "i": delegation_id},
+            )
+    finally:
+        with owner_sync_engine.begin() as connection:
+            connection.execute(text("ALTER TABLE document_delegation ENABLE TRIGGER USER"))
+
+
+async def test_a_delegation_does_not_decide_once_its_period_is_over(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = await local_today(worker_sync_engine)
+    delegated = await api.post(
+        f"{API}/documents/delegations",
+        json={
+            "delegate_id": str(auth_world.users["estimator"]),
+            "role_code": "technical_director",
+            "valid_from": today,
+            "valid_to": str(date.fromisoformat(today) + timedelta(days=1)),
+        },
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert delegated.status_code == 201, delegated.text
+    delegation_id = delegated.json()["id"]
+    document, version = await money_version(api, s3, desk, "accountant", auth_world)
+    assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
+    for position, who in ((1, "foreman"), (2, "estimator")):
+        assert (
+            await decide(api, desk.heads[who], document, version, position, "approve")
+        ).status_code == 200
+    _move_delegation_into_the_past(owner_sync_engine, delegation_id, today)
+    refused = await decide(api, desk.heads["estimator"], document, version, 3, "approve")
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["detail"] == "approval.not_your_step"
+    listed = await api.get(f"{API}/documents/delegations", headers=desk.heads["techdir"])
+    assert listed.status_code == 200, listed.text
+    assert delegation_id not in {row["id"] for row in listed.json()}
+
+
+async def test_a_money_reason_and_the_current_step_are_hidden_without_access_to_the_document(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await money_version(api, s3, desk, "accountant", auth_world)
+    assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
+    rejected = await decide(
+        api, desk.heads["foreman"], document, version, 1, "reject", reason="Причина без доступа"
+    )
+    assert rejected.status_code == 200, rejected.text
+    decision = await _decision_id(auth_world, desk, version)
+    outsider = in_context(auth_world.users["accountant"], (), (desk.legal,))
+    assert (
+        await _scalar("SELECT app.decision_reason(CAST(:d AS uuid))", outsider, {"d": decision})
+        is None
+    )
+    assert (
+        await _scalar(
+            "SELECT app.route_current_position(CAST(:v AS uuid))", outsider, {"v": version}
+        )
+        is None
+    )
+    insider = in_context(auth_world.users["finance"], (desk.project,), (desk.legal,))
+    assert (
+        await _scalar("SELECT app.decision_reason(CAST(:d AS uuid))", insider, {"d": decision})
+        == "Причина без доступа"
+    )
+
+
+async def test_two_simultaneous_approvals_make_one_decision(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await money_version(api, s3, desk, "accountant", auth_world)
+    assert (await send(api, desk.heads["accountant"], document, version)).status_code == 200
+    assert (
+        await decide(api, desk.heads["foreman"], document, version, 1, "approve")
+    ).status_code == 200
+    first, second = await asyncio.gather(
+        decide(api, desk.heads["estimator"], document, version, 2, "approve"),
+        decide(api, desk.heads["estimator"], document, version, 2, "approve"),
+    )
+    assert {first.status_code, second.status_code} == {200}, (first.text, second.text)
+    state = await route_of(api, desk.heads["foreman"], document, version)
+    assert [row["position"] for row in state["decisions"]].count(2) == 1

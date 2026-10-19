@@ -584,7 +584,6 @@ GUARD_TRIGGERS: tuple[str, ...] = (
 
 DENY_WRITES = "USING (false) WITH CHECK (false)"
 DENY_INSERT = "WITH CHECK (false)"
-DENY_INSERT = "WITH CHECK (false)"
 VISIBLE_TO_READERS = "USING (app.is_internal() AND app.has_permission('documents', 'read'))"
 VISIBLE_VERSION = "USING (EXISTS (SELECT 1 FROM public.document_version v WHERE v.id = version_id))"
 

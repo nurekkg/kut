@@ -257,6 +257,7 @@ class RouteDecisionOut(BaseModel):
 class RouteOut(BaseModel):
     version_id: uuid.UUID
     version_status: str
+    source_version_no: int | None = None
     attempts: int
     current_position: int | None
     can_decide: bool

@@ -56,6 +56,12 @@ export function RouteBlock({
   const lastAttempt = steps.reduce((max, step) => Math.max(max, step.attempt), 0);
   const lastSteps = steps.filter((step) => step.attempt === lastAttempt);
   const decisions = route.data?.decisions ?? [];
+  const currentDecisions = decisions.filter((decision) => decision.attempt === lastAttempt);
+  const pastDecisions = decisions.filter((decision) => decision.attempt !== lastAttempt);
+  const reasonOf = (step: RouteStep): string | null => {
+    const matches = currentDecisions.filter((decision) => decision.position === step.position);
+    return matches.length > 0 ? matches[matches.length - 1].reason : null;
+  };
   const failure = send.error ?? approve.error;
   const describe = (step: RouteStep): string | null => {
     if (!step.decided_by_name) return null;
@@ -84,6 +90,11 @@ export function RouteBlock({
               </span>
             ) : null}
             {finished && route.data.attempts > 0 ? <span className="ml-2 text-foreground">{t("finished")}</span> : null}
+            {route.data.source_version_no !== null && route.data.source_version_no !== version.version_no ? (
+              <span className="ml-2 text-foreground" data-testid="route-source-version">
+                {t("sourceVersion", { number: route.data.source_version_no })}
+              </span>
+            ) : null}
           </p>
 
           {lastSteps.length > 0 ? (
@@ -96,6 +107,7 @@ export function RouteBlock({
                   label={roleLabel(step.role_code)}
                   statusLabel={t(`status.${step.status}`)}
                   decidedText={describe(step)}
+                  reasonText={reasonOf(step) !== null ? t("reason", { reason: reasonOf(step) ?? "" }) : null}
                 />
               ))}
             </ol>
@@ -103,9 +115,12 @@ export function RouteBlock({
 
           {decisions.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("noDecisions")}</p>
-          ) : (
-            <ul className="flex flex-col divide-y rounded-lg border text-sm" data-testid="route-decisions">
-              {decisions.map((decision) => (
+          ) : null}
+          {pastDecisions.length > 0 ? (
+            <div className="flex flex-col gap-2" data-testid="route-past-attempts">
+              <h3 className="text-sm font-medium">{t("pastAttempts")}</h3>
+              <ul className="flex flex-col divide-y rounded-lg border text-sm" data-testid="route-decisions">
+              {pastDecisions.map((decision) => (
                 <li key={decision.id} className="flex flex-col gap-1 p-3" data-testid="route-decision">
                   <span className="font-medium">
                     {t("decisionLine", {
@@ -123,8 +138,9 @@ export function RouteBlock({
                   ) : null}
                 </li>
               ))}
-            </ul>
-          )}
+              </ul>
+            </div>
+          ) : null}
 
           {failure ? (
             <p role="alert" className="text-sm text-destructive" data-testid="route-error">
@@ -208,12 +224,14 @@ function StepRow({
   label,
   statusLabel,
   decidedText,
+  reasonText,
 }: {
   step: RouteStep;
   current: boolean;
   label: string;
   statusLabel: string;
   decidedText: string | null;
+  reasonText: string | null;
 }) {
   return (
     <li
@@ -234,6 +252,11 @@ function StepRow({
         </Badge>
         {decidedText ? <span className="tabular-nums">{decidedText}</span> : null}
       </span>
+      {reasonText ? (
+        <span className="basis-full break-words text-muted-foreground" data-testid="route-step-reason">
+          {reasonText}
+        </span>
+      ) : null}
     </li>
   );
 }

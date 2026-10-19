@@ -182,6 +182,8 @@ export type RouteDecision = {
 export type RouteOut = {
   version_id: string;
   version_status: string;
+  // Версия, откуда взят маршрут: у подписанной - родительская согласованная; иначе null.
+  source_version_no: number | null;
   attempts: number;
   current_position: number | null;
   can_decide: boolean;

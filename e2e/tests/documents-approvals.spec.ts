@@ -254,7 +254,7 @@ test("отказ на шаге ПТО с причиной: черновик, п�
   // Версия вернулась в черновик: шаг ПТО отклонён, причина видна, отправка снова доступна.
   await expect(page.getByTestId("route-send")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("route-step").nth(1)).toHaveAttribute("data-status", "rejected");
-  await expect(page.getByTestId("route-decision-reason")).toContainText("Не сходятся объёмы в позиции 1");
+  await expect(page.getByTestId("route-step-reason")).toContainText("Не сходятся объёмы в позиции 1");
   await fullShot(page, "approvals-1280-2-returned");
 
   // Прораб правит объём первой позиции: цена остаётся на месте (номер позиции - её идентичность).
@@ -272,6 +272,7 @@ test("отказ на шаге ПТО с причиной: черновик, п�
   await decideApi(request, finance, ids, 4, "approve");
   await page.reload();
   await expect(page.getByTestId("document-route-status")).toContainText("Маршрут пройден", { timeout: 20_000 });
+  await fullShot(page, "approvals-1280-2-resent-approved");
   expect(errors).toEqual([]);
 });
 
@@ -356,7 +357,8 @@ test("подписанный скан: к согласованной верси�
   await page.getByTestId("route-scan-file").setInputFiles({ name: "scan.pdf", mimeType: "application/pdf", buffer: SCAN });
   await page.getByTestId("route-scan-submit").click();
   await expect(page.getByTestId("route-scan-dialog")).toBeHidden({ timeout: 60_000 });
-  await fullShot(page, "approvals-1280-4-signed");
+  await expect(page.getByTestId("route-source-version")).toContainText("1");
+  await fullShot(page, "approvals-1280-4-signed-parent-route");
 
   const after = await documentById(request, author, ids.document);
   expect(after.current_version?.status).toBe("signed");

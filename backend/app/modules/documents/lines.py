@@ -2,8 +2,8 @@
 
 Права на запись проверяют политики и гарды БД; сервис - то же до записи, чтобы отдать понятный код.
 Коммит - у вызывающего (run_idempotent): ключ и изменения - одним COMMIT.
-Цены переносятся по номеру позиции, если в новом списке цена не задана.
-Переносятся только видимые по праву на деньги цены (RLS представления): без права переноса нет.
+Цена держится за номером позиции: правка строки её не трогает, новая позиция цены не имеет.
+Импорт без цены в ячейке цену сохраняет. Цены видит только право на деньги (RLS представления).
 """
 
 import uuid
@@ -100,6 +100,7 @@ async def list_lines(
     )
     if visible is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
+    source_id = await session.scalar(select(func.app.version_source(version_id)))
     rows = (
         await session.execute(
             select(
@@ -116,7 +117,7 @@ async def list_lines(
             .outerjoin(AMOUNTS, AMOUNTS.c.line_id == DocumentLine.id)
             .where(
                 DocumentLine.document_id == document_id,
-                DocumentLine.version_id == version_id,
+                DocumentLine.version_id == source_id,
             )
             .order_by(DocumentLine.position_no)
         )

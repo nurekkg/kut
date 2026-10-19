@@ -97,6 +97,15 @@ async def save_template(session: AsyncSession, code: str, roles: list[str]) -> l
 
 async def _route(session: AsyncSession, document_id: uuid.UUID, version_id: uuid.UUID) -> RouteOut:
     version_status = await _version_status(session, document_id, version_id)
+    source_id = await session.scalar(
+        text("SELECT app.version_source(CAST(:v AS uuid))"), {"v": version_id}
+    )
+    source_no = None
+    if source_id is not None and source_id != version_id:
+        source_no = await session.scalar(
+            text("SELECT version_no FROM document_version WHERE id = CAST(:s AS uuid)"),
+            {"s": source_id},
+        )
     steps = (
         await session.execute(
             text(
@@ -104,7 +113,7 @@ async def _route(session: AsyncSession, document_id: uuid.UUID, version_id: uuid
                 " s.decided_at FROM version_route_step s WHERE s.version_id = CAST(:v AS uuid)"
                 " ORDER BY s.attempt, s.position"
             ),
-            {"v": version_id},
+            {"v": source_id},
         )
     ).all()
     decisions = (
@@ -114,7 +123,7 @@ async def _route(session: AsyncSession, document_id: uuid.UUID, version_id: uuid
                 " d.on_behalf_of, d.decided_at FROM approval_decision d"
                 " WHERE d.version_id = CAST(:v AS uuid) ORDER BY d.decided_at, d.id"
             ),
-            {"v": version_id},
+            {"v": source_id},
         )
     ).all()
     names = await _names(
@@ -144,13 +153,14 @@ async def _route(session: AsyncSession, document_id: uuid.UUID, version_id: uuid
         )
     attempts = max((row.attempt for row in steps), default=0)
     current = await session.scalar(
-        text("SELECT app.route_current_position(CAST(:v AS uuid))"), {"v": version_id}
+        text("SELECT app.route_current_position(CAST(:v AS uuid))"), {"v": source_id}
     )
     can_decide = await session.scalar(
         text("SELECT app.route_can_decide(CAST(:v AS uuid))"), {"v": version_id}
     )
     return RouteOut(
         version_id=version_id,
+        source_version_no=source_no,
         version_status=version_status,
         attempts=attempts,
         current_position=current,
@@ -177,7 +187,7 @@ async def route(session: AsyncSession, document_id: uuid.UUID, version_id: uuid.
 
 async def send(session: AsyncSession, document_id: uuid.UUID, version_id: uuid.UUID) -> RouteOut:
     """Отправка: draft -> on_approval, снимок шагов шаблона; функция проверяет право записи и
-    файл."""
+    статус версии (файл есть всегда: ключ хранилища обязателен)."""
     await _version_status(session, document_id, version_id)
     async with db_rules(session):
         await session.execute(text("SELECT app.route_send(CAST(:v AS uuid))"), {"v": version_id})
@@ -204,7 +214,7 @@ _DELEGATIONS_MINE = (
     "SELECT dl.id, dl.delegator_id, dl.delegate_id, dl.role_code, dl.valid_from, dl.valid_to,"
     " dl.revoked_at FROM document_delegation dl"
     " WHERE (dl.delegator_id = app.user_id() OR dl.delegate_id = app.user_id())"
-    " AND (dl.revoked_at IS NULL OR dl.valid_to >= app.local_today())"
+    " AND dl.valid_to >= app.local_today()"
     " ORDER BY dl.valid_from DESC"
 )
 

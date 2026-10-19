@@ -142,6 +142,7 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "approval.delegation_self": (422, "approval.delegation_self"),
     "approval.period_in_past": (422, "approval.period_in_past"),
     "approval.period_invalid": (422, "approval.period_invalid"),
+    "approval.period_too_long": (422, "approval.period_too_long"),
     "approval.delegate_not_found": (422, "approval.delegate_not_found"),
     "approval.delegation_not_found": (404, "not_found"),
     "document.parent_not_approved": (409, "document.parent_not_approved"),
@@ -178,6 +179,7 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "uq_equipment_rate_level_version": (409, "equipment.rate_version_exists"),
     "ck_equipment_rate_one_level": (422, "equipment.rate_target_invalid"),
     "ck_equipment_rate_valid_to_not_before_from": (422, "equipment.rate_period_invalid"),
+    "ck_document_delegation_max_period": (422, "approval.period_too_long"),
     "uq_equipment_operator_user_id": (409, "equipment.operator_user_taken"),
     "uq_equipment_document_equipment_unit_id_kind_version": (
         409,
