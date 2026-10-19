@@ -19,6 +19,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 
 from app.core.config import get_settings
+from app.modules.auth import devseed
 from app.modules.notifications.adapters import (
     LogNotificationAdapter,
     WhatsAppCloudAdapter,
@@ -52,7 +53,7 @@ async def _money_version(
             "kind": "ks2",
             "legal_entity_id": str(desk.legal),
             "project_id": str(desk.project),
-            "counterparty_id": str(auth_world.counterparties["customer"]),
+            "counterparty_id": str(auth_world.counterparties[devseed.CUSTOMER]),
             "title": "КС-2 для уведомлений",
         },
     )
@@ -291,12 +292,13 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
     worker_sync_engine: Engine,
     s3: httpx.AsyncClient,
 ) -> None:
+    """Замещающий с телефоном получает уведомление о замещении и о шаге, который решает за замещаемого."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     today = date.fromisoformat(_local_today(worker_sync_engine))
     delegated = await api.post(
         f"{API}/documents/delegations",
         json={
-            "delegate_id": str(auth_world.users["estimator"]),
+            "delegate_id": str(auth_world.users["master"]),
             "role_code": "technical_director",
             "valid_from": str(today),
             "valid_to": str(today + timedelta(days=3)),
@@ -304,31 +306,36 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
         headers={**desk.heads["techdir"], **idem()},
     )
     assert delegated.status_code == 201, delegated.text
-    with worker_sync_engine.connect() as connection:
-        notices = connection.execute(
-            text(
-                "SELECT recipient_user_id, event_type FROM notification_outbox"
-                " WHERE dedup_key LIKE :p"
-            ),
-            {"p": f"deleg:{delegated.json()['id']}:%"},
-        ).all()
-    assert [(row.recipient_user_id, row.event_type) for row in notices] == [
-        (auth_world.users["estimator"], "delegation_assigned")
-    ]
-    document, version = await _money_version(api, s3, desk, auth_world)
-    await _send(api, desk, document, version)
-    assert (await _decide(api, desk.heads["foreman"], document, version, 1)).status_code == 200
-    assert (await _decide(api, desk.heads["estimator"], document, version, 2)).status_code == 200
-    third = _outbox(worker_sync_engine, version, position=3)
-    assert {row.recipient_user_id for row in third} == {
-        auth_world.users["techdir"],
-        auth_world.users["estimator"],
-    }
-    revoked = await api.post(
-        f"{API}/documents/delegations/{delegated.json()['id']}/revoke",
-        headers={**desk.heads["techdir"], **idem()},
-    )
-    assert revoked.status_code == 204, revoked.text
+    delegation_id = delegated.json()["id"]
+    try:
+        with worker_sync_engine.connect() as connection:
+            notices = connection.execute(
+                text(
+                    "SELECT recipient_user_id, event_type FROM notification_outbox"
+                    " WHERE dedup_key LIKE :p"
+                ),
+                {"p": f"deleg:{delegation_id}:%"},
+            ).all()
+        assert [(row.recipient_user_id, row.event_type) for row in notices] == [
+            (auth_world.users["master"], "delegation_assigned")
+        ]
+        document, version = await _money_version(api, s3, desk, auth_world)
+        await _send(api, desk, document, version)
+        assert (await _decide(api, desk.heads["foreman"], document, version, 1)).status_code == 200
+        assert (
+            await _decide(api, desk.heads["estimator"], document, version, 2)
+        ).status_code == 200
+        third = _outbox(worker_sync_engine, version, position=3)
+        assert {row.recipient_user_id for row in third} == {
+            auth_world.users["techdir"],
+            auth_world.users["master"],
+        }
+    finally:
+        revoked = await api.post(
+            f"{API}/documents/delegations/{delegation_id}/revoke",
+            headers={**desk.heads["techdir"], **idem()},
+        )
+        assert revoked.status_code == 204, revoked.text
 
 
 async def test_a_user_who_switched_whatsapp_off_gets_no_row(

@@ -39,10 +39,12 @@ async def deliveries(
 
 @router.get("/settings", response_model=NotifySettingsOut)
 async def read_settings(session: Db, principal: Me) -> NotifySettingsOut:
+    if not principal.is_internal:
+        return NotifySettingsOut(notify_whatsapp=False, can_notify=False)
     value = await session.scalar(
         text('SELECT notify_whatsapp FROM "user" WHERE id = app.user_id()')
     )
-    return NotifySettingsOut(notify_whatsapp=bool(value), can_notify=principal.is_internal)
+    return NotifySettingsOut(notify_whatsapp=bool(value), can_notify=True)
 
 
 @router.patch("/settings", response_model=NotifySettingsOut)

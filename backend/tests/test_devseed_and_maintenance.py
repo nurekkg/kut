@@ -38,10 +38,13 @@ def test_beat_schedules_both_maintenance_tasks_with_the_configured_intervals() -
     assert by_task == {
         "maintenance.purge_auth_data": float(settings.maintenance_purge_seconds),
         "maintenance.ensure_audit_partitions": float(settings.maintenance_partitions_seconds),
+        "notification.dispatch": 60.0,
     }
-    assert {"maintenance.purge_auth_data", "maintenance.ensure_audit_partitions"} <= set(
-        celery_app.tasks
-    )
+    assert {
+        "maintenance.purge_auth_data",
+        "maintenance.ensure_audit_partitions",
+        "notification.dispatch",
+    } <= set(celery_app.tasks)
     assert "app.modules.maintenance.tasks" in celery_app.conf.include
 
 
