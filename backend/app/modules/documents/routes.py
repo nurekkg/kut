@@ -91,6 +91,7 @@ async def save_template(session: AsyncSession, code: str, roles: list[str]) -> l
             text("SELECT app.route_template_save(CAST(:c AS text), CAST(:r AS text[]))"),
             {"c": code, "r": roles},
         )
+        await session.commit()
     return await templates(session)
 
 
@@ -246,6 +247,7 @@ async def revoke_delegation(session: AsyncSession, delegation_id: uuid.UUID) -> 
         await session.execute(
             text("SELECT app.delegation_revoke(CAST(:i AS uuid))"), {"i": delegation_id}
         )
+        await session.commit()
 
 
 async def delegations(session: AsyncSession) -> list[DelegationOut]:

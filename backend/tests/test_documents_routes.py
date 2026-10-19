@@ -230,6 +230,10 @@ async def test_a_template_change_does_not_touch_a_running_route(
         headers=desk.heads["owner"],
     )
     assert saved.status_code == 200, saved.text
+    listed = await api.get(f"{API}/documents/route-templates", headers=desk.heads["owner"])
+    assert listed.status_code == 200, listed.text
+    money = next(item for item in listed.json() if item["code"] == "money")
+    assert [step["role_code"] for step in money["steps"]] == ["foreman", "technical_director"]
     running = await route_of(api, desk.heads["owner"], document, version)
     assert [step["role_code"] for step in running["steps"]] == [
         "foreman",
@@ -607,6 +611,10 @@ async def test_a_delegation_that_has_not_started_does_not_make_the_delegate_a_pa
         headers={**desk.heads["techdir"], **idem()},
     )
     assert revoked.status_code == 204, revoked.text
+    listed = await api.get(f"{API}/documents/delegations", headers=desk.heads["techdir"])
+    assert listed.status_code == 200, listed.text
+    flags = [row["revoked"] for row in listed.json() if row["id"] == delegated.json()["id"]]
+    assert flags == [True]
 
 
 async def test_an_author_cannot_hand_the_step_over_to_decide_their_own_version(
