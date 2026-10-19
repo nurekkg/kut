@@ -70,6 +70,7 @@ const KEYS = {
   "approval.delegate_not_found": "delegateNotFound",
   "approval.delegate_not_internal": "delegateNotInternal",
   "approval.delegation_overlap": "delegationOverlap",
+  "approval.delegation_limit": "delegationLimit",
   "approval.period_too_long": "periodTooLong",
   "equipment.document_kind_mismatch": "equipmentDocumentKindMismatch",
   "equipment.document_unit_mismatch": "equipmentDocumentUnitMismatch",

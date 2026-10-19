@@ -78,6 +78,14 @@ BEGIN
                      AND r.scope <> 'counterparty') THEN
         RAISE EXCEPTION 'approval.delegate_not_internal';
     END IF;
+    -- Не больше 20 созданий за сутки на делегирующего (отозванные тоже считаются): иначе цикл
+    -- «создать - отозвать» плодит записи без предела. Блокировка по делегирующему - против гонки.
+    PERFORM pg_advisory_xact_lock(hashtextextended(NEW.delegator_id::text, 1));
+    IF (SELECT count(*) FROM public.document_delegation d
+        WHERE d.delegator_id = NEW.delegator_id
+          AND d.created_at > now() - interval '1 day') >= 20 THEN
+        RAISE EXCEPTION 'approval.delegation_limit';
+    END IF;
     PERFORM pg_advisory_xact_lock(hashtextextended(NEW.delegator_id::text || ':' || NEW.role_code, 0));
     IF EXISTS (SELECT 1 FROM public.document_delegation d
                WHERE d.delegator_id = NEW.delegator_id AND d.role_code = NEW.role_code

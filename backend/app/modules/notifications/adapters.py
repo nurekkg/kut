@@ -91,17 +91,19 @@ class WhatsAppCloudAdapter:
             return _failure("network", None, retryable=True)
         code = response.status_code
         if code == 200:
+            # Провайдер принял запрос: повтор создал бы дубль, поэтому идентификатор необязателен.
             try:
-                message_id = response.json()["messages"][0]["id"]
+                message_id: str | None = response.json()["messages"][0]["id"]
+                error_code = None
             except (ValueError, KeyError, IndexError, TypeError):
-                return _failure("bad_response", code, retryable=False)
+                message_id, error_code = None, "bad_response"
             return SendResult(
                 ok=True,
                 retryable=False,
                 ok_status="sent",
                 provider_status=code,
                 message_id=message_id,
-                error_code=None,
+                error_code=error_code,
             )
         retryable = code == 429 or code >= 500
         return _failure(f"http_{code}", code, retryable=retryable)
@@ -121,21 +123,27 @@ def _failure(error_code: str, provider_status: int | None, *, retryable: bool) -
 def get_adapter(settings: Settings) -> NotificationAdapter:
     if not settings.whatsapp_enabled:
         return LogNotificationAdapter()
-    validate_notification_config(settings)
-    if settings.whatsapp_phone_number_id is None or settings.whatsapp_access_token is None:
-        raise RuntimeError("WhatsApp: нет номера или токена")
+    phone_number_id, access_token = _whatsapp_credentials(settings)
     return WhatsAppCloudAdapter(
-        phone_number_id=settings.whatsapp_phone_number_id,
-        access_token=settings.whatsapp_access_token.get_secret_value(),
+        phone_number_id=phone_number_id,
+        access_token=access_token,
         api_version=settings.whatsapp_api_version,
     )
 
 
 def validate_notification_config(settings: Settings) -> None:
     """Включённый WhatsApp без номера или токена - ошибка при старте, не тихий отказ."""
-    if not settings.whatsapp_enabled:
-        return
-    if not settings.whatsapp_phone_number_id or settings.whatsapp_access_token is None:
+    if settings.whatsapp_enabled:
+        _whatsapp_credentials(settings)
+
+
+def _whatsapp_credentials(settings: Settings) -> tuple[str, str]:
+    # Пустая строка из окружения (например, WHATSAPP_ACCESS_TOKEN=) - то же, что отсутствие.
+    token = (
+        settings.whatsapp_access_token.get_secret_value() if settings.whatsapp_access_token else ""
+    )
+    if not settings.whatsapp_phone_number_id or not token:
         raise RuntimeError(
             "WHATSAPP_ENABLED=true требует WHATSAPP_PHONE_NUMBER_ID и WHATSAPP_ACCESS_TOKEN"
         )
+    return settings.whatsapp_phone_number_id, token

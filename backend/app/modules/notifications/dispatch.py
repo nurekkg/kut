@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -7,9 +8,13 @@ from sqlalchemy import Connection, Engine, text
 from app.modules.documents.types import KINDS
 from app.modules.notifications.adapters import NotificationAdapter, SendResult, mask_phone
 
+logger = logging.getLogger(__name__)
+
 MAX_ATTEMPTS = 4  # первая попытка и три повтора
 BACKOFF_SECONDS = (30, 120, 600)  # пауза после 1-й, 2-й и 3-й неудачной попытки
 BATCH_SIZE = 20
+LEASE = timedelta(minutes=5)  # строка занята воркером на время отправки; при сбое её заберут позже
+TEMPLATE_WAIT = timedelta(hours=1)  # шаблон не одобрен: ждём, попытку не тратим
 
 CLAIM = text(
     """
@@ -27,12 +32,29 @@ CLAIM = text(
     """
 )
 
+LEASE_ROWS = text(
+    """
+    UPDATE notification_outbox
+    SET next_attempt_at = CAST(:until AS timestamptz)
+    WHERE id = ANY (CAST(:ids AS uuid[]))
+    """
+)
+
 UPDATE_OUTBOX = text(
     """
     UPDATE notification_outbox
     SET status = :status, attempts = :attempts,
         next_attempt_at = COALESCE(CAST(:next_at AS timestamptz), next_attempt_at),
         last_error_code = :error_code, updated_at = now()
+    WHERE id = :id
+    """
+)
+
+DEFER_OUTBOX = text(
+    """
+    UPDATE notification_outbox
+    SET next_attempt_at = CAST(:next_at AS timestamptz), last_error_code = :error_code,
+        updated_at = now()
     WHERE id = :id
     """
 )
@@ -57,13 +79,21 @@ def dispatch_due(
 ) -> int:
     """Одна пачка очереди. Время передаётся параметром: повторы проверяются без реального ожидания.
 
+    Строки арендуются короткой транзакцией, затем каждая отправляется и фиксируется отдельно:
+    сбой на одной строке не откатывает уже отправленные и не даёт повторной отправки чужих строк.
     ids ограничивает выборку (тесты); в работе не задан.
     """
     with engine.begin() as connection:
         rows = connection.execute(
-            CLAIM, {"now": now, "batch": batch, "ids": [str(i) for i in ids] if ids else None}
+            CLAIM,
+            {"now": now, "batch": batch, "ids": [str(i) for i in ids] if ids is not None else None},
         ).all()
-        for row in rows:
+        if rows:
+            connection.execute(
+                LEASE_ROWS, {"until": now + LEASE, "ids": [str(row.id) for row in rows]}
+            )
+    for row in rows:
+        with engine.begin() as connection:
             _deliver(connection, adapter, row, base_url=base_url, now=now)
     return len(rows)
 
@@ -82,12 +112,12 @@ def _deliver(
         _record(connection, row, attempt, "failed", "failed", "recipient.not_notifiable")
         return
     if adapter.requires_approved_template and row.approval != "approved":
-        _record(connection, row, attempt, "failed", "failed", "template.not_approved")
+        _defer(connection, row, now + TEMPLATE_WAIT, "template.not_approved")
         return
     params = render_params(row.param_names, row.params, base_url)
-    result = adapter.send(to=row.phone, template=row.wa_name, language=row.language, params=params)
+    result = _send(adapter, row, params)
     if result.ok:
-        _record(connection, row, attempt, result.ok_status, "sent", None, result)
+        _record(connection, row, attempt, result.ok_status, "sent", result.error_code, result)
     elif result.retryable and attempt < MAX_ATTEMPTS:
         next_at = now + timedelta(seconds=BACKOFF_SECONDS[attempt - 1])
         _record(connection, row, attempt, "retry", "queued", result.error_code, result, next_at)
@@ -95,6 +125,29 @@ def _deliver(
         _record(connection, row, attempt, "dead", "dead", result.error_code, result)
     else:
         _record(connection, row, attempt, "failed", "failed", result.error_code, result)
+
+
+def _send(adapter: NotificationAdapter, row: Any, params: list[str]) -> SendResult:
+    try:
+        return adapter.send(
+            to=row.phone, template=row.wa_name, language=row.language, params=params
+        )
+    except Exception as error:
+        # Сбой адаптера (например, кодирование заголовка) - повторяемый исход, пачка не падает.
+        # Текст исключения в лог не пишем: он может содержать фрагменты заголовков.
+        logger.warning("notification adapter failed: %s", type(error).__name__)
+        return SendResult(
+            ok=False,
+            retryable=True,
+            ok_status="",
+            provider_status=None,
+            message_id=None,
+            error_code="adapter_error",
+        )
+
+
+def _defer(connection: Connection, row: Any, next_at: datetime, error_code: str) -> None:
+    connection.execute(DEFER_OUTBOX, {"id": row.id, "next_at": next_at, "error_code": error_code})
 
 
 def _record(
@@ -126,13 +179,9 @@ def _record(
             "provider_status": result.provider_status if result else None,
             "message_id": result.message_id if result else None,
             "error_code": error_code,
-            "phone": _masked(row),
+            "phone": mask_phone(row.phone),
         },
     )
-
-
-def _masked(row: Any) -> str:
-    return mask_phone(row.phone)
 
 
 def render_params(names_csv: str, params: dict[str, Any], base_url: str) -> list[str]:

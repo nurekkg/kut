@@ -14,6 +14,7 @@ from uuid import UUID
 import httpx
 import pytest
 from httpx import AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
@@ -23,6 +24,7 @@ from app.core.config import get_settings
 from app.modules.auth import devseed
 from app.modules.notifications.adapters import (
     LogNotificationAdapter,
+    SendResult,
     WhatsAppCloudAdapter,
     get_adapter,
     mask_phone,
@@ -140,6 +142,14 @@ def _outbox(engine: Engine, version: str, position: int | None = None) -> list[A
         for row in found
         if row.event_type == "approval_requested" and row.dedup_key.split(":")[3] == str(position)
     ]
+
+
+def _last_error(engine: Engine, outbox_id: UUID) -> str | None:
+    with engine.connect() as connection:
+        return connection.execute(
+            text("SELECT last_error_code FROM notification_outbox WHERE id = :i"),
+            {"i": outbox_id},
+        ).scalar_one()
 
 
 def _deliveries(engine: Engine, outbox_id: UUID) -> list[Any]:
@@ -328,13 +338,13 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
     worker_sync_engine: Engine,
     s3: httpx.AsyncClient,
 ) -> None:
-    """Замещающий с телефоном получает уведомление о замещении и о шаге за замещаемого."""
+    """Замещающий с правом согласования и телефоном получает уведомление о замещении и о шаге."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     today = date.fromisoformat(_local_today(worker_sync_engine))
     delegated = await api.post(
         f"{API}/documents/delegations",
         json={
-            "delegate_id": str(auth_world.users["master"]),
+            "delegate_id": str(auth_world.users["finance"]),
             "role_code": "technical_director",
             "valid_from": str(today),
             "valid_to": str(today + timedelta(days=3)),
@@ -350,10 +360,10 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
                     "SELECT recipient_user_id, event_type FROM notification_outbox"
                     " WHERE dedup_key LIKE :p"
                 ),
-                {"p": f"deleg:{delegation_id}:%"},
+                {"p": f"deleg:{auth_world.users['finance']}:%"},
             ).all()
         assert [(row.recipient_user_id, row.event_type) for row in notices] == [
-            (auth_world.users["master"], "delegation_assigned")
+            (auth_world.users["finance"], "delegation_assigned")
         ]
         document, version = await _money_version(api, s3, desk, auth_world)
         await _send(api, desk, document, version)
@@ -364,11 +374,43 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
         third = _outbox(worker_sync_engine, version, position=3)
         assert {row.recipient_user_id for row in third} == {
             auth_world.users["techdir"],
-            auth_world.users["master"],
+            auth_world.users["finance"],
         }
     finally:
         revoked = await api.post(
             f"{API}/documents/delegations/{delegation_id}/revoke",
+            headers={**desk.heads["techdir"], **idem()},
+        )
+        assert revoked.status_code == 204, revoked.text
+
+
+async def test_a_delegate_without_the_approval_right_gets_no_notice(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    """Замещение разрешено, но сообщение получает только тот, кто может согласовать."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = date.fromisoformat(_local_today(worker_sync_engine))
+    delegated = await api.post(
+        f"{API}/documents/delegations",
+        json={
+            "delegate_id": str(auth_world.users["master"]),
+            "role_code": "technical_director",
+            "valid_from": str(today + timedelta(days=300)),
+            "valid_to": str(today + timedelta(days=301)),
+        },
+        headers={**desk.heads["techdir"], **idem()},
+    )
+    assert delegated.status_code == 201, delegated.text
+    try:
+        with worker_sync_engine.connect() as connection:
+            count = connection.execute(
+                text("SELECT count(*) FROM notification_outbox WHERE dedup_key LIKE :p"),
+                {"p": f"deleg:{auth_world.users['master']}:%"},
+            ).scalar_one()
+        assert count == 0
+    finally:
+        revoked = await api.post(
+            f"{API}/documents/delegations/{delegated.json()['id']}/revoke",
             headers={**desk.heads["techdir"], **idem()},
         )
         assert revoked.status_code == 204, revoked.text
@@ -528,7 +570,7 @@ async def test_a_client_error_is_failed_at_once_without_a_retry(
     assert len(calls) == 1
 
 
-async def test_an_unapproved_template_is_not_sent_at_all(
+async def test_an_unapproved_template_waits_without_spending_an_attempt(
     api: AsyncClient,
     auth_world: AuthWorld,
     worker_sync_engine: Engine,
@@ -546,8 +588,99 @@ async def test_an_unapproved_template_is_not_sent_at_all(
         == 1
     )
     assert calls == []
-    (delivery,) = _deliveries(worker_sync_engine, queued.id)
-    assert (delivery.status, delivery.error_code) == ("failed", "template.not_approved")
+    assert _state(worker_sync_engine, queued.id) == ("queued", 0, start + timedelta(hours=1))
+    assert _last_error(worker_sync_engine, queued.id) == "template.not_approved"
+    assert _deliveries(worker_sync_engine, queued.id) == []
+
+
+class _BrokenAdapter:
+    """Адаптер, который падает до отправки (как кодирование заголовка с нелатинским токеном)."""
+
+    requires_approved_template = False
+
+    def send(self, *, to: str, template: str, language: str, params: list[str]) -> SendResult:
+        raise UnicodeEncodeError("ascii", "токен", 0, 1, "boom")
+
+
+async def test_an_adapter_error_is_retried_and_does_not_stop_the_batch(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, document, version)
+    (queued,) = _outbox(worker_sync_engine, version, position=1)
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    broken = _BrokenAdapter()
+    assert (
+        dispatch_due(worker_sync_engine, broken, base_url=BASE_URL, now=start, ids=[queued.id]) == 1
+    )
+    assert _state(worker_sync_engine, queued.id)[:2] == ("queued", 1)
+    assert _last_error(worker_sync_engine, queued.id) == "adapter_error"
+
+
+async def test_an_answer_without_a_message_id_is_sent_and_never_repeated(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, document, version)
+    (queued,) = _outbox(worker_sync_engine, version, position=1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    adapter = _adapter(httpx.MockTransport(handler))
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    assert (
+        dispatch_due(worker_sync_engine, adapter, base_url=BASE_URL, now=start, ids=[queued.id])
+        == 1
+    )
+    assert _state(worker_sync_engine, queued.id)[:2] == ("sent", 1)
+    assert _last_error(worker_sync_engine, queued.id) == "bad_response"
+    later = start + timedelta(days=1)
+    assert (
+        dispatch_due(worker_sync_engine, adapter, base_url=BASE_URL, now=later, ids=[queued.id])
+        == 0
+    )
+
+
+def test_the_template_approval_is_an_operator_function(
+    owner_sync_engine: Engine, worker_sync_engine: Engine
+) -> None:
+    with owner_sync_engine.begin() as connection:
+        changed = connection.execute(
+            text("SELECT app.notification_template_approve('approval_requested', true)")
+        ).scalar_one()
+    try:
+        assert changed == 1
+        with worker_sync_engine.connect() as connection:
+            approval = connection.execute(
+                text("SELECT approval FROM notification_template WHERE code = 'approval_requested'")
+            ).scalar_one()
+        assert approval == "approved"
+    finally:
+        with owner_sync_engine.begin() as connection:
+            connection.execute(
+                text("SELECT app.notification_template_approve('approval_requested', false)")
+            )
+
+
+def test_an_empty_token_counts_as_missing_at_start() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "whatsapp_enabled": True,
+            "whatsapp_phone_number_id": "1234567890",
+            "whatsapp_access_token": SecretStr(""),
+        }
+    )
+    with pytest.raises(RuntimeError, match="WHATSAPP_ACCESS_TOKEN"):
+        validate_notification_config(settings)
 
 
 async def test_the_dev_adapter_records_the_step_as_logged_without_network(

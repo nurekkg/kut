@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.deps import get_db, get_principal, require
 from app.modules.auth.principal import Principal
+from app.modules.notifications import service
 from app.modules.notifications.schemas import DeliveryOut, NotifySettingsIn, NotifySettingsOut
 from app.modules.rbac.enums import Action, Module
 
@@ -39,28 +40,14 @@ async def deliveries(
 
 @router.get("/settings", response_model=NotifySettingsOut)
 async def read_settings(session: Db, principal: Me) -> NotifySettingsOut:
+    # Портал не читает таблицу user: у его логина нет доступа к колонке, и уведомлений ему нет.
     if not principal.is_internal:
         return NotifySettingsOut(notify_whatsapp=False, can_notify=False)
-    value = await session.scalar(
-        text('SELECT notify_whatsapp FROM "user" WHERE id = app.user_id()')
-    )
-    return NotifySettingsOut(notify_whatsapp=bool(value), can_notify=True)
+    return NotifySettingsOut(notify_whatsapp=await service.read_own_flag(session), can_notify=True)
 
 
 @router.patch("/settings", response_model=NotifySettingsOut)
 async def update_settings(body: NotifySettingsIn, session: Db, principal: Me) -> NotifySettingsOut:
-    if not principal.is_internal:
+    if not principal.is_internal or not await service.write_own_flag(session, body.notify_whatsapp):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
-    updated = (
-        await session.execute(
-            text(
-                'UPDATE "user" SET notify_whatsapp = :value, updated_at = now() '
-                "WHERE id = app.user_id() AND deleted_at IS NULL RETURNING id"
-            ),
-            {"value": body.notify_whatsapp},
-        )
-    ).first()
-    if updated is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
-    await session.commit()
     return NotifySettingsOut(notify_whatsapp=body.notify_whatsapp, can_notify=True)

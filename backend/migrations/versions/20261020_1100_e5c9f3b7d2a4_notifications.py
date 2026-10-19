@@ -70,12 +70,14 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
           AND (p_document IS NULL OR r.scope = 'group' OR EXISTS (
                 SELECT 1 FROM public.document d
                 WHERE d.id = p_document AND d.deleted_at IS NULL AND (
-                    EXISTS (SELECT 1 FROM public.user_project_access a
-                            WHERE a.user_id = u.id AND a.project_id = d.project_id
-                              AND a.deleted_at IS NULL)
-                    OR EXISTS (SELECT 1 FROM public.user_legal_entity_access l
-                               WHERE l.user_id = u.id AND l.legal_entity_id = d.legal_entity_id
-                                 AND l.deleted_at IS NULL)))))
+                    (d.project_id IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM public.user_project_access a
+                        WHERE a.user_id = u.id AND a.project_id = d.project_id
+                          AND a.deleted_at IS NULL))
+                    OR (d.project_id IS NULL AND EXISTS (
+                        SELECT 1 FROM public.user_legal_entity_access l
+                        WHERE l.user_id = u.id AND l.legal_entity_id = d.legal_entity_id
+                          AND l.deleted_at IS NULL))))))
 $$
 """
 
@@ -123,6 +125,7 @@ BEGIN
         UNION
         SELECT dl.delegate_id FROM public.document_delegation dl
         WHERE dl.role_code = cur_role AND dl.revoked_at IS NULL AND dl.deleted_at IS NULL
+          AND dl.delegator_id IS DISTINCT FROM v.created_by
           AND app.local_today() BETWEEN dl.valid_from AND dl.valid_to
     LOOP
         IF r.uid IS DISTINCT FROM v.created_by THEN
@@ -170,11 +173,36 @@ NOTIFY_DELEGATION = """
 CREATE FUNCTION app.notify_delegation() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 BEGIN
-    PERFORM app.notify_user('delegation_assigned', 'deleg:' || NEW.id || ':' || NEW.delegate_id,
-        NEW.delegate_id, NULL, 'delegation_assigned',
-        jsonb_build_object('until', NEW.valid_to::text));
+    -- Уведомление получает только тот, кто может согласовать (documents:approve), и не чаще одного раза
+    -- в день: замещение нельзя использовать для рассылки сообщений сотрудникам без права согласования.
+    IF EXISTS (
+        SELECT 1 FROM public."user" u
+        JOIN public.role_permission rp ON rp.role_id = u.role_id
+        JOIN public.permission p ON p.id = rp.permission_id
+        WHERE u.id = NEW.delegate_id AND p.module = 'documents' AND p.action = 'approve'
+          AND p.qualifier IS NULL AND rp.deleted_at IS NULL AND p.deleted_at IS NULL
+    ) THEN
+        PERFORM app.notify_user('delegation_assigned',
+            'deleg:' || NEW.delegate_id || ':' || app.local_today(),
+            NEW.delegate_id, NULL, 'delegation_assigned',
+            jsonb_build_object('until', NEW.valid_to::text));
+    END IF;
     RETURN NULL;
 END $$
+"""
+
+# Одобрение шаблона провайдером: оператор вызывает под kut_owner (EXECUTE выдан только владельцу).
+APPROVE_TEMPLATE = """
+CREATE FUNCTION app.notification_template_approve(p_code text, p_approved boolean DEFAULT true)
+RETURNS integer LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS $$
+    WITH changed AS (
+        UPDATE public.notification_template
+        SET approval = CASE WHEN p_approved THEN 'approved' ELSE 'pending' END, updated_at = now()
+        WHERE code = p_code
+        RETURNING id
+    )
+    SELECT count(*)::integer FROM changed
+$$
 """
 
 APPEND_ONLY = """
@@ -281,7 +309,15 @@ BEGIN
 END $$
 """
 
-FUNCTIONS = (PERSON_OK, NOTIFY_USER, NOTIFY_CURRENT, NOTIFY_OUTCOME, NOTIFY_DELEGATION, APPEND_ONLY)
+FUNCTIONS = (
+    PERSON_OK,
+    NOTIFY_USER,
+    NOTIFY_CURRENT,
+    NOTIFY_OUTCOME,
+    NOTIFY_DELEGATION,
+    APPEND_ONLY,
+    APPROVE_TEMPLATE,
+)
 TRIGGER_FUNCTIONS = ("notify_delegation()", "notification_append_only()")
 
 
@@ -406,6 +442,7 @@ def upgrade() -> None:
         "ON notification_outbox TO kut_worker"
     )
     op.execute("GRANT SELECT, INSERT ON notification_outbox TO kut_auth")
+    op.execute("GRANT UPDATE (approval, updated_at) ON notification_template TO kut_auth")
     op.execute("GRANT SELECT ON notification_delivery TO kut_app")
     op.execute("GRANT SELECT, INSERT ON notification_delivery TO kut_worker")
 
@@ -432,6 +469,12 @@ def upgrade() -> None:
     for name in TRIGGER_FUNCTIONS:
         op.execute(f"REVOKE ALL ON FUNCTION app.{name} FROM PUBLIC")
         op.execute(f"GRANT EXECUTE ON FUNCTION app.{name} TO kut_owner")
+    op.execute(
+        "REVOKE ALL ON FUNCTION app.notification_template_approve(text, boolean) FROM PUBLIC"
+    )
+    op.execute(
+        "GRANT EXECUTE ON FUNCTION app.notification_template_approve(text, boolean) TO kut_owner"
+    )
     op.execute("RESET ROLE")
     op.execute(
         "CREATE TRIGGER document_delegation_notify AFTER INSERT ON public.document_delegation "
@@ -449,6 +492,7 @@ def downgrade() -> None:
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute(ROUTE_SEND_PREVIOUS)
     op.execute(DECISION_AFTER_PREVIOUS)
+    op.execute("DROP FUNCTION IF EXISTS app.notification_template_approve(text, boolean)")
     for name in (
         "notification_append_only",
         "notify_delegation",

@@ -1116,3 +1116,41 @@ async def test_an_estimator_sees_the_names_of_the_deciders_and_a_customer_sees_n
     customer = await api.get(f"{API}/documents/{document}", headers=desk.heads["customer"])
     assert customer.status_code == 200, customer.text
     assert {version_row["author_name"] for version_row in customer.json()["versions"]} == {None}
+
+
+async def test_a_delegator_creates_at_most_twenty_delegations_a_day(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    """Лимит 20 созданий за сутки на делегирующего; отозванные считаются (цикл не обходит)."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, "foreman", "estimator")
+    today = date.fromisoformat(await local_today(worker_sync_engine))
+    created: list[str] = []
+    refused: httpx.Response | None = None
+    try:
+        for offset in range(30):
+            day = str(today + timedelta(days=400 + offset))
+            response = await api.post(
+                f"{API}/documents/delegations",
+                json={
+                    "delegate_id": str(auth_world.users["estimator"]),
+                    "role_code": "foreman",
+                    "valid_from": day,
+                    "valid_to": day,
+                },
+                headers={**desk.heads["foreman"], **idem()},
+            )
+            if response.status_code != 201:
+                refused = response
+                break
+            created.append(response.json()["id"])
+        assert refused is not None, "лимит не сработал"
+        assert refused.status_code == 429, refused.text
+        assert refused.json()["detail"] == "approval.delegation_limit"
+        assert len(created) == 20
+    finally:
+        for delegation_id in created:
+            revoked = await api.post(
+                f"{API}/documents/delegations/{delegation_id}/revoke",
+                headers={**desk.heads["foreman"], **idem()},
+            )
+            assert revoked.status_code == 204, revoked.text
