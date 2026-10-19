@@ -30,7 +30,16 @@ from app.modules.notifications.adapters import (
 )
 from app.modules.notifications.dispatch import dispatch_due, render_params
 from tests.auth_support import AuthWorld
-from tests.documents_support import API, PDF, PDF_OK, Desk, create_document, open_desk, upload
+from tests.documents_support import (
+    API,
+    PDF,
+    PDF_OK,
+    Desk,
+    create_document,
+    leave_no_access_behind,  # noqa: F401
+    open_desk,
+    upload,
+)
 from tests.equipment_support import idem, in_context, rows
 
 MONEY_DESK = ("owner", "foreman", "estimator", "techdir", "finance", "master", "accountant")
