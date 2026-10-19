@@ -310,6 +310,15 @@ def upgrade() -> None:
             "approval IN ('approved', 'pending')", name=op.f("ck_notification_template_approval")
         ),
     )
+    values = ", ".join(
+        f"('{code}', 'whatsapp', '{wa_name}', 'ru', 'pending', '{preview}', '{params}')"
+        for code, wa_name, preview, params in TEMPLATES
+    )
+    op.execute(
+        "INSERT INTO notification_template (code, channel, wa_name, language, approval, preview, params)"
+        f" VALUES {values}"
+    )
+
     force_rls("notification_template")
 
     business_table(
@@ -411,15 +420,6 @@ def upgrade() -> None:
     op.execute(
         "CREATE POLICY notification_delivery_select_app ON notification_delivery "
         "FOR SELECT TO kut_app USING (app.has_permission('notifications', 'read'))"
-    )
-
-    values = ", ".join(
-        f"('{code}', 'whatsapp', '{wa_name}', 'ru', 'pending', '{preview}', '{params}')"
-        for code, wa_name, preview, params in TEMPLATES
-    )
-    op.execute(
-        "INSERT INTO notification_template (code, channel, wa_name, language, approval, preview, params)"
-        f" VALUES {values}"
     )
 
     op.execute("SET LOCAL ROLE kut_auth")
