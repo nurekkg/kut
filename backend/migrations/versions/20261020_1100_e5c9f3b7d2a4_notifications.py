@@ -442,6 +442,7 @@ def upgrade() -> None:
         "ON notification_outbox TO kut_worker"
     )
     op.execute("GRANT SELECT, INSERT ON notification_outbox TO kut_auth")
+    op.execute("GRANT SELECT ON notification_template TO kut_auth")
     op.execute("GRANT UPDATE (approval, updated_at) ON notification_template TO kut_auth")
     op.execute("GRANT SELECT ON notification_delivery TO kut_app")
     op.execute("GRANT SELECT, INSERT ON notification_delivery TO kut_worker")
