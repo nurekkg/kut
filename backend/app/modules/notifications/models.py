@@ -50,9 +50,7 @@ class NotificationOutbox(BusinessBase):
     document_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("document.id"), default=None)
     template_code: Mapped[str] = mapped_column(ForeignKey("notification_template.code"))
     channel: Mapped[str] = mapped_column(String(20), server_default=text("'whatsapp'"))
-    params: Mapped[dict[str, Any]] = mapped_column(
-        JSONB(), server_default=text("'{}'::jsonb")
-    )
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB(), server_default=text("'{}'::jsonb"))
     status: Mapped[str] = mapped_column(String(16), server_default=text("'queued'"))
     attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     next_attempt_at: Mapped[datetime] = mapped_column(
@@ -91,8 +89,6 @@ class NotificationDelivery(BusinessBase):
     phone_masked: Mapped[str] = mapped_column(String(32))
 
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('logged', 'sent', 'retry', 'failed', 'dead')", name="status"
-        ),
+        CheckConstraint("status IN ('logged', 'sent', 'retry', 'failed', 'dead')", name="status"),
         CheckConstraint("attempt >= 1", name="attempt"),
     )

@@ -248,9 +248,7 @@ async def test_a_repeated_notification_of_the_same_step_adds_no_second_row(
     before = len(_outbox(worker_sync_engine, version))
     with owner_sync_engine.begin() as connection:
         connection.execute(text("SET LOCAL ROLE kut_auth"))
-        connection.execute(
-            text("SELECT app.notify_current_step(CAST(:v AS uuid))"), {"v": version}
-        )
+        connection.execute(text("SELECT app.notify_current_step(CAST(:v AS uuid))"), {"v": version})
     assert len(_outbox(worker_sync_engine, version)) == before
 
 
@@ -468,9 +466,10 @@ async def test_a_client_error_is_failed_at_once_without_a_retry(
 
     adapter = _adapter(httpx.MockTransport(handler))
     start = datetime.now(UTC) + timedelta(minutes=5)
-    assert dispatch_due(
-        worker_sync_engine, adapter, base_url=BASE_URL, now=start, ids=[queued.id]
-    ) == 1
+    assert (
+        dispatch_due(worker_sync_engine, adapter, base_url=BASE_URL, now=start, ids=[queued.id])
+        == 1
+    )
     assert _state(worker_sync_engine, queued.id)[:2] == ("failed", 1)
     assert [row.status for row in _deliveries(worker_sync_engine, queued.id)] == ["failed"]
     assert (
@@ -499,9 +498,10 @@ async def test_an_unapproved_template_is_not_sent_at_all(
     calls, transport = _count_calls()
     adapter = _adapter(transport, approved=False)
     start = datetime.now(UTC) + timedelta(minutes=5)
-    assert dispatch_due(
-        worker_sync_engine, adapter, base_url=BASE_URL, now=start, ids=[queued.id]
-    ) == 1
+    assert (
+        dispatch_due(worker_sync_engine, adapter, base_url=BASE_URL, now=start, ids=[queued.id])
+        == 1
+    )
     assert calls == []
     (delivery,) = _deliveries(worker_sync_engine, queued.id)
     assert (delivery.status, delivery.error_code) == ("failed", "template.not_approved")
@@ -518,9 +518,16 @@ async def test_the_dev_adapter_records_the_step_as_logged_without_network(
     await _send(api, desk, document, version)
     (queued,) = _outbox(worker_sync_engine, version, position=1)
     start = datetime.now(UTC) + timedelta(minutes=5)
-    assert dispatch_due(
-        worker_sync_engine, LogNotificationAdapter(), base_url=BASE_URL, now=start, ids=[queued.id]
-    ) == 1
+    assert (
+        dispatch_due(
+            worker_sync_engine,
+            LogNotificationAdapter(),
+            base_url=BASE_URL,
+            now=start,
+            ids=[queued.id],
+        )
+        == 1
+    )
     assert _state(worker_sync_engine, queued.id)[:2] == ("sent", 1)
     (delivery,) = _deliveries(worker_sync_engine, queued.id)
     assert (delivery.status, delivery.phone_masked) == ("logged", "+996 *** *** 01")
@@ -590,8 +597,7 @@ def test_the_delivery_journal_is_append_only(
     with owner_sync_engine.connect() as connection:
         trigger = connection.execute(
             text(
-                "SELECT count(*) FROM pg_trigger"
-                " WHERE tgname = 'notification_delivery_append_only'"
+                "SELECT count(*) FROM pg_trigger WHERE tgname = 'notification_delivery_append_only'"
             )
         ).scalar_one()
     assert trigger == 1

@@ -85,9 +85,7 @@ def _deliver(
         _record(connection, row, attempt, "failed", "failed", "template.not_approved")
         return
     params = render_params(row.param_names, row.params, base_url)
-    result = adapter.send(
-        to=row.phone, template=row.wa_name, language=row.language, params=params
-    )
+    result = adapter.send(to=row.phone, template=row.wa_name, language=row.language, params=params)
     if result.ok:
         _record(connection, row, attempt, result.ok_status, "sent", None, result)
     elif result.retryable and attempt < MAX_ATTEMPTS:
@@ -164,4 +162,3 @@ def _date_ru(value: object) -> str:
         return ""
     year, month, day = str(value).split("-")
     return f"{day}.{month}.{year}"
-

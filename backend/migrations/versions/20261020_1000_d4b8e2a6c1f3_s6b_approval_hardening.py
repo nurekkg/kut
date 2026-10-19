@@ -214,12 +214,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS document_delegation_insert_guard ON public.document_delegation")
+    op.execute(
+        "DROP TRIGGER IF EXISTS document_delegation_insert_guard ON public.document_delegation"
+    )
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute(
         "GRANT EXECUTE ON FUNCTION app.document_version_transition(uuid, text, text) TO kut_worker"
     )
-    op.execute("REVOKE EXECUTE ON FUNCTION app.version_move(uuid, text, text, uuid) FROM kut_worker")
+    op.execute(
+        "REVOKE EXECUTE ON FUNCTION app.version_move(uuid, text, text, uuid) FROM kut_worker"
+    )
     op.execute("DROP FUNCTION IF EXISTS app.document_person_names(uuid[])")
     op.execute(ROUTE_CHECK_PREVIOUS)
     op.execute("DROP FUNCTION IF EXISTS app.delegation_insert_guard()")

@@ -231,9 +231,7 @@ BEGIN
 END $$
 """
 
-ROUTE_SEND_PREVIOUS = ROUTE_SEND.replace(
-    "    PERFORM app.notify_current_step(p_version);\n", ""
-)
+ROUTE_SEND_PREVIOUS = ROUTE_SEND.replace("    PERFORM app.notify_current_step(p_version);\n", "")
 
 DECISION_AFTER = """
 CREATE OR REPLACE FUNCTION app.approval_decision_after() RETURNS trigger
@@ -305,7 +303,9 @@ def upgrade() -> None:
         sa.Column("preview", sa.Text(), nullable=False),
         sa.Column("params", sa.String(200), nullable=False),
         sa.UniqueConstraint("code", name=op.f("uq_notification_template_code")),
-        sa.CheckConstraint("channel IN ('whatsapp')", name=op.f("ck_notification_template_channel")),
+        sa.CheckConstraint(
+            "channel IN ('whatsapp')", name=op.f("ck_notification_template_channel")
+        ),
         sa.CheckConstraint(
             "approval IN ('approved', 'pending')", name=op.f("ck_notification_template_approval")
         ),
@@ -392,8 +392,10 @@ def upgrade() -> None:
 
     op.execute("GRANT SELECT ON notification_template TO kut_app, kut_worker")
     op.execute("GRANT SELECT ON notification_outbox TO kut_app, kut_worker")
-    op.execute("GRANT UPDATE (status, attempts, next_attempt_at, last_error_code, updated_at) "
-               "ON notification_outbox TO kut_worker")
+    op.execute(
+        "GRANT UPDATE (status, attempts, next_attempt_at, last_error_code, updated_at) "
+        "ON notification_outbox TO kut_worker"
+    )
     op.execute("GRANT SELECT, INSERT ON notification_outbox TO kut_auth")
     op.execute("GRANT SELECT ON notification_delivery TO kut_app")
     op.execute("GRANT SELECT, INSERT ON notification_delivery TO kut_worker")

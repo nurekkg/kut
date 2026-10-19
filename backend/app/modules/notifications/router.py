@@ -46,9 +46,7 @@ async def read_settings(session: Db, principal: Me) -> NotifySettingsOut:
 
 
 @router.patch("/settings", response_model=NotifySettingsOut)
-async def update_settings(
-    body: NotifySettingsIn, session: Db, principal: Me
-) -> NotifySettingsOut:
+async def update_settings(body: NotifySettingsIn, session: Db, principal: Me) -> NotifySettingsOut:
     if not principal.is_internal:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
     result = await session.execute(
