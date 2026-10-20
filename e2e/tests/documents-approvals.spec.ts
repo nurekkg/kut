@@ -20,6 +20,11 @@ import {
 // с кодом 2FA, поэтому их решения и делегирование идут через вход с кодом (тот же путь, что в браузере).
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n");
 const SCAN = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Catalog /Subject (scan) >> endobj\n%%EOF\n");
+// Строки журнала считаем по событию, а не ищем текст: строки прошлых прогонов стенда не должны давать проход.
+const REQUEST_EVENT = "Нужно решение";
+function requestCount(text: string): number {
+  return text.split(REQUEST_EVENT).length - 1;
+}
 
 type Ids = { document: string; version: string };
 type Row = { position_no: number | null; name: string; unit: string; quantity: string };
@@ -161,6 +166,14 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
     [2, "92000.00"],
   ]);
 
+  // Журнал владельца открываем до отправки: число строк «Нужно решение» до неё - точка отсчёта для этого прогона.
+  const ownerContext = await desktopContext(browser);
+  const owner = await ownerContext.newPage();
+  await signInWithFreshCode(owner, "owner");
+  await owner.goto("/settings/notifications");
+  await owner.waitForLoadState("networkidle");
+  const requestsBefore = requestCount((await owner.getByTestId("notifications-journal").textContent()) ?? "");
+
   // ПТО отправляет из карточки.
   const estimatorContext = await desktopContext(browser);
   const estimator = await estimatorContext.newPage();
@@ -217,20 +230,18 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
   expect(after.current_version?.status).toBe("approved");
 
   // Журнал уведомлений (S6b): шаги отправлены в очередь; владелец видит строки с маской телефона.
-  // Рассылку делает beat раз в минуту (стенд dev, лог-адаптер), поэтому ждём несколько минут.
-  const ownerContext = await desktopContext(browser);
-  const owner = await ownerContext.newPage();
-  await signInWithFreshCode(owner, "owner");
-  await owner.goto("/settings/notifications");
+  // Рассылку делает beat раз в минуту (стенд dev, лог-адаптер), поэтому ждём несколько минут, пока
+  // строк «Нужно решение» станет больше, чем до отправки: это строки именно этого прогона.
   await expect
     .poll(
       async () => {
         await owner.reload();
-        return (await owner.getByTestId("notifications-journal").textContent()) ?? "";
+        return requestCount((await owner.getByTestId("notifications-journal").textContent()) ?? "");
       },
       { timeout: 240_000, intervals: [10_000] },
     )
-    .toContain("+996 *** *** 01");
+    .toBeGreaterThan(requestsBefore);
+  await expect(owner.getByTestId("notifications-journal")).toContainText("+996 *** *** 01");
   await expect(owner.getByTestId("notifications-journal")).toContainText("Нужно решение");
   await fullShot(owner, "notifications-1280-journal");
   // Тот же журнал на телефоне 375 px: без горизонтальной прокрутки.

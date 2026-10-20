@@ -93,7 +93,7 @@ class WhatsAppCloudAdapter:
         if 200 <= code < 300:
             # Провайдер принял запрос: повтор создал бы дубль, поэтому идентификатор необязателен.
             try:
-                message_id: str | None = response.json()["messages"][0]["id"]
+                message_id: str | None = str(response.json()["messages"][0]["id"])[:120]
                 error_code = None
             except (ValueError, KeyError, IndexError, TypeError):
                 message_id, error_code = None, "bad_response"
@@ -121,6 +121,7 @@ def _failure(error_code: str, provider_status: int | None, *, retryable: bool) -
 
 
 def get_adapter(settings: Settings) -> NotificationAdapter:
+    validate_notification_config(settings)
     if not settings.whatsapp_enabled:
         return LogNotificationAdapter()
     phone_number_id, access_token = _whatsapp_credentials(settings)

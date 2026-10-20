@@ -17,7 +17,7 @@ from httpx import AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 import app.modules.notifications.tasks  # noqa: F401
 from app.core.config import get_settings
@@ -633,6 +633,38 @@ async def test_an_adapter_error_is_retried_and_does_not_stop_the_batch(
     )
     assert _state(worker_sync_engine, queued.id)[:2] == ("queued", 1)
     assert _last_error(worker_sync_engine, queued.id) == "adapter_error"
+
+
+async def test_a_failed_record_leaves_the_row_queued_and_does_not_stop_the_batch(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Сбой записи результата откатывает только эту строку: она остаётся в очереди после аренды."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, document, version)
+    (queued,) = _outbox(worker_sync_engine, version, position=1)
+
+    def broken_record(*args: object, **kwargs: object) -> None:
+        raise SQLAlchemyError("запись результата не удалась")
+
+    monkeypatch.setattr("app.modules.notifications.dispatch._record", broken_record)
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    assert (
+        dispatch_due(
+            worker_sync_engine,
+            LogNotificationAdapter(),
+            base_url=BASE_URL,
+            now=start,
+            ids=[queued.id],
+        )
+        == 1
+    )
+    assert _state(worker_sync_engine, queued.id)[:2] == ("queued", 0)
+    assert _deliveries(worker_sync_engine, queued.id) == []
 
 
 async def test_an_answer_without_a_message_id_is_sent_and_never_repeated(

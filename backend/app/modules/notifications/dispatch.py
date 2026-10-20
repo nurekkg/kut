@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.documents.types import KINDS
 from app.modules.notifications.adapters import NotificationAdapter, SendResult, mask_phone
@@ -81,7 +82,9 @@ def dispatch_due(
     """Одна пачка очереди. Время передаётся параметром: повторы проверяются без реального ожидания.
 
     Строки арендуются короткой транзакцией, затем каждая отправляется и фиксируется отдельно:
-    сбой на одной строке не откатывает уже отправленные и не даёт повторной отправки чужих строк.
+    сбой записи одной строки не откатывает чужие и не останавливает пачку. Если провайдер принял
+    сообщение, а результат не дошёл до COMMIT, строка вернётся после аренды и уйдёт повторно:
+    WhatsApp Cloud API не принимает ключ идемпотентности, поэтому доставка at-least-once.
     ids ограничивает выборку (тесты); в работе не задан.
     """
     with engine.begin() as connection:
@@ -94,8 +97,11 @@ def dispatch_due(
                 LEASE_ROWS, {"until": now + LEASE, "ids": [str(row.id) for row in rows]}
             )
     for row in rows:
-        with engine.begin() as connection:
-            _deliver(connection, adapter, row, base_url=base_url, now=now)
+        try:
+            with engine.begin() as connection:
+                _deliver(connection, adapter, row, base_url=base_url, now=now)
+        except SQLAlchemyError as error:
+            logger.warning("notification record failed: %s", type(error).__name__)
     return len(rows)
 
 
