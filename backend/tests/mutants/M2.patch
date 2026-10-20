@@ -1,0 +1,13 @@
+diff --git a/backend/app/modules/notifications/dispatch.py b/backend/app/modules/notifications/dispatch.py
+index 6302d5f..c48ed2e 100644
+--- a/backend/app/modules/notifications/dispatch.py
++++ b/backend/app/modules/notifications/dispatch.py
+@@ -136,7 +136,7 @@ def _deliver(
+         _record(connection, row, attempt, result.ok_status, "sent", result.error_code, result)
+     elif result.provider_status in AUTH_STATUSES:
+         _defer(connection, row, now + TEMPLATE_WAIT, result.error_code or "config")
+-    elif result.retryable and attempt < MAX_ATTEMPTS:
++    elif attempt < MAX_ATTEMPTS:
+         next_at = now + timedelta(seconds=BACKOFF_SECONDS[attempt - 1])
+         _record(connection, row, attempt, "retry", "queued", result.error_code, result, next_at)
+     elif result.retryable:

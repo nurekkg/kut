@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py b/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
+index a9fbccf..6e64654 100644
+--- a/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
++++ b/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
+@@ -36,7 +36,7 @@ BEGIN
+             RAISE EXCEPTION 'user.notify_forbidden';
+         END IF;
+     ELSIF NEW.notify_whatsapp THEN
+-        IF NEW.id IS DISTINCT FROM actor THEN
++        IF FALSE THEN
+             RAISE EXCEPTION 'user.notify_forbidden';
+         END IF;
+     ELSIF NEW.id IS DISTINCT FROM actor AND app.user_role_code() IS DISTINCT FROM 'owner' THEN

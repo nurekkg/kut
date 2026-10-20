@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py b/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
+index 9720c73..98157e2 100644
+--- a/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
++++ b/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
+@@ -83,7 +83,7 @@ BEGIN
+     PERFORM pg_advisory_xact_lock(hashtextextended(NEW.delegator_id::text, 1));
+     IF (SELECT count(*) FROM public.document_delegation d
+         WHERE d.delegator_id = NEW.delegator_id
+-          AND d.created_at > now() - interval '1 day') >= 20 THEN
++          AND d.created_at > now() - interval '1 day') >= 100000 THEN
+         RAISE EXCEPTION 'approval.delegation_limit';
+     END IF;
+     PERFORM pg_advisory_xact_lock(hashtextextended(NEW.delegator_id::text || ':' || NEW.role_code, 0));

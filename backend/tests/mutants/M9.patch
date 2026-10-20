@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py b/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
+index 9720c73..aa8b699 100644
+--- a/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
++++ b/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
+@@ -150,7 +150,7 @@ BEGIN
+       AND EXISTS (SELECT 1 FROM public."user" u JOIN public.role r ON r.id = u.role_id
+                   WHERE u.id = dl.delegator_id AND u.is_active AND u.deleted_at IS NULL
+                     AND r.code = dl.role_code)
+-    ORDER BY (dl.delegator_id = v.created_by), dl.valid_from, dl.id
++    ORDER BY dl.valid_from, dl.id
+     LIMIT 1;
+     IF deleg IS NULL THEN
+         RAISE EXCEPTION 'approval.not_your_step';
