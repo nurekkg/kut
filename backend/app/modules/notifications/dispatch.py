@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 4  # первая попытка и три повтора
 BACKOFF_SECONDS = (30, 120, 600)  # пауза после 1-й, 2-й и 3-й неудачной попытки
-BATCH_SIZE = 20
-LEASE = timedelta(minutes=5)  # строка занята воркером на время отправки; при сбое её заберут позже
-TEMPLATE_WAIT = timedelta(hours=1)  # шаблон не одобрен: ждём, попытку не тратим
+BATCH_SIZE = 10
+LEASE = timedelta(minutes=10)  # строка занята воркером на время отправки; при сбое её заберут позже
+TEMPLATE_WAIT = timedelta(hours=1)  # шаблон не одобрен или токен неверен: ждём, попытку не тратим
+AUTH_STATUSES = frozenset({401, 403, 404})  # токен, номер или адрес сервиса: ждём исправления
 
 CLAIM = text(
     """
@@ -114,10 +115,16 @@ def _deliver(
     if adapter.requires_approved_template and row.approval != "approved":
         _defer(connection, row, now + TEMPLATE_WAIT, "template.not_approved")
         return
-    params = render_params(row.param_names, row.params, base_url)
+    try:
+        params = render_params(row.param_names, row.params, base_url)
+    except (KeyError, ValueError):
+        _record(connection, row, attempt, "failed", "failed", "render.error")
+        return
     result = _send(adapter, row, params)
     if result.ok:
         _record(connection, row, attempt, result.ok_status, "sent", result.error_code, result)
+    elif result.provider_status in AUTH_STATUSES:
+        _defer(connection, row, now + TEMPLATE_WAIT, result.error_code or "config")
     elif result.retryable and attempt < MAX_ATTEMPTS:
         next_at = now + timedelta(seconds=BACKOFF_SECONDS[attempt - 1])
         _record(connection, row, attempt, "retry", "queued", result.error_code, result, next_at)

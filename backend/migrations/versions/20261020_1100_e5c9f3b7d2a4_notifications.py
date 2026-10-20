@@ -60,6 +60,19 @@ TEMPLATES = (
     ),
 )
 
+USER_RIGHT = """
+CREATE FUNCTION app.user_documents_right(p_user uuid, p_action text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public."user" u
+        JOIN public.role_permission rp ON rp.role_id = u.role_id
+        JOIN public.permission p ON p.id = rp.permission_id
+        WHERE u.id = p_user AND p.module = 'documents' AND p.action = p_action
+          AND p.qualifier IS NULL AND rp.deleted_at IS NULL AND p.deleted_at IS NULL
+    )
+$$
+"""
+
 PERSON_OK = """
 CREATE FUNCTION app.notify_person_ok(p_user uuid, p_document uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
@@ -67,19 +80,22 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
         SELECT 1 FROM public."user" u JOIN public.role r ON r.id = u.role_id
         WHERE u.id = p_user AND u.is_active AND u.deleted_at IS NULL AND u.notify_whatsapp
           AND u.phone IS NOT NULL AND r.scope <> 'counterparty'
-          AND (p_document IS NULL OR r.scope = 'group' OR EXISTS (
-                SELECT 1 FROM public.document d
-                WHERE d.id = p_document AND d.deleted_at IS NULL AND (
-                    (d.project_id IS NOT NULL AND EXISTS (
-                        SELECT 1 FROM public.user_project_access a
-                        WHERE a.user_id = u.id AND a.project_id = d.project_id
-                          AND a.deleted_at IS NULL))
-                    OR (d.project_id IS NULL AND EXISTS (
-                        SELECT 1 FROM public.user_legal_entity_access l
-                        WHERE l.user_id = u.id AND l.legal_entity_id = d.legal_entity_id
-                          AND l.deleted_at IS NULL))))))
+          AND (p_document IS NULL OR (
+                app.user_documents_right(u.id, 'read')
+                AND (r.scope = 'group' OR EXISTS (
+                    SELECT 1 FROM public.document d
+                    WHERE d.id = p_document AND d.deleted_at IS NULL AND (
+                        (d.project_id IS NOT NULL AND EXISTS (
+                            SELECT 1 FROM public.user_project_access a
+                            WHERE a.user_id = u.id AND a.project_id = d.project_id
+                              AND a.deleted_at IS NULL))
+                        OR (d.project_id IS NULL AND EXISTS (
+                            SELECT 1 FROM public.user_legal_entity_access l
+                            WHERE l.user_id = u.id AND l.legal_entity_id = d.legal_entity_id
+                              AND l.deleted_at IS NULL))))))))
 $$
 """
+
 
 NOTIFY_USER = """
 CREATE FUNCTION app.notify_user(p_event text, p_dedup text, p_recipient uuid, p_document uuid,
@@ -127,6 +143,10 @@ BEGIN
         WHERE dl.role_code = cur_role AND dl.revoked_at IS NULL AND dl.deleted_at IS NULL
           AND dl.delegator_id IS DISTINCT FROM v.created_by
           AND app.local_today() BETWEEN dl.valid_from AND dl.valid_to
+          AND app.user_documents_right(dl.delegate_id, 'approve')
+          AND EXISTS (SELECT 1 FROM public."user" dg JOIN public.role rr ON rr.id = dg.role_id
+                      WHERE dg.id = dl.delegator_id AND dg.is_active AND dg.deleted_at IS NULL
+                        AND rr.code = dl.role_code)
     LOOP
         IF r.uid IS DISTINCT FROM v.created_by THEN
             PERFORM app.notify_user('approval_requested',
@@ -175,13 +195,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 BEGIN
     -- Уведомление получает только тот, кто может согласовать (documents:approve), и не чаще одного раза
     -- в день: замещение нельзя использовать для рассылки сообщений сотрудникам без права согласования.
-    IF EXISTS (
-        SELECT 1 FROM public."user" u
-        JOIN public.role_permission rp ON rp.role_id = u.role_id
-        JOIN public.permission p ON p.id = rp.permission_id
-        WHERE u.id = NEW.delegate_id AND p.module = 'documents' AND p.action = 'approve'
-          AND p.qualifier IS NULL AND rp.deleted_at IS NULL AND p.deleted_at IS NULL
-    ) THEN
+    IF app.user_documents_right(NEW.delegate_id, 'approve') THEN
         PERFORM app.notify_user('delegation_assigned',
             'deleg:' || NEW.delegate_id || ':' || app.local_today(),
             NEW.delegate_id, NULL, 'delegation_assigned',
@@ -203,6 +217,19 @@ RETURNS integer LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS $$
     )
     SELECT count(*)::integer FROM changed
 $$
+"""
+
+USER_NOTIFY_GUARD = """
+CREATE FUNCTION app.user_notify_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    -- Переключатель уведомлений меняется только у себя: SQL-сессия приложения не трогает чужой.
+    IF NEW.notify_whatsapp IS DISTINCT FROM OLD.notify_whatsapp
+       AND app.user_id() IS NOT NULL AND NEW.id IS DISTINCT FROM app.user_id() THEN
+        RAISE EXCEPTION 'user.notify_forbidden';
+    END IF;
+    RETURN NEW;
+END $$
 """
 
 APPEND_ONLY = """
@@ -310,6 +337,7 @@ END $$
 """
 
 FUNCTIONS = (
+    USER_RIGHT,
     PERSON_OK,
     NOTIFY_USER,
     NOTIFY_CURRENT,
@@ -317,8 +345,9 @@ FUNCTIONS = (
     NOTIFY_DELEGATION,
     APPEND_ONLY,
     APPROVE_TEMPLATE,
+    USER_NOTIFY_GUARD,
 )
-TRIGGER_FUNCTIONS = ("notify_delegation()", "notification_append_only()")
+TRIGGER_FUNCTIONS = ("notify_delegation()", "notification_append_only()", "user_notify_guard()")
 
 
 def upgrade() -> None:
@@ -485,16 +514,23 @@ def upgrade() -> None:
         "CREATE TRIGGER notification_delivery_append_only BEFORE UPDATE OR DELETE "
         "ON public.notification_delivery FOR EACH ROW EXECUTE FUNCTION app.notification_append_only()"
     )
+    op.execute(
+        'CREATE TRIGGER user_notify_guard BEFORE UPDATE OF notify_whatsapp ON public."user" '
+        "FOR EACH ROW EXECUTE FUNCTION app.user_notify_guard()"
+    )
 
 
 def downgrade() -> None:
     op.execute("DROP TRIGGER IF EXISTS notification_delivery_append_only ON notification_delivery")
+    op.execute('DROP TRIGGER IF EXISTS user_notify_guard ON "user"')
     op.execute("DROP TRIGGER IF EXISTS document_delegation_notify ON document_delegation")
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute(ROUTE_SEND_PREVIOUS)
     op.execute(DECISION_AFTER_PREVIOUS)
     op.execute("DROP FUNCTION IF EXISTS app.notification_template_approve(text, boolean)")
     for name in (
+        "user_notify_guard",
+        "user_documents_right",
         "notification_append_only",
         "notify_delegation",
         "notify_outcome",

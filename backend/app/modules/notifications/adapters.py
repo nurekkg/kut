@@ -90,7 +90,7 @@ class WhatsAppCloudAdapter:
         except httpx.HTTPError:
             return _failure("network", None, retryable=True)
         code = response.status_code
-        if code == 200:
+        if 200 <= code < 300:
             # Провайдер принял запрос: повтор создал бы дубль, поэтому идентификатор необязателен.
             try:
                 message_id: str | None = response.json()["messages"][0]["id"]
@@ -105,7 +105,7 @@ class WhatsAppCloudAdapter:
                 message_id=message_id,
                 error_code=error_code,
             )
-        retryable = code == 429 or code >= 500
+        retryable = code in (408, 429) or code >= 500
         return _failure(f"http_{code}", code, retryable=retryable)
 
 
@@ -135,6 +135,8 @@ def validate_notification_config(settings: Settings) -> None:
     """Включённый WhatsApp без номера или токена - ошибка при старте, не тихий отказ."""
     if settings.whatsapp_enabled:
         _whatsapp_credentials(settings)
+        if not settings.app_public_url.startswith("https://"):
+            raise RuntimeError("WHATSAPP_ENABLED=true требует APP_PUBLIC_URL по HTTPS")
 
 
 def _whatsapp_credentials(settings: Settings) -> tuple[str, str]:

@@ -172,7 +172,8 @@ RETURNS TABLE (o_user_id uuid, o_full_name text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
     WITH docs AS (
         SELECT d.id FROM public.document d
-        WHERE d.id = ANY (p_documents) AND app.is_internal() AND app.document_allowed(d.id)
+        WHERE d.id = ANY (p_documents) AND d.deleted_at IS NULL AND app.is_internal()
+          AND app.document_allowed(d.id)
     ), people AS (
         SELECT v.created_by AS uid FROM public.document_version v JOIN docs ON docs.id = v.document_id
         UNION SELECT x.actor_id FROM public.approval_decision x JOIN docs ON docs.id = x.document_id

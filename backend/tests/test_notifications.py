@@ -152,6 +152,19 @@ def _last_error(engine: Engine, outbox_id: UUID) -> str | None:
         ).scalar_one()
 
 
+async def _revoke_own_delegations(api: AsyncClient, headers: dict[str, str], role: str) -> None:
+    """Снимает свои действующие замещения по роли: пересекающиеся записи мешают другим тестам."""
+    listed = await api.get(f"{API}/documents/delegations", headers=headers)
+    assert listed.status_code == 200, listed.text
+    for row in listed.json():
+        if row["role_code"] == role and not row["revoked"]:
+            revoked = await api.post(
+                f"{API}/documents/delegations/{row['id']}/revoke",
+                headers={**headers, **idem()},
+            )
+            assert revoked.status_code == 204, revoked.text
+
+
 def _deliveries(engine: Engine, outbox_id: UUID) -> list[Any]:
     with engine.connect() as connection:
         return connection.execute(
@@ -341,6 +354,7 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
     """Замещающий с правом согласования и телефоном получает уведомление о замещении и о шаге."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     today = date.fromisoformat(_local_today(worker_sync_engine))
+    await _revoke_own_delegations(api, desk.heads["techdir"], "technical_director")
     delegated = await api.post(
         f"{API}/documents/delegations",
         json={
@@ -459,22 +473,22 @@ async def test_the_owner_switches_own_notifications_off_and_on_again(
     api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "foreman")
-    off = await api.patch(
-        f"{API}/notifications/settings",
-        json={"notify_whatsapp": False},
-        headers={**desk.heads["foreman"], **idem()},
-    )
-    assert off.status_code == 200, off.text
-    assert off.json() == {"notify_whatsapp": False, "can_notify": True}
-    on = await api.patch(
-        f"{API}/notifications/settings",
-        json={"notify_whatsapp": True},
-        headers={**desk.heads["foreman"], **idem()},
-    )
-    assert on.json()["notify_whatsapp"] is True
-
-
-# --- отправка, повторы, журнал --------------------------------------------------------------------
+    try:
+        off = await api.patch(
+            f"{API}/notifications/settings",
+            json={"notify_whatsapp": False},
+            headers={**desk.heads["foreman"], **idem()},
+        )
+        assert off.status_code == 200, off.text
+        assert off.json() == {"notify_whatsapp": False, "can_notify": True}
+    finally:
+        on = await api.patch(
+            f"{API}/notifications/settings",
+            json={"notify_whatsapp": True},
+            headers={**desk.heads["foreman"], **idem()},
+        )
+        assert on.status_code == 200, on.text
+        assert on.json()["notify_whatsapp"] is True
 
 
 async def test_a_server_error_is_retried_three_times_with_growing_pauses_then_dead(
@@ -786,3 +800,73 @@ def test_the_delivery_journal_is_append_only(
             worker_sync_engine.begin() as connection,
         ):
             connection.execute(text(statement))
+
+
+async def test_a_delegate_without_the_approval_right_gets_no_request(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    """Запрос согласования не уходит делегату без права согласования (раскрытие вида документа)."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = date.fromisoformat(_local_today(worker_sync_engine))
+    delegated = await api.post(
+        f"{API}/documents/delegations",
+        json={
+            "delegate_id": str(auth_world.users["master"]),
+            "role_code": "estimator",
+            "valid_from": str(today),
+            "valid_to": str(today + timedelta(days=1)),
+        },
+        headers={**desk.heads["estimator"], **idem()},
+    )
+    assert delegated.status_code == 201, delegated.text
+    try:
+        document, version = await _money_version(api, s3, desk, auth_world)
+        await _send(api, desk, document, version)
+        assert (await _decide(api, desk.heads["foreman"], document, version, 1)).status_code == 200
+        second = _outbox(worker_sync_engine, version, position=2)
+        assert {row.recipient_user_id for row in second} == {auth_world.users["estimator"]}
+    finally:
+        await _revoke_own_delegations(api, desk.heads["estimator"], "estimator")
+
+
+async def test_another_user_cannot_switch_my_whatsapp_flag(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    """Переключатель уведомлений меняется только у себя, даже из SQL-сессии приложения."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    context = in_context(auth_world.users["foreman"], (desk.project,), (desk.legal,))
+    with pytest.raises(DBAPIError, match=r"user\.notify_forbidden"):
+        await rows(
+            'UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)',
+            context,
+            {"u": str(auth_world.users["master"])},
+        )
+
+
+async def test_an_expired_token_waits_without_losing_the_message(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    """Истёкший токен (401) не переводит строку в failed: сообщение ждёт исправления."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, document, version)
+    (queued,) = _outbox(worker_sync_engine, version, position=1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "expired"}})
+
+    adapter = _adapter(httpx.MockTransport(handler))
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    assert (
+        dispatch_due(worker_sync_engine, adapter, base_url=BASE_URL, now=start, ids=[queued.id])
+        == 1
+    )
+    assert _state(worker_sync_engine, queued.id) == ("queued", 0, start + timedelta(hours=1))
+    assert _last_error(worker_sync_engine, queued.id) == "http_401"
+    assert _deliveries(worker_sync_engine, queued.id) == []

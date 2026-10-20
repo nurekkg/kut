@@ -1124,6 +1124,14 @@ async def test_a_delegator_creates_at_most_twenty_delegations_a_day(
     """Лимит 20 созданий за сутки на делегирующего; отозванные считаются (цикл не обходит)."""
     desk = await open_desk(api, auth_world, worker_sync_engine, "foreman", "estimator")
     today = date.fromisoformat(await local_today(worker_sync_engine))
+    with worker_sync_engine.connect() as connection:
+        existing = connection.execute(
+            text(
+                "SELECT count(*) FROM document_delegation WHERE delegator_id = CAST(:d AS uuid)"
+                " AND created_at > now() - interval '1 day'"
+            ),
+            {"d": str(auth_world.users["foreman"])},
+        ).scalar_one()
     created: list[str] = []
     refused: httpx.Response | None = None
     try:
@@ -1146,7 +1154,7 @@ async def test_a_delegator_creates_at_most_twenty_delegations_a_day(
         assert refused is not None, "лимит не сработал"
         assert refused.status_code == 429, refused.text
         assert refused.json()["detail"] == "approval.delegation_limit"
-        assert len(created) == 20
+        assert len(created) + existing == 20
     finally:
         for delegation_id in created:
             revoked = await api.post(

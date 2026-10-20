@@ -16,6 +16,8 @@ const STATUSES = ["logged", "sent", "retry", "failed", "dead"] as const;
 const ERROR_KEYS = {
   "recipient.not_notifiable": "recipient_not_notifiable",
   "template.not_approved": "template_not_approved",
+  "render.error": "render_error",
+  adapter_error: "adapter_error",
   timeout: "timeout",
   network: "network",
   bad_response: "bad_response",
@@ -42,15 +44,14 @@ export function NotificationsPanel() {
     queryFn: () => api.get<Delivery[]>(`${NOTIFICATIONS_API}/deliveries`, { limit: 200 }),
   });
 
+  // Три колонки, чтобы журнал читался на 375 px: телефон и ошибка - внутри ячейки статуса.
   const columns = useMemo<ColumnDef<Delivery, unknown>[]>(
     () => [
       {
         id: "when",
         enableSorting: false,
         header: t("when"),
-        cell: ({ row }) => (
-          <span className="whitespace-nowrap tabular-nums">{formatDateTime(row.original.created_at)}</span>
-        ),
+        cell: ({ row }) => <span className="tabular-nums">{formatDateTime(row.original.created_at)}</span>,
       },
       {
         id: "event",
@@ -64,36 +65,26 @@ export function NotificationsPanel() {
         enableSorting: false,
         header: t("status"),
         cell: ({ row }) => {
-          const status = row.original.status;
+          const { status, attempt, error_code: code, phone_masked: phone } = row.original;
+          let errorText: string | null = null;
+          if (code !== null) {
+            if (isErrorCode(code)) errorText = t(`errors.${ERROR_KEYS[code]}`);
+            else if (code.startsWith("http_")) errorText = t("errors.http", { code: code.slice("http_".length) });
+            else errorText = code;
+          }
           return (
-            <span className="inline-flex items-center gap-2">
-              {known(STATUSES, status) ? t(`statuses.${status}`) : status}
-              {row.original.attempt > 1 ? (
-                <span className="text-xs text-muted-foreground">{t("attempt", { number: row.original.attempt })}</span>
-              ) : null}
-            </span>
+            <div className="space-y-1">
+              <p className="flex flex-wrap items-center gap-2">
+                {known(STATUSES, status) ? t(`statuses.${status}`) : status}
+                {attempt > 1 ? (
+                  <span className="text-xs text-muted-foreground">{t("attempt", { number: attempt })}</span>
+                ) : null}
+              </p>
+              <p className="font-mono text-xs text-muted-foreground">{phone || common("dash")}</p>
+              {errorText ? <p className="text-xs text-muted-foreground">{errorText}</p> : null}
+            </div>
           );
         },
-      },
-      {
-        id: "error",
-        enableSorting: false,
-        header: t("error"),
-        cell: ({ row }) => {
-          const code = row.original.error_code;
-          if (code === null) return common("dash");
-          if (isErrorCode(code)) return t(`errors.${ERROR_KEYS[code]}`);
-          if (code.startsWith("http_")) return t("errors.http", { code: code.slice("http_".length) });
-          return code;
-        },
-      },
-      {
-        id: "phone",
-        enableSorting: false,
-        header: t("phone"),
-        cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.phone_masked || common("dash")}</span>
-        ),
       },
     ],
     [common, t],
