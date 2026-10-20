@@ -1,8 +1,8 @@
-diff --git a/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py b/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
-index a9fbccf..6e64654 100644
---- a/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
-+++ b/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
-@@ -36,7 +36,7 @@ BEGIN
+diff --git a/backend/migrations/versions/20261020_1300_b8d2e4f6a9c1_s6b_fix_consent_version.py b/backend/migrations/versions/20261020_1300_b8d2e4f6a9c1_s6b_fix_consent_version.py
+index 358f58b..4aa1b42 100644
+--- a/backend/migrations/versions/20261020_1300_b8d2e4f6a9c1_s6b_fix_consent_version.py
++++ b/backend/migrations/versions/20261020_1300_b8d2e4f6a9c1_s6b_fix_consent_version.py
+@@ -34,7 +34,7 @@ BEGIN
              RAISE EXCEPTION 'user.notify_forbidden';
          END IF;
      ELSIF NEW.notify_whatsapp THEN
@@ -10,4 +10,4 @@ index a9fbccf..6e64654 100644
 +        IF FALSE THEN
              RAISE EXCEPTION 'user.notify_forbidden';
          END IF;
-     ELSIF NEW.id IS DISTINCT FROM actor AND app.user_role_code() IS DISTINCT FROM 'owner' THEN
+         IF NEW.notify_whatsapp_consent_version IS NULL THEN

@@ -34,6 +34,7 @@ from app.modules.notifications.adapters import (
 from app.modules.notifications.dispatch import _record as dispatch_record
 from app.modules.notifications.dispatch import dispatch_due, render_params
 from tests.auth_support import AuthWorld
+from tests.db_support import context as user_context
 from tests.documents_support import (
     API,
     PDF,
@@ -389,9 +390,9 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
             notices = connection.execute(
                 text(
                     "SELECT recipient_user_id, event_type FROM notification_outbox"
-                    " WHERE dedup_key = :k"
+                    " WHERE dedup_key LIKE :p"
                 ),
-                {"k": f"deleg:{delegation_id}"},
+                {"p": f"deleg:{auth_world.users['finance']}:%"},
             ).all()
         assert [(row.recipient_user_id, row.event_type) for row in notices] == [
             (auth_world.users["finance"], "delegation_assigned")
@@ -413,6 +414,43 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
             headers={**desk.heads["techdir"], **idem()},
         )
         assert revoked.status_code == 204, revoked.text
+
+
+async def test_two_delegations_on_one_day_send_the_substitute_one_notice(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    """Дедуп по получателю и дню: второе замещение того же дня не даёт второго уведомления."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = date.fromisoformat(_local_today(worker_sync_engine))
+    await _revoke_own_delegations(api, desk.heads["techdir"], "technical_director")
+    created: list[str] = []
+    try:
+        for offset in (0, 10):
+            delegated = await api.post(
+                f"{API}/documents/delegations",
+                json={
+                    "delegate_id": str(auth_world.users["finance"]),
+                    "role_code": "technical_director",
+                    "valid_from": str(today + timedelta(days=offset)),
+                    "valid_to": str(today + timedelta(days=offset + 2)),
+                },
+                headers={**desk.heads["techdir"], **idem()},
+            )
+            assert delegated.status_code == 201, delegated.text
+            created.append(delegated.json()["id"])
+        with worker_sync_engine.connect() as connection:
+            count = connection.execute(
+                text("SELECT count(*) FROM notification_outbox WHERE dedup_key LIKE :p"),
+                {"p": f"deleg:{auth_world.users['finance']}:%"},
+            ).scalar_one()
+        assert count == 1
+    finally:
+        for delegation_id in created:
+            revoked = await api.post(
+                f"{API}/documents/delegations/{delegation_id}/revoke",
+                headers={**desk.heads["techdir"], **idem()},
+            )
+            assert revoked.status_code == 204, revoked.text
 
 
 async def test_a_delegate_without_the_approval_right_gets_no_notice(
@@ -441,8 +479,8 @@ async def test_a_delegate_without_the_approval_right_gets_no_notice(
     try:
         with worker_sync_engine.connect() as connection:
             count = connection.execute(
-                text("SELECT count(*) FROM notification_outbox WHERE dedup_key = :k"),
-                {"k": f"deleg:{delegated.json()['id']}"},
+                text("SELECT count(*) FROM notification_outbox WHERE dedup_key LIKE :p"),
+                {"p": f"deleg:{auth_world.users['master']}:%"},
             ).scalar_one()
         assert count == 0
     finally:
@@ -986,21 +1024,15 @@ def test_whatsapp_is_off_by_default_and_no_colleague_consented_by_accident(
 async def test_another_user_cannot_enable_my_whatsapp_flag(
     api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
 ) -> None:
-    """Чужой переключатель не включается из SQL-сессии приложения: строки для неё нет (RLS)."""
+    """Владелец не включает уведомления за другого: согласие даёт сам пользователь (гард БД)."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
-    context = in_context(auth_world.users["foreman"], (desk.project,), (desk.legal,))
-    colleague = {"u": str(auth_world.users["master"])}
-    touched = await rows(
-        'UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid) RETURNING id',
-        context,
-        colleague,
-    )
-    assert touched == []
-    with worker_sync_engine.connect() as connection:
-        flag = connection.execute(
-            text('SELECT notify_whatsapp FROM "user" WHERE id = CAST(:u AS uuid)'), colleague
-        ).scalar_one()
-    assert flag is False
+    owner = user_context(auth_world.users["owner"], projects={desk.project}, all_users=True)
+    with pytest.raises(DBAPIError, match=r"user\.notify_forbidden"):
+        await rows(
+            'UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid)',
+            owner,
+            {"u": str(auth_world.users["master"])},
+        )
 
 
 async def test_a_withdrawn_consent_creates_no_new_row(
