@@ -44,6 +44,7 @@ export type AdminUser = {
   legal_entity_ids: string[];
   notify_whatsapp: boolean;
   notify_whatsapp_consent_at: string | null;
+  notify_whatsapp_consent_version: string | null;
 };
 
 export type Invite = { path: string; expires_at: string };

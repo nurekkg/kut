@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, LargeBinary, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, LargeBinary, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base import BusinessBase
@@ -30,6 +30,7 @@ class User(BusinessBase):
     notify_whatsapp: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     notify_whatsapp_consent_at: Mapped[datetime | None] = mapped_column(default=None)
     notify_whatsapp_revoked_at: Mapped[datetime | None] = mapped_column(default=None)
+    notify_whatsapp_consent_version: Mapped[str | None] = mapped_column(Text, default=None)
 
     __table_args__ = (
         CheckConstraint("phone IS NOT NULL OR email IS NOT NULL", name="contact_required"),

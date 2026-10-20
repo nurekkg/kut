@@ -11,7 +11,12 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useMyDelegations } from "@/lib/documents/queries";
 import { formatDate, formatDateTime } from "@/lib/format";
-import { NOTIFICATIONS_API, NOTIFY_SETTINGS_KEY, type NotifySettings } from "@/lib/notifications/types";
+import {
+  CONSENT_TEXT_VERSION,
+  NOTIFICATIONS_API,
+  NOTIFY_SETTINGS_KEY,
+  type NotifySettings,
+} from "@/lib/notifications/types";
 import { isRole } from "@/lib/roles";
 
 export function ProfileView() {
@@ -32,7 +37,10 @@ export function ProfileView() {
 
   const save = useMutation({
     mutationFn: (value: boolean) =>
-      api.patch<NotifySettings>(`${NOTIFICATIONS_API}/settings`, { notify_whatsapp: value }),
+      api.patch<NotifySettings>(`${NOTIFICATIONS_API}/settings`, {
+        notify_whatsapp: value,
+        consent_text_version: CONSENT_TEXT_VERSION,
+      }),
     onSuccess: (data) => {
       queryClient.setQueryData([...NOTIFY_SETTINGS_KEY], data);
       setConsenting(false);

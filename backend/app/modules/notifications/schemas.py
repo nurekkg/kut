@@ -25,9 +25,11 @@ class NotifySettingsOut(BaseModel):
     can_notify: bool
     consent_at: datetime | None = None
     revoked_at: datetime | None = None
+    consent_text_version: str | None = None
 
 
 class NotifySettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     notify_whatsapp: bool
+    consent_text_version: str | None = None

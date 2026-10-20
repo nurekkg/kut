@@ -124,6 +124,7 @@ class UserAdminOut(BaseModel):
     legal_entity_ids: list[uuid.UUID]
     notify_whatsapp: bool
     notify_whatsapp_consent_at: datetime | None
+    notify_whatsapp_consent_version: str | None = None
 
 
 class RoleChange(_Strict):

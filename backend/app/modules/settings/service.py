@@ -253,6 +253,7 @@ async def list_users(
             User.counterparty_id,
             User.notify_whatsapp,
             User.notify_whatsapp_consent_at,
+            User.notify_whatsapp_consent_version,
             Counterparty.name.label("counterparty_name"),
             Role.id.label("role_id"),
             Role.code.label("role"),
@@ -327,6 +328,7 @@ async def list_users(
             legal_entity_ids=entities.get(row.id, []),
             notify_whatsapp=row.notify_whatsapp,
             notify_whatsapp_consent_at=row.notify_whatsapp_consent_at,
+            notify_whatsapp_consent_version=row.notify_whatsapp_consent_version,
         )
         for row in rows
     ]

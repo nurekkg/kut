@@ -114,7 +114,10 @@ export function UsersPanel() {
             <div className="space-y-1.5 text-sm">
               <p>
                 {user.notify_whatsapp_consent_at
-                  ? t("whatsappOn", { date: formatDateTime(user.notify_whatsapp_consent_at) })
+                  ? t("whatsappOn", {
+                      date: formatDateTime(user.notify_whatsapp_consent_at),
+                      version: user.notify_whatsapp_consent_version ?? common("dash"),
+                    })
                   : t("whatsappOnNoDate")}
               </p>
               <Button

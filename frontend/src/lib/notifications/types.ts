@@ -3,6 +3,8 @@ export const NOTIFICATIONS_API = "/api/v1/notifications";
 export const DELIVERIES_KEY = ["notifications", "deliveries"] as const;
 export const NOTIFY_SETTINGS_KEY = ["notifications", "settings"] as const;
 
+export const CONSENT_TEXT_VERSION = "2026-10-20-v1";
+
 export type Delivery = {
   id: string;
   created_at: string;
@@ -24,4 +26,5 @@ export type NotifySettings = {
   can_notify: boolean;
   consent_at: string | null;
   revoked_at: string | null;
+  consent_text_version: string | null;
 };

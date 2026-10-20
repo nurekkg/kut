@@ -327,6 +327,7 @@ async def test_the_user_list_shows_the_security_state_but_never_a_secret(
         "id", "full_name", "email", "phone", "role_id", "role", "role_name", "scope", "is_active",
         "mfa_enabled", "requires_2fa", "pending_activation", "counterparty_id", "counterparty_name",
         "project_ids", "legal_entity_ids", "notify_whatsapp", "notify_whatsapp_consent_at",
+        "notify_whatsapp_consent_version",
     }  # fmt: skip
 
 

@@ -17,6 +17,14 @@ BATCH_SIZE = 10
 LEASE = timedelta(minutes=10)  # строка занята воркером на время отправки; при сбое её заберут позже
 TEMPLATE_WAIT = timedelta(hours=1)  # шаблон не одобрен или токен неверен: ждём, попытку не тратим
 AUTH_STATUSES = frozenset({401, 403, 404})  # токен, номер или адрес сервиса: ждём исправления
+# откладываний одной строки (около суток при паузе в час), потом строка уходит в failed
+MAX_DEFERRALS = 24
+COUNT_DEFERRALS = text(
+    """
+    SELECT count(*) FROM notification_delivery
+    WHERE outbox_id = :id AND status = 'deferred'
+    """
+)
 
 CLAIM = text(
     """
@@ -188,6 +196,10 @@ def _send(adapter: NotificationAdapter, row: Any, params: list[str]) -> SendResu
 
 
 def _defer(connection: Connection, row: Any, next_at: datetime, error_code: str) -> None:
+    deferred = connection.execute(COUNT_DEFERRALS, {"id": row.id}).scalar_one()
+    if deferred >= MAX_DEFERRALS:
+        _record(connection, row, row.attempts + 1, "failed", "failed", "deferred.expired")
+        return
     connection.execute(DEFER_OUTBOX, {"id": row.id, "next_at": next_at, "error_code": error_code})
     connection.execute(
         INSERT_DELIVERY,
