@@ -1,5 +1,7 @@
 import type { APIRequestContext, Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 
 import { apiLogin, CONSENT_TEXT_VERSION, get, jwtSubject, type Session } from "../helpers/api";
 import { createDocument, DOCUMENTS, documentById, uploadVersion } from "../helpers/documents";
@@ -43,19 +45,29 @@ function withKey(session: Session): Record<string, string> {
 }
 
 // Код 2FA действует одно окно (30 с) и повторно не принимается: если этот человек уже входил в текущем окне,
-// ждём следующее. Карта живёт в одном процессе; сценарии идут по очереди (workers: 1).
-const usedWindow = new Map<string, number>();
+// ждём следующее. Окна пишем в файл: Playwright перезапускает воркер после упавшего сценария, и память
+// воркера тогда пуста - следующий вход брал бы тот же код, что уже принят сервером (401, затем 429 на весь прогон).
+const USED_WINDOWS = path.join(__dirname, "..", "artifacts", "2fa-windows.json");
+
+function usedWindow(user: string): number | undefined {
+  if (!fs.existsSync(USED_WINDOWS)) return undefined;
+  return (JSON.parse(fs.readFileSync(USED_WINDOWS, "utf8")) as Record<string, number>)[user];
+}
+
+function rememberWindow(user: string, window: number): void {
+  const all = fs.existsSync(USED_WINDOWS)
+    ? (JSON.parse(fs.readFileSync(USED_WINDOWS, "utf8")) as Record<string, number>)
+    : {};
+  fs.mkdirSync(path.dirname(USED_WINDOWS), { recursive: true });
+  fs.writeFileSync(USED_WINDOWS, JSON.stringify({ ...all, [user]: window }));
+}
 
 async function freshCode(user: string): Promise<string> {
   const window = () => Math.floor(Date.now() / 30_000);
-  const before = usedWindow.get(user) ?? null;
-  let slept = 0;
-  if (usedWindow.get(user) === window()) {
-    slept = 30_000 - (Date.now() % 30_000) + 500;
-    await new Promise((resolve) => setTimeout(resolve, slept));
+  if (usedWindow(user) === window()) {
+    await new Promise((resolve) => setTimeout(resolve, 30_000 - (Date.now() % 30_000) + 500));
   }
-  usedWindow.set(user, window());
-  console.log(`[2fa-diag] ${new Date().toISOString()} user=${user} before=${before} window=${window()} slept=${slept}`);
+  rememberWindow(user, window());
   return totp(TOTP_SECRET);
 }
 
