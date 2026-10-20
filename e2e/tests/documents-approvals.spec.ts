@@ -48,10 +48,14 @@ const usedWindow = new Map<string, number>();
 
 async function freshCode(user: string): Promise<string> {
   const window = () => Math.floor(Date.now() / 30_000);
+  const before = usedWindow.get(user) ?? null;
+  let slept = 0;
   if (usedWindow.get(user) === window()) {
-    await new Promise((resolve) => setTimeout(resolve, 30_000 - (Date.now() % 30_000) + 500));
+    slept = 30_000 - (Date.now() % 30_000) + 500;
+    await new Promise((resolve) => setTimeout(resolve, slept));
   }
   usedWindow.set(user, window());
+  console.log(`[2fa-diag] ${new Date().toISOString()} user=${user} before=${before} window=${window()} slept=${slept}`);
   return totp(TOTP_SECRET);
 }
 
