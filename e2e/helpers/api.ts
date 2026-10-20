@@ -24,6 +24,8 @@ async function resilient(label: string, send: () => Promise<APIResponse>): Promi
 // Подготовка данных и проверка итогов идут через тот же прокси веба (/api/v1), что и браузер.
 export type Session = { token: string };
 
+export const CONSENT_TEXT_VERSION = "2026-10-20-v1";
+
 export async function apiLogin(request: APIRequestContext, user: string): Promise<Session> {
   const response = await resilient("вход", () =>
     request.post("/api/v1/auth/login", {

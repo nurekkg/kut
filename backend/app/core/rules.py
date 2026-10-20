@@ -148,6 +148,7 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "approval.delegation_overlap": (409, "approval.delegation_overlap"),
     "approval.delegation_limit": (429, "approval.delegation_limit"),
     "user.notify_forbidden": (403, "forbidden"),
+    "user.consent_version_required": (422, "consent.version_required"),
     "approval.delegation_not_found": (404, "not_found"),
     "document.parent_not_approved": (409, "document.parent_not_approved"),
 }

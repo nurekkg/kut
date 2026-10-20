@@ -31,8 +31,10 @@ from app.modules.notifications.adapters import (
     mask_phone,
     validate_notification_config,
 )
+from app.modules.notifications.dispatch import _record as dispatch_record
 from app.modules.notifications.dispatch import dispatch_due, render_params
 from tests.auth_support import AuthWorld
+from tests.db_support import context as user_context
 from tests.documents_support import (
     API,
     PDF,
@@ -414,6 +416,43 @@ async def test_a_substitute_is_notified_of_the_step_and_of_the_delegation(
         assert revoked.status_code == 204, revoked.text
 
 
+async def test_two_delegations_on_one_day_send_the_substitute_one_notice(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    """Дедуп по получателю и дню: второе замещение того же дня не даёт второго уведомления."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    today = date.fromisoformat(_local_today(worker_sync_engine))
+    await _revoke_own_delegations(api, desk.heads["techdir"], "technical_director")
+    created: list[str] = []
+    try:
+        for offset in (0, 10):
+            delegated = await api.post(
+                f"{API}/documents/delegations",
+                json={
+                    "delegate_id": str(auth_world.users["finance"]),
+                    "role_code": "technical_director",
+                    "valid_from": str(today + timedelta(days=offset)),
+                    "valid_to": str(today + timedelta(days=offset + 2)),
+                },
+                headers={**desk.heads["techdir"], **idem()},
+            )
+            assert delegated.status_code == 201, delegated.text
+            created.append(delegated.json()["id"])
+        with worker_sync_engine.connect() as connection:
+            count = connection.execute(
+                text("SELECT count(*) FROM notification_outbox WHERE dedup_key LIKE :p"),
+                {"p": f"deleg:{auth_world.users['finance']}:%"},
+            ).scalar_one()
+        assert count == 1
+    finally:
+        for delegation_id in created:
+            revoked = await api.post(
+                f"{API}/documents/delegations/{delegation_id}/revoke",
+                headers={**desk.heads["techdir"], **idem()},
+            )
+            assert revoked.status_code == 204, revoked.text
+
+
 async def test_a_delegate_without_the_approval_right_gets_no_notice(
     api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
 ) -> None:
@@ -516,7 +555,7 @@ async def test_the_user_gives_and_withdraws_consent_and_the_dates_are_kept(
     finally:
         on = await api.patch(
             f"{API}/notifications/settings",
-            json={"notify_whatsapp": True},
+            json={"notify_whatsapp": True, "consent_text_version": "2026-10-20-v1"},
             headers={**desk.heads["foreman"], **idem()},
         )
         assert on.status_code == 200, on.text
@@ -904,7 +943,7 @@ async def test_a_delegate_without_the_approval_right_gets_no_request(
 async def test_another_user_cannot_switch_my_whatsapp_flag(
     api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
 ) -> None:
-    """Переключатель уведомлений меняется только у себя, даже из SQL-сессии приложения."""
+    """Чужой переключатель не меняется из SQL-сессии приложения: строки для неё нет (RLS)."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     context = in_context(auth_world.users["foreman"], (desk.project,), (desk.legal,))
     master = {"u": str(auth_world.users["master"])}
@@ -913,12 +952,17 @@ async def test_another_user_cannot_switch_my_whatsapp_flag(
             text('UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid)'), master
         )
     try:
-        with pytest.raises(DBAPIError, match=r"user\.notify_forbidden"):
-            await rows(
-                'UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)',
-                context,
-                master,
-            )
+        touched = await rows(
+            'UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid) RETURNING id',
+            context,
+            master,
+        )
+        assert touched == []
+        with worker_sync_engine.connect() as connection:
+            flag = connection.execute(
+                text('SELECT notify_whatsapp FROM "user" WHERE id = CAST(:u AS uuid)'), master
+            ).scalar_one()
+        assert flag is True
     finally:
         with worker_sync_engine.begin() as connection:
             connection.execute(
@@ -980,12 +1024,13 @@ def test_whatsapp_is_off_by_default_and_no_colleague_consented_by_accident(
 async def test_another_user_cannot_enable_my_whatsapp_flag(
     api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
 ) -> None:
+    """Владелец не включает уведомления за другого: согласие даёт сам пользователь (гард БД)."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
-    context = in_context(auth_world.users["foreman"], (desk.project,), (desk.legal,))
+    owner = user_context(auth_world.users["owner"], projects={desk.project}, all_users=True)
     with pytest.raises(DBAPIError, match=r"user\.notify_forbidden"):
         await rows(
             'UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid)',
-            context,
+            owner,
             {"u": str(auth_world.users["master"])},
         )
 
@@ -1007,7 +1052,7 @@ async def test_a_withdrawn_consent_creates_no_new_row(
     finally:
         restored = await api.patch(
             f"{API}/notifications/settings",
-            json={"notify_whatsapp": True},
+            json={"notify_whatsapp": True, "consent_text_version": "2026-10-20-v1"},
             headers={**desk.heads["foreman"], **idem()},
         )
         assert restored.status_code == 200, restored.text
@@ -1147,3 +1192,166 @@ async def test_the_delivery_journal_refuses_an_update_even_for_a_role_with_the_p
             text("SELECT has_table_privilege('kut_auth', 'notification_delivery', 'UPDATE')")
         ).scalar_one()
     assert granted is False
+
+
+async def test_enabling_needs_the_current_consent_text_version(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    """Включение фиксирует версию текста согласия рядом с датой; чужой или старый текст - 422."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, "foreman")
+    headers = desk.heads["foreman"]
+    off = await api.patch(
+        f"{API}/notifications/settings",
+        json={"notify_whatsapp": False},
+        headers={**headers, **idem()},
+    )
+    assert off.status_code == 200, off.text
+    try:
+        missing = await api.patch(
+            f"{API}/notifications/settings",
+            json={"notify_whatsapp": True},
+            headers={**headers, **idem()},
+        )
+        assert missing.status_code == 422, missing.text
+        assert missing.json()["detail"] == "consent.version_mismatch"
+        stale = await api.patch(
+            f"{API}/notifications/settings",
+            json={"notify_whatsapp": True, "consent_text_version": "2026-01-01-v0"},
+            headers={**headers, **idem()},
+        )
+        assert stale.status_code == 422, stale.text
+        on = await api.patch(
+            f"{API}/notifications/settings",
+            json={"notify_whatsapp": True, "consent_text_version": "2026-10-20-v1"},
+            headers={**headers, **idem()},
+        )
+        assert on.status_code == 200, on.text
+        assert on.json()["consent_text_version"] == "2026-10-20-v1"
+        with worker_sync_engine.connect() as connection:
+            stored = connection.execute(
+                text(
+                    'SELECT notify_whatsapp_consent_version FROM "user" WHERE id = CAST(:u AS uuid)'
+                ),
+                {"u": str(auth_world.users["foreman"])},
+            ).scalar_one()
+        assert stored == "2026-10-20-v1"
+    finally:
+        off_again = await api.patch(
+            f"{API}/notifications/settings",
+            json={"notify_whatsapp": False},
+            headers={**headers, **idem()},
+        )
+        assert off_again.status_code == 200, off_again.text
+        assert off_again.json()["consent_text_version"] == "2026-10-20-v1"
+
+
+async def test_the_app_login_changes_only_its_own_phone(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    """Политика user_update_app: прораб меняет телефон только себе, чужой не меняется через SQL."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    context = in_context(auth_world.users["foreman"], (desk.project,), (desk.legal,))
+    colleague = str(auth_world.users["master"])
+    colleague_phone = "+996555100002"
+    touched = await rows(
+        'UPDATE "user" SET phone = :p WHERE id = CAST(:u AS uuid) RETURNING id',
+        context,
+        {"p": "+996700000099", "u": colleague},
+    )
+    assert touched == []
+    with worker_sync_engine.connect() as connection:
+        phone = connection.execute(
+            text('SELECT phone FROM "user" WHERE id = CAST(:u AS uuid)'), {"u": colleague}
+        ).scalar_one()
+    assert phone == colleague_phone
+    own = str(auth_world.users["foreman"])
+    own_phone = "+996555100001"
+    try:
+        changed = await rows(
+            'UPDATE "user" SET phone = :p WHERE id = CAST(:u AS uuid) RETURNING id',
+            context,
+            {"p": "+996700000098", "u": own},
+        )
+        assert len(changed) == 1
+    finally:
+        with worker_sync_engine.begin() as connection:
+            connection.execute(
+                text('UPDATE "user" SET phone = :p WHERE id = CAST(:u AS uuid)'),
+                {"p": own_phone, "u": own},
+            )
+
+
+async def test_a_deferred_row_gives_up_after_twenty_four_deferrals(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    """Шаблон не одобрен: строку откладывают не больше 24 раз (около суток), потом failed."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, document, version)
+    (queued,) = _outbox(worker_sync_engine, version, position=1)
+    calls, transport = _count_calls()
+    adapter = _adapter(transport, approved=False)
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    for hour in range(26):
+        dispatch_due(
+            worker_sync_engine,
+            adapter,
+            base_url=BASE_URL,
+            now=start + timedelta(hours=hour),
+            ids=[queued.id],
+        )
+        if _state(worker_sync_engine, queued.id)[0] == "failed":
+            break
+    assert calls == []
+    assert _state(worker_sync_engine, queued.id)[0] == "failed"
+    assert _last_error(worker_sync_engine, queued.id) == "deferred.expired"
+    deliveries = _deliveries(worker_sync_engine, queued.id)
+    assert sum(1 for row in deliveries if row.status == "deferred") == 24
+    assert deliveries[-1].status == "failed"
+
+
+async def test_a_batch_goes_on_when_one_record_fails(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """В одной пачке две строки: сбой записи первой не останавливает вторую."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    first_doc, first_version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, first_doc, first_version)
+    second_doc, second_version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, second_doc, second_version)
+    first = _outbox(worker_sync_engine, first_version, position=1)
+    second = _outbox(worker_sync_engine, second_version, position=1)
+    queued_ids = [row.id for row in first + second]
+    assert len(queued_ids) == 2
+    real_record = dispatch_record
+    calls = {"n": 0}
+
+    def flaky_record(*args: object, **kwargs: object) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise SQLAlchemyError("запись результата не удалась")
+        real_record(*args, **kwargs)
+
+    monkeypatch.setattr("app.modules.notifications.dispatch._record", flaky_record)
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    assert (
+        dispatch_due(
+            worker_sync_engine,
+            LogNotificationAdapter(),
+            base_url=BASE_URL,
+            now=start,
+            ids=queued_ids,
+        )
+        == 2
+    )
+    states = [_state(worker_sync_engine, outbox_id)[0] for outbox_id in queued_ids]
+    assert states == ["sent", "sent"]
+    journal = [len(_deliveries(worker_sync_engine, outbox_id)) for outbox_id in queued_ids]
+    assert sorted(journal) == [0, 1]

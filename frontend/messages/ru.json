@@ -226,7 +226,7 @@
       "mfaOff": "2FA не настроена",
       "mfaNotRequired": "2FA не требуется",
       "colWhatsapp": "WhatsApp",
-      "whatsappOn": "Включён, согласие с {date}",
+      "whatsappOn": "Включён, согласие с {date}, текст {version}",
       "whatsappOnNoDate": "Включён",
       "whatsappOff": "Выключен",
       "whatsappTurnOff": "Выключить",

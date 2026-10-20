@@ -10,6 +10,10 @@ on:
         description: "Прогнать мутанты (job mutants: патчи из backend/tests/mutants)"
         type: boolean
         default: false
+      repeat_approvals:
+        description: "Повторов documents-approvals.spec.ts (--repeat-each); 0 - полный набор E2E"
+        type: number
+        default: 0
 
 permissions:
   contents: read
@@ -348,10 +352,16 @@ jobs:
           npx playwright install --with-deps chromium
       - name: E2E (full set, no retries)
         working-directory: e2e
+        env:
+          REPEAT_APPROVALS: ${{ inputs.repeat_approvals || 0 }}
         run: |
           export DEV_SEED_PASSWORD="$(grep '^DEV_SEED_PASSWORD=' ../.env | cut -d= -f2-)"
           export DEV_SEED_TOTP_SECRET="$(grep '^DEV_SEED_TOTP_SECRET=' ../.env | cut -d= -f2-)"
-          npx playwright test --retries=0
+          if [ "$REPEAT_APPROVALS" -gt 0 ]; then
+            npx playwright test tests/documents-approvals.spec.ts --retries=0 --repeat-each="$REPEAT_APPROVALS"
+          else
+            npx playwright test --retries=0
+          fi
       - name: Замер календаря в лог
         if: always()
         working-directory: e2e

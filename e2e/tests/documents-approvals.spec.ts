@@ -1,7 +1,9 @@
 import type { APIRequestContext, Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 
-import { apiLogin, get, jwtSubject, type Session } from "../helpers/api";
+import { apiLogin, CONSENT_TEXT_VERSION, get, jwtSubject, type Session } from "../helpers/api";
 import { createDocument, DOCUMENTS, documentById, uploadVersion } from "../helpers/documents";
 import { EAST_NAME, projectNamed, totp, TOTP_SECRET } from "../helpers/equipment";
 import { PASSWORD, today } from "../helpers/env";
@@ -20,11 +22,8 @@ import {
 // с кодом 2FA, поэтому их решения и делегирование идут через вход с кодом (тот же путь, что в браузере).
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n");
 const SCAN = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Catalog /Subject (scan) >> endobj\n%%EOF\n");
-// Строки журнала считаем по событию, а не ищем текст: строки прошлых прогонов стенда не должны давать проход.
-const REQUEST_EVENT = "Нужно решение";
-function requestCount(text: string): number {
-  return text.split(REQUEST_EVENT).length - 1;
-}
+// Строка журнала уведомлений (GET /notifications/deliveries): проверяем по документу, событию и роли.
+type Delivery = { document_id: string | null; event_type: string; recipient_role: string | null; status: string };
 
 // WhatsApp по умолчанию выключен (S6b-close). Прораб даёт согласие сам; стенд делает то же от его
 // имени через API, а проверка согласия в профиле - в notifications-consent.spec.ts.
@@ -32,7 +31,7 @@ async function foremanConsents(request: APIRequestContext): Promise<void> {
   const foreman = await apiLogin(request, "foreman");
   const response = await request.patch("/api/v1/notifications/settings", {
     headers: { Authorization: `Bearer ${foreman.token}` },
-    data: { notify_whatsapp: true },
+    data: { notify_whatsapp: true, consent_text_version: CONSENT_TEXT_VERSION },
   });
   expect(response.ok(), `согласие прораба: ${await response.text()}`).toBeTruthy();
 }
@@ -46,15 +45,29 @@ function withKey(session: Session): Record<string, string> {
 }
 
 // Код 2FA действует одно окно (30 с) и повторно не принимается: если этот человек уже входил в текущем окне,
-// ждём следующее. Карта живёт в одном процессе; сценарии идут по очереди (workers: 1).
-const usedWindow = new Map<string, number>();
+// ждём следующее. Окна пишем в файл: Playwright перезапускает воркер после упавшего сценария, и память
+// воркера тогда пуста - следующий вход брал бы тот же код, что уже принят сервером (401, затем 429 на весь прогон).
+const USED_WINDOWS = path.join(__dirname, "..", "artifacts", "2fa-windows.json");
+
+function usedWindow(user: string): number | undefined {
+  if (!fs.existsSync(USED_WINDOWS)) return undefined;
+  return (JSON.parse(fs.readFileSync(USED_WINDOWS, "utf8")) as Record<string, number>)[user];
+}
+
+function rememberWindow(user: string, window: number): void {
+  const all = fs.existsSync(USED_WINDOWS)
+    ? (JSON.parse(fs.readFileSync(USED_WINDOWS, "utf8")) as Record<string, number>)
+    : {};
+  fs.mkdirSync(path.dirname(USED_WINDOWS), { recursive: true });
+  fs.writeFileSync(USED_WINDOWS, JSON.stringify({ ...all, [user]: window }));
+}
 
 async function freshCode(user: string): Promise<string> {
   const window = () => Math.floor(Date.now() / 30_000);
-  if (usedWindow.get(user) === window()) {
+  if (usedWindow(user) === window()) {
     await new Promise((resolve) => setTimeout(resolve, 30_000 - (Date.now() % 30_000) + 500));
   }
-  usedWindow.set(user, window());
+  rememberWindow(user, window());
   return totp(TOTP_SECRET);
 }
 
@@ -178,14 +191,6 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
     [2, "92000.00"],
   ]);
 
-  // Журнал владельца открываем до отправки: число строк «Нужно решение» до неё - точка отсчёта для этого прогона.
-  const ownerContext = await desktopContext(browser);
-  const owner = await ownerContext.newPage();
-  await signInWithFreshCode(owner, "owner");
-  await owner.goto("/settings/notifications");
-  await owner.waitForLoadState("networkidle");
-  const requestsBefore = requestCount((await owner.getByTestId("notifications-journal").textContent()) ?? "");
-
   // ПТО отправляет из карточки.
   const estimatorContext = await desktopContext(browser);
   const estimator = await estimatorContext.newPage();
@@ -241,20 +246,44 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
   expect(after.effective_version_no).toBe(1);
   expect(after.current_version?.status).toBe("approved");
 
-  // Журнал уведомлений (S6b): шаги отправлены в очередь; владелец видит строки с маской телефона.
-  // Рассылку делает beat раз в минуту (стенд dev, лог-адаптер), поэтому ждём несколько минут, пока
-  // строк «Нужно решение» станет больше, чем до отправки: это строки именно этого прогона.
-  await expect
-    .poll(
-      async () => {
-        await owner.reload();
-        return requestCount((await owner.getByTestId("notifications-journal").textContent()) ?? "");
-      },
-      { timeout: 240_000, intervals: [10_000] },
-    )
-    .toBeGreaterThan(requestsBefore);
+  // Журнал уведомлений (S6b): шаг отправлен в очередь, рассылку делает beat раз в минуту (стенд dev, лог-адаптер).
+  // Ждём строку именно этого документа через API (событие approval_requested, роль foreman, статус logged).
+  // По тексту страницы не ждём: чтение DOM сразу после перезагрузки не дожидалось отрисовки таблицы
+  // (флейк, прогон 39378284671: строки в API были, счётчик в DOM - 0).
+  const ownerApi = await loginWithCode(request, "owner");
+  let lastDeliveries: Delivery[] = [];
+  try {
+    await expect
+      .poll(
+        async () => {
+          lastDeliveries = await get<Delivery[]>(request, ownerApi, "/api/v1/notifications/deliveries", {
+            limit: 200,
+          });
+          return (
+            lastDeliveries.find(
+              (row) =>
+                row.document_id === ids.document &&
+                row.event_type === "approval_requested" &&
+                row.recipient_role === "foreman",
+            )?.status ?? null
+          );
+        },
+        { timeout: 240_000, intervals: [10_000] },
+      )
+      .toBe("logged");
+  } catch (error) {
+    await test.info().attach("deliveries-api.json", {
+      body: JSON.stringify(lastDeliveries, null, 2),
+      contentType: "application/json",
+    });
+    throw error;
+  }
+  const ownerContext = await desktopContext(browser);
+  const owner = await ownerContext.newPage();
+  await signInWithFreshCode(owner, "owner");
+  await owner.goto("/settings/notifications");
+  await expect(owner.getByTestId("notifications-journal")).toContainText("Нужно решение", { timeout: 60_000 });
   await expect(owner.getByTestId("notifications-journal")).toContainText("+996 *** *** 01");
-  await expect(owner.getByTestId("notifications-journal")).toContainText("Нужно решение");
   await fullShot(owner, "notifications-1280-journal");
   // Тот же журнал на телефоне 375 px: без горизонтальной прокрутки.
   const ownerPhone = await phoneContext(browser);

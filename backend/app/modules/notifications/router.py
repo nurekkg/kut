@@ -44,10 +44,17 @@ async def deliveries(
 
 
 def _settings_out(
-    flag: bool, consent_at: datetime | None, revoked_at: datetime | None
+    flag: bool,
+    consent_at: datetime | None,
+    revoked_at: datetime | None,
+    consent_version: str | None,
 ) -> NotifySettingsOut:
     return NotifySettingsOut(
-        notify_whatsapp=flag, can_notify=True, consent_at=consent_at, revoked_at=revoked_at
+        notify_whatsapp=flag,
+        can_notify=True,
+        consent_at=consent_at,
+        revoked_at=revoked_at,
+        consent_text_version=consent_version,
     )
 
 
@@ -61,6 +68,11 @@ async def read_settings(session: Db, principal: Me) -> NotifySettingsOut:
 
 @router.patch("/settings", response_model=NotifySettingsOut)
 async def update_settings(body: NotifySettingsIn, session: Db, principal: Me) -> NotifySettingsOut:
-    if not principal.is_internal or not await service.write_own_flag(session, body.notify_whatsapp):
+    if not principal.is_internal:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+    # Включение только с текстом, который показан сейчас: версия пишется рядом с датой согласия.
+    if body.notify_whatsapp and body.consent_text_version != service.CONSENT_TEXT_VERSION:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "consent.version_mismatch")
+    if not await service.write_own_flag(session, body.notify_whatsapp, body.consent_text_version):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
     return _settings_out(*await service.read_own_settings(session))

@@ -1,6 +1,6 @@
 import type { APIRequestContext, Page } from "@playwright/test";
 
-import { apiLogin } from "../helpers/api";
+import { apiLogin, CONSENT_TEXT_VERSION } from "../helpers/api";
 import { expect, test } from "../helpers/test";
 import {
   desktopContext,
@@ -17,7 +17,7 @@ async function setForemanFlag(request: APIRequestContext, flag: boolean): Promis
   const foreman = await apiLogin(request, "foreman");
   const response = await request.patch("/api/v1/notifications/settings", {
     headers: { Authorization: `Bearer ${foreman.token}` },
-    data: { notify_whatsapp: flag },
+    data: { notify_whatsapp: flag, consent_text_version: CONSENT_TEXT_VERSION },
   });
   expect(response.ok(), `переключатель WhatsApp: ${await response.text()}`).toBeTruthy();
 }
