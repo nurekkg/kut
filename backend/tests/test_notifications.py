@@ -420,6 +420,12 @@ async def test_a_delegate_without_the_approval_right_gets_no_notice(
     """Замещение разрешено, но сообщение получает только тот, кто может согласовать."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     today = date.fromisoformat(_local_today(worker_sync_engine))
+    # Согласие делегата дано на время теста: без него строка не создалась бы и без правки права.
+    with worker_sync_engine.begin() as connection:
+        connection.execute(
+            text('UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid)'),
+            {"u": str(auth_world.users["master"])},
+        )
     delegated = await api.post(
         f"{API}/documents/delegations",
         json={
@@ -444,6 +450,11 @@ async def test_a_delegate_without_the_approval_right_gets_no_notice(
             headers={**desk.heads["techdir"], **idem()},
         )
         assert revoked.status_code == 204, revoked.text
+        with worker_sync_engine.begin() as connection:
+            connection.execute(
+                text('UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)'),
+                {"u": str(auth_world.users["master"])},
+            )
 
 
 async def test_a_user_who_switched_whatsapp_off_gets_no_row(
