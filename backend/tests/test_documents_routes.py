@@ -1119,12 +1119,13 @@ async def test_an_estimator_sees_the_names_of_the_deciders_and_a_customer_sees_n
 
 
 async def test_a_delegator_creates_at_most_twenty_delegations_a_day(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, owner_sync_engine: Engine
 ) -> None:
     """Лимит 20 созданий за сутки на делегирующего; отозванные считаются (цикл не обходит)."""
     desk = await open_desk(api, auth_world, worker_sync_engine, "foreman", "estimator")
     today = date.fromisoformat(await local_today(worker_sync_engine))
-    with worker_sync_engine.connect() as connection:
+    with owner_sync_engine.connect() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         existing = connection.execute(
             text(
                 "SELECT count(*) FROM document_delegation WHERE delegator_id = CAST(:d AS uuid)"
