@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main, 'phase-*', 'se-*', 's5*', 's6*']
+    # Документация не запускает тяжёлые jobs (backend, e2e): только markdown и docs/.
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
     inputs:
       mutants:
@@ -91,7 +94,7 @@ jobs:
           python-version: "3.12"
           working-directory: backend
           enable-cache: true
-          cache-dependency-glob: backend/uv.lock
+          cache-dependency-glob: uv.lock
       - name: Install dependencies
         run: uv sync
       - name: Ruff lint
@@ -203,7 +206,7 @@ jobs:
           python-version: "3.12"
           working-directory: backend
           enable-cache: true
-          cache-dependency-glob: backend/uv.lock
+          cache-dependency-glob: uv.lock
       - name: Install dependencies
         working-directory: backend
         run: uv sync

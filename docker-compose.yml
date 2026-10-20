@@ -185,12 +185,13 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
+      # Ping через брокер: CLI поднимает приложение (на слабой машине около 30 с), поэтому таймаут проверки 60 с.
       test:
-        ["CMD-SHELL", "celery -A app.core.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 5"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
+        ["CMD-SHELL", "celery -A app.core.celery_app:celery_app inspect ping -d celery@$$HOSTNAME --timeout 20"]
+      interval: 60s
+      timeout: 60s
+      retries: 3
+      start_period: 90s
 
   # Периодические задачи обслуживания (очистка токенов и ключей идемпотентности, партиции audit_log).
   # Только ставит задачи в очередь; выполняет их worker.
