@@ -59,7 +59,11 @@ async def detail(api: AsyncClient, desk: Desk, who: str, document_id: str) -> di
 
 
 async def test_a_sum_is_edited_on_the_draft_and_a_later_sum_is_a_new_version(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
     document = await ks2(api, desk, auth_world)
@@ -83,7 +87,7 @@ async def test_a_sum_is_edited_on_the_draft_and_a_later_sum_is_a_new_version(
     assert changed.status_code == 204, changed.text
     assert (await detail(api, desk, "estimator", document["id"]))["amount"] == "150.00"
 
-    approve(worker_sync_engine, version)
+    approve(owner_sync_engine, version)
     approved = await detail(api, desk, "estimator", document["id"])
     assert (approved["amount"], approved["effective_version_no"]) == ("150.00", 1)
     locked = await api.put(
@@ -113,7 +117,11 @@ async def test_a_sum_is_edited_on_the_draft_and_a_later_sum_is_a_new_version(
 
 
 async def test_the_application_cannot_change_a_sum_once_its_version_has_left_the_draft(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator")
     document = await ks2(api, desk, auth_world)
@@ -121,7 +129,7 @@ async def test_the_application_cannot_change_a_sum_once_its_version_has_left_the
         api, s3, document["id"], desk.heads["estimator"], PDF_OK, PDF, amount="100.00"
     )
     version = first.json()["id"]
-    approve(worker_sync_engine, version)
+    approve(owner_sync_engine, version)
 
     context = in_context(auth_world.users["estimator"], (desk.project,), (desk.legal,))
     with use_context(context):

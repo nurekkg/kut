@@ -122,6 +122,8 @@ class UserAdminOut(BaseModel):
     counterparty_name: str | None
     project_ids: list[uuid.UUID]
     legal_entity_ids: list[uuid.UUID]
+    notify_whatsapp: bool
+    notify_whatsapp_consent_at: datetime | None
 
 
 class RoleChange(_Strict):

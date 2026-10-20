@@ -26,6 +26,17 @@ function requestCount(text: string): number {
   return text.split(REQUEST_EVENT).length - 1;
 }
 
+// WhatsApp по умолчанию выключен (S6b-close). Прораб даёт согласие сам; стенд делает то же от его
+// имени через API, а проверка согласия в профиле - в notifications-consent.spec.ts.
+async function foremanConsents(request: APIRequestContext): Promise<void> {
+  const foreman = await apiLogin(request, "foreman");
+  const response = await request.patch("/api/v1/notifications/settings", {
+    headers: { Authorization: `Bearer ${foreman.token}` },
+    data: { notify_whatsapp: true },
+  });
+  expect(response.ok(), `согласие прораба: ${await response.text()}`).toBeTruthy();
+}
+
 type Ids = { document: string; version: string };
 type Row = { position_no: number | null; name: string; unit: string; quantity: string };
 type Project = { id: string; legal_entity_id: string };
@@ -152,6 +163,7 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
   request,
 }) => {
   test.setTimeout(420_000);
+  await foremanConsents(request);
   const author = await apiLogin(request, "lawyer");
   const project = await projectNamed(request, await apiLogin(request, "techdir"), EAST_NAME);
   const ids = await drafted(request, author, project, "ks2", `E2E КС-2 маршрут ${Date.now()}`);
@@ -369,6 +381,10 @@ test("замещение: финдиректор назначил владель
   });
   await expect(page.getByTestId("route-step").nth(3)).toContainText("за Финансовый директор");
   await fullShot(page, "approvals-1280-3-substitute");
+  // Мои замещения (S6b-close): замещение владельца видно в профиле вместе с именами сторон.
+  await page.goto("/profile");
+  await expect(page.getByTestId("my-delegations")).toContainText("Финансовый директор", { timeout: 20_000 });
+  await fullShot(page, "delegations-1280-profile");
 
   const revoked = await request.post(`${DOCUMENTS}/delegations/${delegationId}/revoke`, {
     headers: withKey(finance),

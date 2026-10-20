@@ -129,8 +129,11 @@ def ensure_documents(
     legal_entities: Mapping[str, uuid.UUID],
     projects: Mapping[str, uuid.UUID],
     counterparties: Mapping[str, uuid.UUID],
+    transitions: list[tuple[uuid.UUID, str]],
 ) -> dict[str, int]:
-    """Создаёт демо-документы; возвращает число строк по таблицам (для отчёта сида)."""
+    """Создаёт демо-документы; возвращает число строк по таблицам (для отчёта сида).
+    Переходы статусов не выполняет: kut_worker не вызывает app.version_move (S6b), их добавляет в
+    transitions, а сид выполняет владелец под kut_auth после коммита вставок."""
     counts = {"document": 0, "document_version": 0, "document_amount": 0, "document_link": 0}
     east, west = projects["east"], projects["west"]
     le_east, le_west = legal_entities["east"], legal_entities["west"]
@@ -265,10 +268,7 @@ def ensure_documents(
             counts["document_amount"] += 1
         if demo.approve:
             for step in ("on_approval", "approved"):
-                connection.execute(
-                    text("SELECT app.version_move(:v, :to, NULL, NULL)"),
-                    {"v": version_id, "to": step},
-                )
+                transitions.append((version_id, step))
     return counts
 
 

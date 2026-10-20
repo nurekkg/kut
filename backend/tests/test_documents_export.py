@@ -44,7 +44,7 @@ async def make(
     who: str,
     body: dict[str, Any],
     s3: httpx.AsyncClient,
-    engine: Engine,
+    owner_engine: Engine,
     *,
     approved: bool = False,
 ) -> dict[str, Any]:
@@ -65,7 +65,7 @@ async def make(
     uploaded = await upload(api, s3, document["id"], desk.heads[who], PDF_OK, PDF, amount=amount)
     assert uploaded.status_code == 201, uploaded.text
     if approved:
-        approve(engine, uploaded.json()["id"])
+        approve(owner_engine, uploaded.json()["id"])
     return document
 
 
@@ -98,7 +98,11 @@ async def test_the_foreman_and_the_subcontractor_get_no_export(
 
 
 async def test_the_accountant_downloads_the_registry_with_its_sums_as_an_attachment(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "accountant")
     customer = auth_world.counterparties[devseed.CUSTOMER]
@@ -108,7 +112,7 @@ async def test_the_accountant_downloads_the_registry_with_its_sums_as_an_attachm
         "estimator",
         {"kind": "ks2", "counterparty_id": str(customer), "amount": "98000.00"},
         s3,
-        worker_sync_engine,
+        owner_sync_engine,
         approved=True,
     )
     newer = await upload(api, s3, ks2["id"], desk.heads["estimator"], PDF_OK, PDF, amount="1000.00")
@@ -148,7 +152,7 @@ async def test_the_foreman_with_a_temporary_export_right_gets_a_file_without_sum
         "estimator",
         {"kind": "ks2", "counterparty_id": str(customer), "amount": "98000.00"},
         s3,
-        worker_sync_engine,
+        owner_sync_engine,
         approved=True,
     )
     with owner_sync_engine.begin() as connection:
@@ -180,7 +184,11 @@ async def test_the_foreman_with_a_temporary_export_right_gets_a_file_without_sum
 
 
 async def test_formulas_in_text_cells_are_escaped_and_no_cell_is_a_formula(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "accountant")
     formula = await make(
@@ -189,7 +197,7 @@ async def test_formulas_in_text_cells_are_escaped_and_no_cell_is_a_formula(
         "estimator",
         {"kind": "estimate_local", "title": '=HYPERLINK("http://example.com")'},
         s3,
-        worker_sync_engine,
+        owner_sync_engine,
     )
     mention = await make(
         api,
@@ -197,7 +205,7 @@ async def test_formulas_in_text_cells_are_escaped_and_no_cell_is_a_formula(
         "estimator",
         {"kind": "estimate_local", "title": "@cmd"},
         s3,
-        worker_sync_engine,
+        owner_sync_engine,
     )
 
     response = await export(api, desk.heads["accountant"], project_id=str(desk.project))
@@ -216,13 +224,14 @@ async def test_an_export_above_the_row_limit_is_refused_with_its_code(
     api: AsyncClient,
     auth_world: AuthWorld,
     worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
     s3: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "accountant")
     monkeypatch.setattr(service, "EXPORT_MAX_ROWS", 2)
     for _ in range(3):
-        await make(api, desk, "estimator", {"kind": "estimate_local"}, s3, worker_sync_engine)
+        await make(api, desk, "estimator", {"kind": "estimate_local"}, s3, owner_sync_engine)
 
     response = await export(api, desk.heads["accountant"], project_id=str(desk.project))
 
@@ -231,13 +240,17 @@ async def test_an_export_above_the_row_limit_is_refused_with_its_code(
 
 
 async def test_the_export_takes_the_registry_filters(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "accountant")
     approved = await make(
-        api, desk, "estimator", {"kind": "estimate_local"}, s3, worker_sync_engine, approved=True
+        api, desk, "estimator", {"kind": "estimate_local"}, s3, owner_sync_engine, approved=True
     )
-    draft = await make(api, desk, "estimator", {"kind": "estimate_local"}, s3, worker_sync_engine)
+    draft = await make(api, desk, "estimator", {"kind": "estimate_local"}, s3, owner_sync_engine)
 
     response = await export(
         api, desk.heads["accountant"], project_id=str(desk.project), status="draft"
@@ -251,7 +264,11 @@ async def test_the_export_takes_the_registry_filters(
 
 
 async def test_control_characters_in_a_title_do_not_break_the_file(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "accountant")
     doc = await make(
@@ -260,7 +277,7 @@ async def test_control_characters_in_a_title_do_not_break_the_file(
         "estimator",
         {"kind": "estimate_local", "title": "Акт\x0bКС-2"},
         s3,
-        worker_sync_engine,
+        owner_sync_engine,
     )
 
     response = await export(api, desk.heads["accountant"], project_id=str(desk.project))

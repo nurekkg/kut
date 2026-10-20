@@ -266,7 +266,11 @@ async def test_a_list_with_prices_is_replaced_only_with_the_money_right(
 
 
 async def test_the_customer_sees_positions_and_prices_of_the_approved_version_only(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "customer", "sub_a")
     document, version = await priced_draft(api, s3, desk, auth_world)
@@ -274,7 +278,7 @@ async def test_the_customer_sees_positions_and_prices_of_the_approved_version_on
     draft = await api.get(lines_url(document, version), headers=desk.heads["customer"])
     assert draft.status_code == 404, draft.text
 
-    approve(worker_sync_engine, version)
+    approve(owner_sync_engine, version)
     seen = await api.get(lines_url(document, version), headers=desk.heads["customer"])
     assert seen.status_code == 200, seen.text
     assert [item["name"] for item in seen.json()["lines"]] == ["Бетон B25", "Арматура"]
@@ -288,11 +292,15 @@ async def test_the_customer_sees_positions_and_prices_of_the_approved_version_on
 
 
 async def test_the_api_refuses_every_write_once_the_version_has_left_the_draft(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator")
     document, version = await priced_draft(api, s3, desk, auth_world)
-    approve(worker_sync_engine, version)
+    approve(owner_sync_engine, version)
     headers = desk.heads["estimator"]
 
     changed = await put_lines(api, headers, document, version, [line("Новая")])
@@ -309,11 +317,15 @@ async def test_the_api_refuses_every_write_once_the_version_has_left_the_draft(
 
 
 async def test_the_database_refuses_direct_writes_to_lines_and_prices_outside_the_draft(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator")
     document, version = await priced_draft(api, s3, desk, auth_world)
-    approve(worker_sync_engine, version)
+    approve(owner_sync_engine, version)
     context = ctx(auth_world, "estimator", desk)
     params = {"d": document, "v": version, "le": str(desk.legal), "p": str(desk.project)}
 
@@ -611,7 +623,11 @@ async def test_the_kinds_say_which_kinds_take_positions(
 
 
 async def test_the_portal_login_sees_the_lines_of_an_approved_version_only_in_sql(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "customer")
     document, version = await priced_draft(api, s3, desk, auth_world)
@@ -633,7 +649,7 @@ async def test_the_portal_login_sees_the_lines_of_an_approved_version_only_in_sq
             draft = (await session.execute(text(counts), {"v": version})).one()
     assert tuple(draft) == (0, 0), document
 
-    approve(worker_sync_engine, version)
+    approve(owner_sync_engine, version)
     with use_context(portal):
         async with get_portal_sessionmaker()() as session:
             approved = (await session.execute(text(counts), {"v": version})).one()
@@ -872,7 +888,11 @@ async def test_a_money_user_clears_a_price_and_restores_it_in_the_draft(
 
 
 async def test_the_database_refuses_clearing_outside_draft_and_deleting_a_priced_line(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
     _, version = await priced_draft(api, s3, desk, auth_world)
@@ -884,7 +904,7 @@ async def test_the_database_refuses_clearing_outside_draft_and_deleting_a_priced
             foreman,
             {"v": version},
         )
-    approve(worker_sync_engine, version)
+    approve(owner_sync_engine, version)
     estimator = ctx(auth_world, "estimator", desk)
     with pytest.raises(DBAPIError, match=r"line\.version_not_draft"):
         await write(

@@ -223,6 +223,7 @@ services:
     environment:
       <<: *backend-env
       DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      DEV_SEED_OWNER_URL: postgresql+psycopg://kut_owner:${KUT_OWNER_PASSWORD:-kut_owner_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
       TOTP_ENCRYPTION_KEYS: ${TOTP_ENCRYPTION_KEYS:-dev-1:J4WKMm-ZdEWech8b3xRh2jNaRBI8NTBQQE46PaqMRGc}
       TOTP_ACTIVE_KEY_ID: ${TOTP_ACTIVE_KEY_ID:-dev-1}
       DEV_SEED_PASSWORD: ${DEV_SEED_PASSWORD:-dev_password_change_me}

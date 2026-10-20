@@ -21,6 +21,7 @@ class SendResult:
 
 class NotificationAdapter(Protocol):
     requires_approved_template: bool
+    disabled: bool
 
     def send(self, *, to: str, template: str, language: str, params: list[str]) -> SendResult: ...
 
@@ -37,6 +38,7 @@ class LogNotificationAdapter:
     """Dev и тесты: сети нет, доставка записывается со статусом logged."""
 
     requires_approved_template = False
+    disabled = False
 
     def send(self, *, to: str, template: str, language: str, params: list[str]) -> SendResult:
         return SendResult(
@@ -49,10 +51,21 @@ class LogNotificationAdapter:
         )
 
 
+class DisabledNotificationAdapter:
+    """Production без WHATSAPP_ENABLED: отправки нет, строки получают статус disabled."""
+
+    requires_approved_template = False
+    disabled = True
+
+    def send(self, *, to: str, template: str, language: str, params: list[str]) -> SendResult:
+        raise RuntimeError("отправка выключена: адаптер disabled не отправляет")
+
+
 class WhatsAppCloudAdapter:
     """Шаблонное сообщение WhatsApp Cloud API. Токен - только в заголовке, не в логах."""
 
     requires_approved_template = True
+    disabled = False
 
     def __init__(
         self,
@@ -123,6 +136,8 @@ def _failure(error_code: str, provider_status: int | None, *, retryable: bool) -
 def get_adapter(settings: Settings) -> NotificationAdapter:
     validate_notification_config(settings)
     if not settings.whatsapp_enabled:
+        if settings.app_env == "production":
+            return DisabledNotificationAdapter()
         return LogNotificationAdapter()
     phone_number_id, access_token = _whatsapp_credentials(settings)
     return WhatsAppCloudAdapter(

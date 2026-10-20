@@ -12,9 +12,16 @@ export type Delivery = {
   status: string;
   error_code: string | null;
   phone_masked: string;
+  document_id: string | null;
+  document_number: string | null;
+  recipient_role: string | null;
+  recipient_role_name: string | null;
+  defer_until: string | null;
 };
 
 export type NotifySettings = {
   notify_whatsapp: boolean;
   can_notify: boolean;
+  consent_at: string | null;
+  revoked_at: string | null;
 };

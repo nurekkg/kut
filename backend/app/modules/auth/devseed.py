@@ -1,13 +1,16 @@
 """Демонстрационные данные для разработки: `python -m app.modules.auth.devseed`.
 
-Работает только с APP_ENV=development и под kut_worker (BYPASSRLS). Пароль берётся из
-DEV_SEED_PASSWORD, секрет TOTP владельца и финансового директора - из DEV_SEED_TOTP_SECRET
-(бухгалтер остаётся без 2FA: через него проверяется обязательная настройка при первом входе).
-Повторный запуск ничего не меняет: существующие записи не трогаются, пароли не перезаписываются.
+Работает только с APP_ENV=development и под kut_worker (BYPASSRLS). Переходы статусов версий
+выполняет владелец под kut_auth (DEV_SEED_OWNER_URL): kut_worker функции app.version_move не имеет.
+Пароль берётся из DEV_SEED_PASSWORD, секрет TOTP владельца и финансового директора - из
+DEV_SEED_TOTP_SECRET (бухгалтер остаётся без 2FA: через него проверяется обязательная настройка
+при первом входе). Повторный запуск ничего не меняет: существующие записи не трогаются, пароли не
+перезаписываются.
 """
 
 import os
 import sys
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -370,8 +373,11 @@ def seed_media(connection: Connection, report: SeedReport) -> None:
         report.add("work_photo", ensure_photos(connection, project, entity))
 
 
-def seed_documents(connection: Connection, report: SeedReport) -> None:
-    """Демо-документы: файлы идут в S3, поэтому отдельно от основного сида (как фото)."""
+def seed_documents(
+    connection: Connection, report: SeedReport, transitions: list[tuple[uuid.UUID, str]]
+) -> None:
+    """Демо-документы: файлы идут в S3, поэтому отдельно от основного сида (как фото).
+    Переходы статусов копятся в transitions и выполняются в main (владелец под kut_auth)."""
     east = _find(
         connection, "SELECT id FROM project WHERE name = :name AND deleted_at IS NULL", name=EAST
     )
@@ -397,6 +403,7 @@ def seed_documents(connection: Connection, report: SeedReport) -> None:
         legal_entities={"east": legal["east"], "west": legal["west"]},
         projects={"east": east, "west": west},
         counterparties=counterparties,
+        transitions=transitions,
     )
     for table, count in counts.items():
         if count:
@@ -448,13 +455,29 @@ def main() -> int:
         )
         return 1
     totp_secret = os.environ.get("DEV_SEED_TOTP_SECRET") or None
+    owner_url = os.environ.get("DEV_SEED_OWNER_URL", "")
+    if not owner_url:
+        print(
+            "dev seed refused: set DEV_SEED_OWNER_URL (переходы версий идут от владельца)",
+            file=sys.stderr,
+        )
+        return 1
     engine = create_engine(settings.database_url.get_secret_value())
+    transitions: list[tuple[uuid.UUID, str]] = []
     with engine.begin() as connection:
         report = seed(connection, password_hash=hash_password(password), totp_secret=totp_secret)
         seed_media(connection, report)
         seed_shifts(connection, report)
-        seed_documents(connection, report)
+        seed_documents(connection, report, transitions)
     engine.dispose()
+    owner_engine = create_engine(owner_url)
+    with owner_engine.begin() as owner:
+        owner.execute(text("SET LOCAL ROLE kut_auth"))
+        for version_id, step in transitions:
+            owner.execute(
+                text("SELECT app.version_move(:v, :to, NULL, NULL)"), {"v": version_id, "to": step}
+            )
+    owner_engine.dispose()
     print(f"dev seed: created {report.created}" if report.changed else "dev seed: nothing to do")
     return 0
 

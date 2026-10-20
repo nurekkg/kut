@@ -64,8 +64,10 @@ DEFER_OUTBOX = text(
 INSERT_DELIVERY = text(
     """
     INSERT INTO notification_delivery
-        (outbox_id, attempt, status, provider_status, provider_message_id, error_code, phone_masked)
-    VALUES (:outbox_id, :attempt, :status, :provider_status, :message_id, :error_code, :phone)
+        (outbox_id, attempt, status, provider_status, provider_message_id, error_code, phone_masked,
+         defer_until)
+    VALUES (:outbox_id, :attempt, :status, :provider_status, :message_id, :error_code, :phone,
+            CAST(:defer_until AS timestamptz))
     """
 )
 
@@ -118,6 +120,9 @@ def _deliver(
     if row.phone is None or not notifiable:
         _record(connection, row, attempt, "failed", "failed", "recipient.not_notifiable")
         return
+    if adapter.disabled:
+        _record(connection, row, attempt, "disabled", "disabled", "sending_disabled")
+        return
     if adapter.requires_approved_template and row.approval != "approved":
         _defer(connection, row, now + TEMPLATE_WAIT, "template.not_approved")
         return
@@ -161,6 +166,19 @@ def _send(adapter: NotificationAdapter, row: Any, params: list[str]) -> SendResu
 
 def _defer(connection: Connection, row: Any, next_at: datetime, error_code: str) -> None:
     connection.execute(DEFER_OUTBOX, {"id": row.id, "next_at": next_at, "error_code": error_code})
+    connection.execute(
+        INSERT_DELIVERY,
+        {
+            "outbox_id": row.id,
+            "attempt": max(row.attempts, 1),
+            "status": "deferred",
+            "provider_status": None,
+            "message_id": None,
+            "error_code": error_code,
+            "phone": mask_phone(row.phone),
+            "defer_until": next_at.isoformat(),
+        },
+    )
 
 
 def _record(
@@ -193,6 +211,7 @@ def _record(
             "message_id": result.message_id if result else None,
             "error_code": error_code,
             "phone": mask_phone(row.phone),
+            "defer_until": None,
         },
     )
 

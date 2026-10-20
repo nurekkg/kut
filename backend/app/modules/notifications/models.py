@@ -87,6 +87,7 @@ class NotificationDelivery(BusinessBase):
     provider_message_id: Mapped[str | None] = mapped_column(String(120), default=None)
     error_code: Mapped[str | None] = mapped_column(String(60), default=None)
     phone_masked: Mapped[str] = mapped_column(String(32))
+    defer_until: Mapped[datetime | None] = mapped_column(default=None)
 
     __table_args__ = (
         CheckConstraint("status IN ('logged', 'sent', 'retry', 'failed', 'dead')", name="status"),

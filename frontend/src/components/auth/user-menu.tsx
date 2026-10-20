@@ -19,17 +19,17 @@ export function UserMenu() {
   if (!user) return null;
 
   return (
-    <div className="flex items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       {logoutDialog}
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium" data-testid="user-name">
+      <div className="min-w-0 flex-1 basis-40">
+        <p className="break-words text-sm font-medium" data-testid="user-name">
           {user.full_name}
         </p>
-        <p className="truncate text-sm text-muted-foreground" data-testid="user-role">
+        <p className="break-words text-sm text-muted-foreground" data-testid="user-role">
           {isRole(user.role) ? roles(user.role) : user.role}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
         {user.permissions.includes("settings:admin") ? (
           <Link
             href="/settings/legal-entities"

@@ -244,11 +244,12 @@ async def upload(
     )
 
 
-def approve(engine: Engine, version_id: str) -> None:
-    """Утверждение без маршрута (маршруты - S6a): переходы системной сессией воркера, как у сида.
-    Приложение (kut_app) переходов статуса не выполняет: у него нет EXECUTE на функцию."""
+def approve(owner_engine: Engine, version_id: str) -> None:
+    """Утверждение без маршрута (маршруты - S6a): переходы выполняет владелец под kut_auth, как
+    сид. kut_worker функции app.version_move не имеет (S6b), kut_app переходов не выполняет."""
     for target in ("on_approval", "approved"):
-        with engine.begin() as connection:
+        with owner_engine.begin() as connection:
+            connection.execute(text("SET LOCAL ROLE kut_auth"))
             connection.execute(
                 text("SELECT app.version_move(CAST(:v AS uuid), :to, NULL, NULL)"),
                 {"v": version_id, "to": target},

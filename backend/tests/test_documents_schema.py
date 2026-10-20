@@ -168,8 +168,12 @@ async def test_the_application_cannot_move_a_version_through_the_worker_function
         )
 
 
-async def test_the_worker_path_follows_the_route_of_the_statuses(
-    api: AsyncClient, worker_sync_engine: Engine, auth_world: AuthWorld, s3: httpx.AsyncClient
+async def test_the_owner_path_follows_the_route_of_the_statuses(
+    api: AsyncClient,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    auth_world: AuthWorld,
+    s3: httpx.AsyncClient,
 ) -> None:
     legal, _code, identifier, heads = await _setup(
         api, auth_world, worker_sync_engine, ("estimator",)
@@ -177,22 +181,33 @@ async def test_the_worker_path_follows_the_route_of_the_statuses(
     document_id = await _draft(api, heads["estimator"], legal, identifier)
     version_id = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
     with (
-        pytest.raises(DBAPIError, match=r"document\.transition_invalid"),
+        pytest.raises(DBAPIError, match="permission denied"),
         worker_sync_engine.begin() as connection,
     ):
+        connection.execute(
+            text("SELECT app.version_move(CAST(:v AS uuid), 'on_approval', NULL, NULL)"),
+            {"v": version_id},
+        )
+    with (
+        pytest.raises(DBAPIError, match=r"document\.transition_invalid"),
+        owner_sync_engine.begin() as connection,
+    ):
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         connection.execute(
             text("SELECT app.version_move(CAST(:v AS uuid), 'approved', NULL, NULL)"),
             {"v": version_id},
         )
-    with worker_sync_engine.begin() as connection:
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         connection.execute(
             text("SELECT app.version_move(CAST(:v AS uuid), 'on_approval', NULL, NULL)"),
             {"v": version_id},
         )
     with (
         pytest.raises(DBAPIError, match=r"document\.comment_required"),
-        worker_sync_engine.begin() as connection,
+        owner_sync_engine.begin() as connection,
     ):
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         connection.execute(
             text("SELECT app.version_move(CAST(:v AS uuid), 'draft', ' ', NULL)"),
             {"v": version_id},

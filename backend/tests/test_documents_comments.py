@@ -63,8 +63,9 @@ async def comment_as(
     return await rows(sql, context, {"v": version})
 
 
-def transit(engine: Engine, version: str, target: str, comment: str | None) -> None:
-    with engine.begin() as connection:
+def transit(owner_engine: Engine, version: str, target: str, comment: str | None) -> None:
+    with owner_engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         connection.execute(
             text("SELECT app.version_move(CAST(:v AS uuid), :to, :comment, NULL)"),
             {"v": version, "to": target, "comment": comment},
@@ -128,15 +129,19 @@ async def test_the_foreman_reads_the_comment_of_a_non_financial_document(
 
 
 async def test_the_status_journal_shows_statuses_to_the_foreman_and_hides_the_comments(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
     document = await financial_document(api, desk, auth_world)
     uploaded = await upload(api, s3, document["id"], desk.heads["estimator"], PDF_OK, PDF)
     assert uploaded.status_code == 201, uploaded.text
     version = uploaded.json()["id"]
-    transit(worker_sync_engine, version, "on_approval", "Передано на согласование")
-    transit(worker_sync_engine, version, "approved", None)
+    transit(owner_sync_engine, version, "on_approval", "Передано на согласование")
+    transit(owner_sync_engine, version, "approved", None)
 
     events = (
         await api.get(f"{API}/documents/{document['id']}/events", headers=desk.heads["foreman"])

@@ -292,7 +292,7 @@ async def test_schema_functions_are_executable_only_by_the_logins_that_need_them
         assert not await can("kut_app", "app.ensure_audit_partitions(integer)")
         assert not await can("kut_portal", "app.ensure_audit_partitions(integer)")
         assert not await can("kut_worker", "app.document_version_transition(uuid,text,text)")
-        assert await can("kut_worker", "app.version_move(uuid,text,text,uuid)")
+        assert not await can("kut_worker", "app.version_move(uuid,text,text,uuid)")
         assert await can("kut_app", "app.document_person_names(uuid[])")
         assert not await can("kut_portal", "app.document_person_names(uuid[])")
 

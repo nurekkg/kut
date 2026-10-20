@@ -1163,3 +1163,69 @@ async def test_a_delegator_creates_at_most_twenty_delegations_a_day(
                 headers={**desk.heads["foreman"], **idem()},
             )
             assert revoked.status_code == 204, revoked.text
+
+
+def _start_yesterday(owner_sync_engine: Engine, delegation_id: str, today: str) -> None:
+    """Тестовая правка периода: замещение автора начинается раньше замещения коллеги."""
+    yesterday = str(date.fromisoformat(today) - timedelta(days=1))
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("ALTER TABLE document_delegation DISABLE TRIGGER USER"))
+    try:
+        with owner_sync_engine.begin() as connection:
+            connection.execute(text("SET LOCAL ROLE kut_auth"))
+            connection.execute(
+                text(
+                    "UPDATE document_delegation SET valid_from = CAST(:f AS date)"
+                    " WHERE id = CAST(:i AS uuid)"
+                ),
+                {"f": yesterday, "i": delegation_id},
+            )
+    finally:
+        with owner_sync_engine.begin() as connection:
+            connection.execute(text("ALTER TABLE document_delegation ENABLE TRIGGER USER"))
+
+
+async def test_a_delegation_of_the_author_does_not_hide_a_colleagues_delegation(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    """Два держателя роли «прораб»: замещение автора версии выбирается последним, решает коллега."""
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK, "foreman2")
+    today = await local_today(worker_sync_engine)
+    tomorrow = str(date.fromisoformat(today) + timedelta(days=1))
+    period = {
+        "delegate_id": str(auth_world.users["estimator"]),
+        "role_code": "foreman",
+        "valid_from": today,
+        "valid_to": tomorrow,
+    }
+    own = await api.post(
+        f"{API}/documents/delegations", json=period, headers={**desk.heads["foreman"], **idem()}
+    )
+    assert own.status_code == 201, own.text
+    _start_yesterday(owner_sync_engine, own.json()["id"], today)
+    colleague = await api.post(
+        f"{API}/documents/delegations",
+        json=period,
+        headers={**desk.heads["foreman2"], **idem()},
+    )
+    assert colleague.status_code == 201, colleague.text
+    try:
+        document, version = await money_version(api, s3, desk, "foreman", auth_world)
+        sent = await send(api, desk.heads["foreman"], document, version)
+        assert sent.status_code == 200, sent.text
+        decided = await decide(api, desk.heads["estimator"], document, version, 1, "approve")
+        assert decided.status_code == 200, decided.text
+        last = decided.json()["decisions"][-1]
+        assert last["actor_name"] == "Сметчик (dev)"
+        assert last["on_behalf_of_name"] == "Прораб Восток-2 (dev)"
+    finally:
+        for delegation, who in ((own, "foreman"), (colleague, "foreman2")):
+            revoked = await api.post(
+                f"{API}/documents/delegations/{delegation.json()['id']}/revoke",
+                headers={**desk.heads[who], **idem()},
+            )
+            assert revoked.status_code == 204, revoked.text

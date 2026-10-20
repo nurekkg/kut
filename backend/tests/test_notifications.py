@@ -23,6 +23,7 @@ import app.modules.notifications.tasks  # noqa: F401
 from app.core.config import get_settings
 from app.modules.auth import devseed
 from app.modules.notifications.adapters import (
+    DisabledNotificationAdapter,
     LogNotificationAdapter,
     SendResult,
     WhatsAppCloudAdapter,
@@ -64,6 +65,11 @@ STEP_PHONES = {
 }
 
 
+# WhatsApp по умолчанию выключен (S6b-close). Прораб и роли шагов дают согласие на время теста: флаг
+# ставит тот же гард БД, что и при включении в профиле (дата согласия пишется в строку).
+CONSENTED = ("foreman", *STEP_PHONES)
+
+
 @pytest.fixture(autouse=True)
 def step_roles_have_phones(worker_sync_engine: Engine, auth_world: AuthWorld) -> Iterator[None]:
     def set_phones(phones: dict[str, str | None]) -> None:
@@ -74,10 +80,20 @@ def step_roles_have_phones(worker_sync_engine: Engine, auth_world: AuthWorld) ->
                     {"p": phone, "u": str(auth_world.users[login])},
                 )
 
+    def set_consent(flag: bool) -> None:
+        with worker_sync_engine.begin() as connection:
+            for login in CONSENTED:
+                connection.execute(
+                    text('UPDATE "user" SET notify_whatsapp = :f WHERE id = CAST(:u AS uuid)'),
+                    {"f": flag, "u": str(auth_world.users[login])},
+                )
+
     set_phones(dict(STEP_PHONES))
+    set_consent(True)
     try:
         yield
     finally:
+        set_consent(False)
         set_phones({login: None for login in STEP_PHONES})
 
 
@@ -169,7 +185,7 @@ def _deliveries(engine: Engine, outbox_id: UUID) -> list[Any]:
     with engine.connect() as connection:
         return connection.execute(
             text(
-                "SELECT attempt, status, error_code, phone_masked, provider_status"
+                "SELECT attempt, status, error_code, phone_masked, provider_status, defer_until"
                 " FROM notification_delivery WHERE outbox_id = :o ORDER BY attempt"
             ),
             {"o": outbox_id},
@@ -469,9 +485,10 @@ async def test_the_settings_switch_is_refused_to_the_portal(
     assert changed.status_code == 403, changed.text
 
 
-async def test_the_owner_switches_own_notifications_off_and_on_again(
+async def test_the_user_gives_and_withdraws_consent_and_the_dates_are_kept(
     api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
 ) -> None:
+    """Согласие: включает сам сотрудник, дату согласия ставит гард; отзыв ставит дату отзыва."""
     desk = await open_desk(api, auth_world, worker_sync_engine, "foreman")
     try:
         off = await api.patch(
@@ -480,7 +497,10 @@ async def test_the_owner_switches_own_notifications_off_and_on_again(
             headers={**desk.heads["foreman"], **idem()},
         )
         assert off.status_code == 200, off.text
-        assert off.json() == {"notify_whatsapp": False, "can_notify": True}
+        withdrawn = off.json()
+        assert withdrawn["notify_whatsapp"] is False
+        assert withdrawn["can_notify"] is True
+        assert withdrawn["revoked_at"] is not None
     finally:
         on = await api.patch(
             f"{API}/notifications/settings",
@@ -489,6 +509,7 @@ async def test_the_owner_switches_own_notifications_off_and_on_again(
         )
         assert on.status_code == 200, on.text
         assert on.json()["notify_whatsapp"] is True
+        assert on.json()["consent_at"] is not None
 
 
 async def test_a_server_error_is_retried_three_times_with_growing_pauses_then_dead(
@@ -604,13 +625,17 @@ async def test_an_unapproved_template_waits_without_spending_an_attempt(
     assert calls == []
     assert _state(worker_sync_engine, queued.id) == ("queued", 0, start + timedelta(hours=1))
     assert _last_error(worker_sync_engine, queued.id) == "template.not_approved"
-    assert _deliveries(worker_sync_engine, queued.id) == []
+    (deferred,) = _deliveries(worker_sync_engine, queued.id)
+    assert deferred.status == "deferred"
+    assert deferred.error_code == "template.not_approved"
+    assert deferred.defer_until == start + timedelta(hours=1)
 
 
 class _BrokenAdapter:
     """Адаптер, который падает до отправки (как кодирование заголовка с нелатинским токеном)."""
 
     requires_approved_template = False
+    disabled = False
 
     def send(self, *, to: str, template: str, language: str, params: list[str]) -> SendResult:
         raise UnicodeEncodeError("ascii", "токен", 0, 1, "boom")
@@ -870,11 +895,20 @@ async def test_another_user_cannot_switch_my_whatsapp_flag(
     """Переключатель уведомлений меняется только у себя, даже из SQL-сессии приложения."""
     desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
     context = in_context(auth_world.users["foreman"], (desk.project,), (desk.legal,))
+    master = {"u": str(auth_world.users["master"])}
+    with worker_sync_engine.begin() as connection:
+        connection.execute(
+            text('UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid)'), master
+        )
     with pytest.raises(DBAPIError, match=r"user\.notify_forbidden"):
         await rows(
             'UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)',
             context,
-            {"u": str(auth_world.users["master"])},
+            master,
+        )
+    with worker_sync_engine.begin() as connection:
+        connection.execute(
+            text('UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)'), master
         )
 
 
@@ -901,4 +935,200 @@ async def test_an_expired_token_waits_without_losing_the_message(
     )
     assert _state(worker_sync_engine, queued.id) == ("queued", 0, start + timedelta(hours=1))
     assert _last_error(worker_sync_engine, queued.id) == "http_401"
-    assert _deliveries(worker_sync_engine, queued.id) == []
+    (deferred,) = _deliveries(worker_sync_engine, queued.id)
+    assert deferred.status == "deferred"
+    assert deferred.defer_until == start + timedelta(hours=1)
+
+
+def test_whatsapp_is_off_by_default_and_no_colleague_consented_by_accident(
+    worker_sync_engine: Engine, auth_world: AuthWorld
+) -> None:
+    with worker_sync_engine.connect() as connection:
+        default = connection.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns"
+                " WHERE table_schema = 'public' AND table_name = 'user'"
+                " AND column_name = 'notify_whatsapp'"
+            )
+        ).scalar_one()
+        master = connection.execute(
+            text(
+                'SELECT notify_whatsapp, notify_whatsapp_consent_at FROM "user"'
+                " WHERE id = CAST(:u AS uuid)"
+            ),
+            {"u": str(auth_world.users["master"])},
+        ).one()
+    assert default == "false"
+    assert master.notify_whatsapp is False
+
+
+async def test_another_user_cannot_enable_my_whatsapp_flag(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    context = in_context(auth_world.users["foreman"], (desk.project,), (desk.legal,))
+    with pytest.raises(DBAPIError, match=r"user\.notify_forbidden"):
+        await rows(
+            'UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid)',
+            context,
+            {"u": str(auth_world.users["master"])},
+        )
+
+
+async def test_a_withdrawn_consent_creates_no_new_row(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    withdrawn = await api.patch(
+        f"{API}/notifications/settings",
+        json={"notify_whatsapp": False},
+        headers={**desk.heads["foreman"], **idem()},
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    try:
+        document, version = await _money_version(api, s3, desk, auth_world)
+        await _send(api, desk, document, version)
+        assert _outbox(worker_sync_engine, version, position=1) == []
+    finally:
+        restored = await api.patch(
+            f"{API}/notifications/settings",
+            json={"notify_whatsapp": True},
+            headers={**desk.heads["foreman"], **idem()},
+        )
+        assert restored.status_code == 200, restored.text
+
+
+async def test_the_owner_switches_a_colleague_whatsapp_off_and_the_date_stays(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    foreman = str(auth_world.users["foreman"])
+    refused = await api.post(
+        f"{API}/settings/users/{foreman}/whatsapp-off", headers=desk.heads["foreman"]
+    )
+    assert refused.status_code == 403, refused.text
+    missing = await api.post(
+        f"{API}/settings/users/{UUID(int=1)}/whatsapp-off", headers=desk.heads["owner"]
+    )
+    assert missing.status_code == 404, missing.text
+    try:
+        off = await api.post(
+            f"{API}/settings/users/{foreman}/whatsapp-off", headers=desk.heads["owner"]
+        )
+        assert off.status_code == 204, off.text
+        with worker_sync_engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    'SELECT notify_whatsapp, notify_whatsapp_revoked_at FROM "user"'
+                    " WHERE id = CAST(:u AS uuid)"
+                ),
+                {"u": foreman},
+            ).one()
+        assert row.notify_whatsapp is False
+        assert row.notify_whatsapp_revoked_at is not None
+    finally:
+        with worker_sync_engine.begin() as connection:
+            connection.execute(
+                text('UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid)'),
+                {"u": foreman},
+            )
+
+
+async def test_in_production_without_whatsapp_the_row_is_disabled_not_logged(
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, document, version)
+    (queued,) = _outbox(worker_sync_engine, version, position=1)
+    production = get_settings().model_copy(
+        update={"app_env": "production", "whatsapp_enabled": False}
+    )
+    adapter = get_adapter(production)
+    assert isinstance(adapter, DisabledNotificationAdapter)
+    assert isinstance(get_adapter(get_settings()), LogNotificationAdapter)
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    assert (
+        dispatch_due(worker_sync_engine, adapter, base_url=BASE_URL, now=start, ids=[queued.id])
+        == 1
+    )
+    assert _state(worker_sync_engine, queued.id)[0] == "disabled"
+    (delivery,) = _deliveries(worker_sync_engine, queued.id)
+    assert delivery.status == "disabled"
+    assert delivery.error_code == "sending_disabled"
+
+
+async def test_a_token_with_non_ascii_characters_never_reaches_the_log(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, document, version)
+    (queued,) = _outbox(worker_sync_engine, version, position=1)
+    token = "токен-тест-α-SECRET-777"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"messages": [{"id": "wamid.TEST"}]})
+
+    adapter = WhatsAppCloudAdapter(
+        phone_number_id="1234567890",
+        access_token=token,
+        api_version="v21.0",
+        transport=httpx.MockTransport(handler),
+    )
+    adapter.requires_approved_template = False
+    caplog.set_level(logging.DEBUG)
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    assert (
+        dispatch_due(worker_sync_engine, adapter, base_url=BASE_URL, now=start, ids=[queued.id])
+        == 1
+    )
+    assert token not in caplog.text
+    assert "SECRET-777" not in caplog.text
+    assert "SECRET-777" not in repr(_deliveries(worker_sync_engine, queued.id))
+
+
+async def test_the_delivery_journal_refuses_an_update_even_for_a_role_with_the_privilege(
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
+) -> None:
+    desk = await open_desk(api, auth_world, worker_sync_engine, *MONEY_DESK)
+    document, version = await _money_version(api, s3, desk, auth_world)
+    await _send(api, desk, document, version)
+    (queued,) = _outbox(worker_sync_engine, version, position=1)
+    start = datetime.now(UTC) + timedelta(minutes=5)
+    assert (
+        dispatch_due(
+            worker_sync_engine,
+            LogNotificationAdapter(),
+            base_url=BASE_URL,
+            now=start,
+            ids=[queued.id],
+        )
+        == 1
+    )
+    with (
+        pytest.raises(DBAPIError, match=r"notification\.append_only"),
+        owner_sync_engine.begin() as connection,
+    ):
+        connection.execute(text("GRANT SELECT, UPDATE ON notification_delivery TO kut_auth"))
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
+        connection.execute(
+            text(
+                "UPDATE notification_delivery SET status = status"
+                " WHERE outbox_id = CAST(:o AS uuid)"
+            ),
+            {"o": str(queued.id)},
+        )
+    with worker_sync_engine.connect() as connection:
+        granted = connection.execute(
+            text("SELECT has_table_privilege('kut_auth', 'notification_delivery', 'UPDATE')")
+        ).scalar_one()
+    assert granted is False

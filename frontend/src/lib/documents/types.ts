@@ -195,6 +195,19 @@ export type RouteTemplateStep = { position: number; role_code: string };
 
 export type RouteTemplate = { code: string; name: string; steps: RouteTemplateStep[] };
 
+// Замещение: делегирующий и замещающий с ФИО, роль, срок (даты ISO YYYY-MM-DD).
+export type DelegationOut = {
+  id: string;
+  delegator_id: string;
+  delegator_name: string | null;
+  delegate_id: string;
+  delegate_name: string | null;
+  role_code: string;
+  valid_from: string;
+  valid_to: string;
+  revoked: boolean;
+};
+
 // Очередь /approvals: документы, где текущий шаг мой (роль или замещение).
 export type ApprovalQueueItem = {
   document_id: string;
