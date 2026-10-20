@@ -42,6 +42,14 @@ LEASE_ROWS = text(
     """
 )
 
+MARK_SENT = text(
+    """
+    UPDATE notification_outbox
+    SET status = 'sent', attempts = :attempts, updated_at = now()
+    WHERE id = :id
+    """
+)
+
 UPDATE_OUTBOX = text(
     """
     UPDATE notification_outbox
@@ -99,11 +107,14 @@ def dispatch_due(
                 LEASE_ROWS, {"until": now + LEASE, "ids": [str(row.id) for row in rows]}
             )
     for row in rows:
+        accepted: list[bool] = []
         try:
             with engine.begin() as connection:
-                _deliver(connection, adapter, row, base_url=base_url, now=now)
+                _deliver(connection, adapter, row, base_url=base_url, now=now, accepted=accepted)
         except SQLAlchemyError as error:
             logger.warning("notification record failed: %s", type(error).__name__)
+            if accepted:
+                _mark_sent_without_journal(engine, row)
     return len(rows)
 
 
@@ -114,6 +125,7 @@ def _deliver(
     *,
     base_url: str,
     now: datetime,
+    accepted: list[bool],
 ) -> None:
     attempt = row.attempts + 1
     notifiable = row.is_active and row.deleted_at is None and row.notify_whatsapp
@@ -133,6 +145,7 @@ def _deliver(
         return
     result = _send(adapter, row, params)
     if result.ok:
+        accepted.append(True)
         _record(connection, row, attempt, result.ok_status, "sent", result.error_code, result)
     elif result.provider_status in AUTH_STATUSES:
         _defer(connection, row, now + TEMPLATE_WAIT, result.error_code or "config")
@@ -143,6 +156,16 @@ def _deliver(
         _record(connection, row, attempt, "dead", "dead", result.error_code, result)
     else:
         _record(connection, row, attempt, "failed", "failed", result.error_code, result)
+
+
+def _mark_sent_without_journal(engine: Engine, row: Any) -> None:
+    """Провайдер принял сообщение, а запись результата не прошла: строка закрыта без журнала,
+    чтобы не отправить второй раз. Если и это не прошло, строка останется в очереди."""
+    try:
+        with engine.begin() as connection:
+            connection.execute(MARK_SENT, {"id": row.id, "attempts": row.attempts + 1})
+    except SQLAlchemyError as error:
+        logger.error("notification mark sent failed: %s", type(error).__name__)
 
 
 def _send(adapter: NotificationAdapter, row: Any, params: list[str]) -> SendResult:

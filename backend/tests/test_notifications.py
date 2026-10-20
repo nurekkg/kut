@@ -490,6 +490,7 @@ async def test_the_user_gives_and_withdraws_consent_and_the_dates_are_kept(
 ) -> None:
     """Согласие: включает сам сотрудник, дату согласия ставит гард; отзыв ставит дату отзыва."""
     desk = await open_desk(api, auth_world, worker_sync_engine, "foreman")
+    start = datetime.now(UTC) - timedelta(seconds=1)
     try:
         off = await api.patch(
             f"{API}/notifications/settings",
@@ -500,7 +501,7 @@ async def test_the_user_gives_and_withdraws_consent_and_the_dates_are_kept(
         withdrawn = off.json()
         assert withdrawn["notify_whatsapp"] is False
         assert withdrawn["can_notify"] is True
-        assert withdrawn["revoked_at"] is not None
+        assert datetime.fromisoformat(withdrawn["revoked_at"]) >= start
     finally:
         on = await api.patch(
             f"{API}/notifications/settings",
@@ -509,7 +510,7 @@ async def test_the_user_gives_and_withdraws_consent_and_the_dates_are_kept(
         )
         assert on.status_code == 200, on.text
         assert on.json()["notify_whatsapp"] is True
-        assert on.json()["consent_at"] is not None
+        assert datetime.fromisoformat(on.json()["consent_at"]) >= start
 
 
 async def test_a_server_error_is_retried_three_times_with_growing_pauses_then_dead(
@@ -660,7 +661,7 @@ async def test_an_adapter_error_is_retried_and_does_not_stop_the_batch(
     assert _last_error(worker_sync_engine, queued.id) == "adapter_error"
 
 
-async def test_a_failed_record_leaves_the_row_queued_and_does_not_stop_the_batch(
+async def test_a_failed_record_closes_the_row_and_never_sends_it_twice(
     api: AsyncClient,
     auth_world: AuthWorld,
     worker_sync_engine: Engine,
@@ -688,7 +689,7 @@ async def test_a_failed_record_leaves_the_row_queued_and_does_not_stop_the_batch
         )
         == 1
     )
-    assert _state(worker_sync_engine, queued.id)[:2] == ("queued", 0)
+    assert _state(worker_sync_engine, queued.id)[:2] == ("sent", 1)
     assert _deliveries(worker_sync_engine, queued.id) == []
 
 
@@ -900,16 +901,19 @@ async def test_another_user_cannot_switch_my_whatsapp_flag(
         connection.execute(
             text('UPDATE "user" SET notify_whatsapp = true WHERE id = CAST(:u AS uuid)'), master
         )
-    with pytest.raises(DBAPIError, match=r"user\.notify_forbidden"):
-        await rows(
-            'UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)',
-            context,
-            master,
-        )
-    with worker_sync_engine.begin() as connection:
-        connection.execute(
-            text('UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)'), master
-        )
+    try:
+        with pytest.raises(DBAPIError, match=r"user\.notify_forbidden"):
+            await rows(
+                'UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)',
+                context,
+                master,
+            )
+    finally:
+        with worker_sync_engine.begin() as connection:
+            connection.execute(
+                text('UPDATE "user" SET notify_whatsapp = false WHERE id = CAST(:u AS uuid)'),
+                master,
+            )
 
 
 async def test_an_expired_token_waits_without_losing_the_message(

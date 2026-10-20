@@ -221,7 +221,7 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: kut
           KUT_BOOTSTRAP_TEST_DB: "1"
-        run: psql -X -q -v ON_ERROR_STOP=1 -f ../db/bootstrap.sql
+        run: psql -X -q -v ON_ERROR_STOP=1 -f db/bootstrap.sql
       - name: Мутанты - патч, целевые тесты, выживший мутант делает job красным
         run: |
           survived=0
@@ -229,17 +229,18 @@ jobs:
             [ -z "$id" ] && continue
             git apply "backend/tests/mutants/${id}.patch"
             set +e
-            (cd backend && uv run pytest -q -p no:cacheprovider $targets)
+            (cd backend && uv run pytest -q -rf -p no:cacheprovider $targets) > "mutant-${id}.log" 2>&1
             rc=$?
             set -e
             git checkout -- .
-            if [ "$rc" -eq 1 ]; then
-              echo "мутант ${id} пойман: целевые тесты упали"
-            elif [ "$rc" -eq 0 ]; then
-              echo "::error::мутант ${id} выжил: целевые тесты прошли"
-              survived=1
+            caught=1
+            for t in $targets; do
+              grep -qF "FAILED $t" "mutant-${id}.log" || caught=0
+            done
+            if [ "$caught" -eq 1 ]; then
+              echo "мутант ${id} пойман: целевой тест упал"
             else
-              echo "::error::мутант ${id}: pytest завершился кодом $rc (проверьте имена тестов)"
+              echo "::error::мутант ${id} не пойман: целевой тест не упал (код pytest ${rc}, см. mutant-${id}.log)"
               survived=1
             fi
           done < backend/tests/mutants/manifest.txt

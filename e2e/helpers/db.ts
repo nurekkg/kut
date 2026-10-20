@@ -10,6 +10,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // через базу dev-стенда.
 export async function transitionVersion(versionId: string, to: "on_approval" | "approved"): Promise<void> {
   if (!UUID.test(versionId)) throw new Error(`не идентификатор версии: ${versionId}`);
+  if (to !== "on_approval" && to !== "approved") throw new Error(`неизвестный переход: ${to}`);
   const sql = `SET ROLE kut_auth; SELECT app.version_move(CAST('${versionId}' AS uuid), '${to}', NULL, NULL)`;
   await run("docker", [
     "exec",

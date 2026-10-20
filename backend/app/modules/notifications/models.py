@@ -65,7 +65,9 @@ class NotificationOutbox(BusinessBase):
             "'delegation_assigned')",
             name="event_type",
         ),
-        CheckConstraint("status IN ('queued', 'sent', 'failed', 'dead')", name="status"),
+        CheckConstraint(
+            "status IN ('queued', 'sent', 'failed', 'dead', 'disabled')", name="status"
+        ),
         CheckConstraint("attempts >= 0", name="attempts"),
         Index(
             "ix_notification_outbox_due",
@@ -90,6 +92,9 @@ class NotificationDelivery(BusinessBase):
     defer_until: Mapped[datetime | None] = mapped_column(default=None)
 
     __table_args__ = (
-        CheckConstraint("status IN ('logged', 'sent', 'retry', 'failed', 'dead')", name="status"),
+        CheckConstraint(
+            "status IN ('logged', 'sent', 'retry', 'failed', 'dead', 'deferred', 'disabled')",
+            name="status",
+        ),
         CheckConstraint("attempt >= 1", name="attempt"),
     )
