@@ -380,3 +380,22 @@ async def test_the_worker_still_reads_the_non_secret_user_columns(
     )
 
     assert len(rows) == 1
+
+
+async def test_a_portal_user_cannot_change_even_its_own_phone(
+    auth_world: AuthWorld, worker_engine: AsyncEngine
+) -> None:
+    """user_update_app требует внутреннего: портал не меняет строку "user", даже свою."""
+    customer = auth_world.users["customer"]
+    (before,) = await owner_rows(
+        worker_engine, 'SELECT phone FROM "user" WHERE id = :u', u=customer
+    )
+    changed = await call(
+        context(customer, internal=False),
+        'UPDATE "user" SET phone = :p WHERE id = :u RETURNING id',
+        p="+996700000096",
+        u=customer,
+    )
+    assert changed == []
+    (after,) = await owner_rows(worker_engine, 'SELECT phone FROM "user" WHERE id = :u', u=customer)
+    assert after == before
