@@ -215,7 +215,11 @@ async def test_the_owner_path_follows_the_route_of_the_statuses(
 
 
 async def test_a_new_approval_makes_the_version_current_and_archives_the_previous(
-    api: AsyncClient, worker_sync_engine: Engine, auth_world: AuthWorld, s3: httpx.AsyncClient
+    api: AsyncClient,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    auth_world: AuthWorld,
+    s3: httpx.AsyncClient,
 ) -> None:
     legal, _code, identifier, heads = await _setup(
         api, auth_world, worker_sync_engine, ("estimator",)
@@ -223,8 +227,8 @@ async def test_a_new_approval_makes_the_version_current_and_archives_the_previou
     document_id = await _draft(api, heads["estimator"], legal, identifier)
     first = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
     second = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
-    approve(worker_sync_engine, first)
-    approve(worker_sync_engine, second)
+    approve(owner_sync_engine, first)
+    approve(owner_sync_engine, second)
     with worker_sync_engine.connect() as connection:
         statuses = dict(
             connection.execute(

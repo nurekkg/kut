@@ -55,14 +55,18 @@ async def listing(api: AsyncClient, headers: dict[str, str], **params: str) -> l
 
 
 async def test_the_registry_filters_by_status_counterparty_number_and_period(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman")
     customer = auth_world.counterparties[devseed.CUSTOMER]
     signed = await create(api, desk, "estimator", {"kind": "ks2", "counterparty_id": str(customer)})
     uploaded = await upload(api, s3, signed["id"], desk.heads["estimator"], PDF_OK, PDF)
     assert uploaded.status_code == 201, uploaded.text
-    approve(worker_sync_engine, uploaded.json()["id"])
+    approve(owner_sync_engine, uploaded.json()["id"])
     draft = await create(api, desk, "estimator", {"kind": "estimate_local"})
     drafted = await upload(api, s3, draft["id"], desk.heads["estimator"], PDF_OK, PDF)
     assert drafted.status_code == 201, drafted.text
@@ -90,7 +94,11 @@ async def test_the_registry_filters_by_status_counterparty_number_and_period(
 
 
 async def test_the_customer_sees_only_the_approved_version_and_no_author_or_journal(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "customer")
     customer = auth_world.counterparties[devseed.CUSTOMER]
@@ -99,7 +107,7 @@ async def test_the_customer_sees_only_the_approved_version_and_no_author_or_jour
     )
     uploaded = await upload(api, s3, approved["id"], desk.heads["estimator"], PDF_OK, PDF)
     assert uploaded.status_code == 201, uploaded.text
-    approve(worker_sync_engine, uploaded.json()["id"])
+    approve(owner_sync_engine, uploaded.json()["id"])
     hidden = await create(api, desk, "estimator", {"kind": "ks2", "counterparty_id": str(customer)})
     await upload(api, s3, hidden["id"], desk.heads["estimator"], PDF_OK, PDF)
 
@@ -116,14 +124,18 @@ async def test_the_customer_sees_only_the_approved_version_and_no_author_or_jour
 
 
 async def test_the_journal_of_statuses_is_for_internal_users_only(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "foreman", "customer")
     customer = auth_world.counterparties[devseed.CUSTOMER]
     doc = await create(api, desk, "estimator", {"kind": "ks2", "counterparty_id": str(customer)})
     uploaded = await upload(api, s3, doc["id"], desk.heads["estimator"], PDF_OK, PDF)
     assert uploaded.status_code == 201, uploaded.text
-    approve(worker_sync_engine, uploaded.json()["id"])
+    approve(owner_sync_engine, uploaded.json()["id"])
 
     journal = await api.get(f"{API}/documents/{doc['id']}/events", headers=desk.heads["foreman"])
     assert journal.status_code == 200, journal.text
@@ -153,7 +165,11 @@ async def test_the_author_of_a_version_is_named_for_internal_users(
 
 
 async def test_the_customer_searches_his_documents_by_title(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
     desk = await open_desk(api, auth_world, worker_sync_engine, "estimator", "customer")
     customer = auth_world.counterparties[devseed.CUSTOMER]
@@ -163,7 +179,7 @@ async def test_the_customer_searches_his_documents_by_title(
     )
     uploaded = await upload(api, s3, approved["id"], desk.heads["estimator"], PDF_OK, PDF)
     assert uploaded.status_code == 201, uploaded.text
-    approve(worker_sync_engine, uploaded.json()["id"])
+    approve(owner_sync_engine, uploaded.json()["id"])
 
     found = await listing(api, desk.heads["customer"], project_id=str(desk.project), q=title[:12])
 

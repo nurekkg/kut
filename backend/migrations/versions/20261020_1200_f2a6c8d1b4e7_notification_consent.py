@@ -171,6 +171,21 @@ def downgrade() -> None:
     op.drop_constraint(
         op.f("ck_notification_delivery_status"), "notification_delivery", type_="check"
     )
+    # Строки новых статусов переводим в старые: журнал append-only, триггер на время правки выключен,
+    # права на status - только на время перевода (kut_auth читает строки мимо RLS).
+    op.execute(
+        "ALTER TABLE notification_delivery DISABLE TRIGGER notification_delivery_append_only"
+    )
+    op.execute("GRANT SELECT, UPDATE (status) ON notification_delivery TO kut_auth")
+    op.execute("GRANT UPDATE (status) ON notification_outbox TO kut_auth")
+    op.execute("SET LOCAL ROLE kut_auth")
+    op.execute("UPDATE notification_delivery SET status = 'retry' WHERE status = 'deferred'")
+    op.execute("UPDATE notification_delivery SET status = 'failed' WHERE status = 'disabled'")
+    op.execute("UPDATE notification_outbox SET status = 'failed' WHERE status = 'disabled'")
+    op.execute("RESET ROLE")
+    op.execute("REVOKE SELECT, UPDATE (status) ON notification_delivery FROM kut_auth")
+    op.execute("REVOKE UPDATE (status) ON notification_outbox FROM kut_auth")
+    op.execute("ALTER TABLE notification_delivery ENABLE TRIGGER notification_delivery_append_only")
     op.create_check_constraint(
         op.f("ck_notification_delivery_status"),
         "notification_delivery",

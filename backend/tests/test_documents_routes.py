@@ -1163,6 +1163,29 @@ async def test_a_delegator_creates_at_most_twenty_delegations_a_day(
                 headers={**desk.heads["foreman"], **idem()},
             )
             assert revoked.status_code == 204, revoked.text
+        _age_delegations(owner_sync_engine, created)
+
+
+def _age_delegations(owner_sync_engine: Engine, delegation_ids: list[str]) -> None:
+    """Тестовая фикстура времени: созданные замещения уходят на два дня назад, чтобы не занимать
+    дневной лимит 20 у делегирующего в следующих тестах (отозванные тоже считаются)."""
+    if not delegation_ids:
+        return
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("ALTER TABLE document_delegation DISABLE TRIGGER USER"))
+    try:
+        with owner_sync_engine.begin() as connection:
+            connection.execute(text("SET LOCAL ROLE kut_auth"))
+            connection.execute(
+                text(
+                    "UPDATE document_delegation SET created_at = now() - interval '2 days'"
+                    " WHERE id = ANY (CAST(:ids AS uuid[]))"
+                ),
+                {"ids": delegation_ids},
+            )
+    finally:
+        with owner_sync_engine.begin() as connection:
+            connection.execute(text("ALTER TABLE document_delegation ENABLE TRIGGER USER"))
 
 
 def _start_yesterday(owner_sync_engine: Engine, delegation_id: str, today: str) -> None:
