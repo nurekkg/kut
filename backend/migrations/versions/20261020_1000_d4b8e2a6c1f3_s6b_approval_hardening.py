@@ -8,7 +8,7 @@ Create Date: 2026-10-20 10:00:00
 Замещение: разность дат не больше 59 (60 календарных дней включительно). Пересечение записей одного
 делегирующего по одной роли - 409 approval.delegation_overlap (гард BEFORE INSERT с блокировкой по паре).
 Делегат - только внутренний пользователь (роль не со scope counterparty). route_check берёт делегатора
-по порядку (valid_from, id), пропуская замещения от автора версии. app.document_person_names - имена авторов и решивших для внутреннего, который
+по порядку (valid_from, id), замещения автора версии - последними. app.document_person_names - имена авторов и решивших для внутреннего, который
 видит документ; портал получает пусто. kut_worker переводит версии через app.version_move, а не через
 app.document_version_transition (EXECUTE отозван).
 """
@@ -147,11 +147,10 @@ BEGIN
     SELECT dl.delegator_id INTO deleg FROM public.document_delegation dl
     WHERE dl.delegate_id = actor AND dl.role_code = st.role_code AND dl.revoked_at IS NULL
       AND app.local_today() BETWEEN dl.valid_from AND dl.valid_to
-      AND dl.delegator_id IS DISTINCT FROM v.created_by
       AND EXISTS (SELECT 1 FROM public."user" u JOIN public.role r ON r.id = u.role_id
                   WHERE u.id = dl.delegator_id AND u.is_active AND u.deleted_at IS NULL
                     AND r.code = dl.role_code)
-    ORDER BY dl.valid_from, dl.id
+    ORDER BY (dl.delegator_id = v.created_by), dl.valid_from, dl.id
     LIMIT 1;
     IF deleg IS NULL THEN
         RAISE EXCEPTION 'approval.not_your_step';
@@ -164,10 +163,8 @@ END $$
 """
 
 ROUTE_CHECK_PREVIOUS = ROUTE_CHECK.replace(
-    "    ORDER BY dl.valid_from, dl.id\n    LIMIT 1;\n", "    LIMIT 1;\n"
-)
-ROUTE_CHECK_PREVIOUS = ROUTE_CHECK_PREVIOUS.replace(
-    "      AND dl.delegator_id IS DISTINCT FROM v.created_by\n", ""
+    "    ORDER BY (dl.delegator_id = v.created_by), dl.valid_from, dl.id\n    LIMIT 1;\n",
+    "    LIMIT 1;\n",
 )
 
 PERSON_NAMES = """
