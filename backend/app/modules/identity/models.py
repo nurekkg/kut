@@ -26,6 +26,10 @@ class User(BusinessBase):
     )
     is_active: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
     role_ver: Mapped[int] = mapped_column(default=1, server_default=text("1"))
+    # WhatsApp только по согласию: по умолчанию выключено. Даты ставит гард user_notify_guard.
+    notify_whatsapp: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+    notify_whatsapp_consent_at: Mapped[datetime | None] = mapped_column(default=None)
+    notify_whatsapp_revoked_at: Mapped[datetime | None] = mapped_column(default=None)
 
     __table_args__ = (
         CheckConstraint("phone IS NOT NULL OR email IS NOT NULL", name="contact_required"),

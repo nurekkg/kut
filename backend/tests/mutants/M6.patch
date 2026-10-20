@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py b/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
+index 9720c73..abe6e37 100644
+--- a/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
++++ b/backend/migrations/versions/20261020_1000_d4b8e2a6c1f3_s6b_approval_hardening.py
+@@ -91,7 +91,7 @@ BEGIN
+                WHERE d.delegator_id = NEW.delegator_id AND d.role_code = NEW.role_code
+                  AND d.revoked_at IS NULL AND d.deleted_at IS NULL
+                  AND NEW.valid_from <= d.valid_to AND d.valid_from <= NEW.valid_to) THEN
+-        RAISE EXCEPTION 'approval.delegation_overlap';
++        NULL;
+     END IF;
+     RETURN NEW;
+ END $$

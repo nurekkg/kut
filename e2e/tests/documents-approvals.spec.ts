@@ -20,6 +20,22 @@ import {
 // с кодом 2FA, поэтому их решения и делегирование идут через вход с кодом (тот же путь, что в браузере).
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n");
 const SCAN = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Catalog /Subject (scan) >> endobj\n%%EOF\n");
+// Строки журнала считаем по событию, а не ищем текст: строки прошлых прогонов стенда не должны давать проход.
+const REQUEST_EVENT = "Нужно решение";
+function requestCount(text: string): number {
+  return text.split(REQUEST_EVENT).length - 1;
+}
+
+// WhatsApp по умолчанию выключен (S6b-close). Прораб даёт согласие сам; стенд делает то же от его
+// имени через API, а проверка согласия в профиле - в notifications-consent.spec.ts.
+async function foremanConsents(request: APIRequestContext): Promise<void> {
+  const foreman = await apiLogin(request, "foreman");
+  const response = await request.patch("/api/v1/notifications/settings", {
+    headers: { Authorization: `Bearer ${foreman.token}` },
+    data: { notify_whatsapp: true },
+  });
+  expect(response.ok(), `согласие прораба: ${await response.text()}`).toBeTruthy();
+}
 
 type Ids = { document: string; version: string };
 type Row = { position_no: number | null; name: string; unit: string; quantity: string };
@@ -147,6 +163,7 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
   request,
 }) => {
   test.setTimeout(420_000);
+  await foremanConsents(request);
   const author = await apiLogin(request, "lawyer");
   const project = await projectNamed(request, await apiLogin(request, "techdir"), EAST_NAME);
   const ids = await drafted(request, author, project, "ks2", `E2E КС-2 маршрут ${Date.now()}`);
@@ -160,6 +177,14 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
     [1, "5400.00"],
     [2, "92000.00"],
   ]);
+
+  // Журнал владельца открываем до отправки: число строк «Нужно решение» до неё - точка отсчёта для этого прогона.
+  const ownerContext = await desktopContext(browser);
+  const owner = await ownerContext.newPage();
+  await signInWithFreshCode(owner, "owner");
+  await owner.goto("/settings/notifications");
+  await owner.waitForLoadState("networkidle");
+  const requestsBefore = requestCount((await owner.getByTestId("notifications-journal").textContent()) ?? "");
 
   // ПТО отправляет из карточки.
   const estimatorContext = await desktopContext(browser);
@@ -215,6 +240,32 @@ test("КС-2 проходит четыре шага: прораб, ПТО, те�
   const after = await documentById(request, author, ids.document);
   expect(after.effective_version_no).toBe(1);
   expect(after.current_version?.status).toBe("approved");
+
+  // Журнал уведомлений (S6b): шаги отправлены в очередь; владелец видит строки с маской телефона.
+  // Рассылку делает beat раз в минуту (стенд dev, лог-адаптер), поэтому ждём несколько минут, пока
+  // строк «Нужно решение» станет больше, чем до отправки: это строки именно этого прогона.
+  await expect
+    .poll(
+      async () => {
+        await owner.reload();
+        return requestCount((await owner.getByTestId("notifications-journal").textContent()) ?? "");
+      },
+      { timeout: 240_000, intervals: [10_000] },
+    )
+    .toBeGreaterThan(requestsBefore);
+  await expect(owner.getByTestId("notifications-journal")).toContainText("+996 *** *** 01");
+  await expect(owner.getByTestId("notifications-journal")).toContainText("Нужно решение");
+  await fullShot(owner, "notifications-1280-journal");
+  // Тот же журнал на телефоне 375 px: без горизонтальной прокрутки.
+  const ownerPhone = await phoneContext(browser);
+  const ownerOnPhone = await ownerPhone.newPage();
+  await signInWithFreshCode(ownerOnPhone, "owner");
+  await ownerOnPhone.goto("/settings/notifications");
+  await expect(ownerOnPhone.getByTestId("notifications-journal")).toContainText("+996 *** *** 01", {
+    timeout: 60_000,
+  });
+  await expectNoHorizontalScroll(ownerOnPhone);
+  await shot(ownerOnPhone, "notifications-375-journal", true);
   expect(estimatorErrors).toEqual([]);
 });
 
@@ -265,6 +316,16 @@ test("отказ на шаге ПТО с причиной: черновик, п�
   await page.reload();
   await page.getByTestId("route-send").click();
   await expect(page.getByTestId("document-route-status")).toContainText("Попытка 2", { timeout: 20_000 });
+
+  // Прошлые попытки: отдельным списком - решение прораба и возврат сметчика с причиной (S6b, STEP 0).
+  const past = page.getByTestId("route-past-attempts");
+  await expect(past).toBeVisible({ timeout: 20_000 });
+  await expect(past.getByTestId("route-decision")).toHaveCount(2);
+  const returned = past.getByTestId("route-decision").filter({ hasText: "Вернул" });
+  await expect(returned).toHaveCount(1);
+  await expect(returned).toContainText("Сметчик (dev)");
+  await expect(past.getByTestId("route-decision-reason")).toContainText("Не сходятся объёмы в позиции 1");
+  await fullShot(page, "approvals-1280-2-past-attempts");
 
   await decideApi(request, foreman, ids, 1, "approve");
   await decideApi(request, estimator, ids, 2, "approve");
@@ -320,6 +381,10 @@ test("замещение: финдиректор назначил владель
   });
   await expect(page.getByTestId("route-step").nth(3)).toContainText("за Финансовый директор");
   await fullShot(page, "approvals-1280-3-substitute");
+  // Мои замещения (S6b-close): замещение владельца видно в профиле вместе с именами сторон.
+  await page.goto("/profile");
+  await expect(page.getByTestId("my-delegations")).toContainText("Финансовый директор", { timeout: 20_000 });
+  await fullShot(page, "delegations-1280-profile");
 
   const revoked = await request.post(`${DOCUMENTS}/delegations/${delegationId}/revoke`, {
     headers: withKey(finance),

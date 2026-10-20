@@ -204,6 +204,12 @@ async def change_role(user_id: uuid.UUID, body: RoleChange, session: Db) -> User
         return await service.change_role(session, user_id, body.role_id)
 
 
+@router.post("/users/{user_id}/whatsapp-off", status_code=status.HTTP_204_NO_CONTENT)
+async def whatsapp_off(user_id: uuid.UUID, session: Db) -> None:
+    with translated():
+        await service.whatsapp_off(session, user_id)
+
+
 @router.put("/users/{user_id}/active", response_model=UserAdminOut)
 async def set_active(user_id: uuid.UUID, body: ActiveChange, session: Db) -> UserAdminOut:
     with translated():

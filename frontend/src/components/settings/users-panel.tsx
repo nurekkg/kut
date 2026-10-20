@@ -1,13 +1,13 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Plus, UserCog } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useMemo, useState } from "react";
 
 import { useRoleLabel } from "@/components/settings/dialogs";
-import { DataTable, PanelHeader, QueryState, useDebounced } from "@/components/settings/shared";
+import { DataTable, FormMessage, PanelHeader, QueryState, useDebounced } from "@/components/settings/shared";
 import { UserCreateModal } from "@/components/settings/user-create-modal";
 import { UserDetailModal } from "@/components/settings/user-detail-modal";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { api } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { PROJECTS_KEY, ROLES_KEY, SETTINGS_API, USERS_KEY } from "@/lib/settings/keys";
 import type { AdminUser, ProjectRef, Role } from "@/lib/settings/types";
 
@@ -23,6 +24,7 @@ export function UsersPanel() {
   const t = useTranslations("Settings.users");
   const common = useTranslations("Settings.common");
   const roleLabel = useRoleLabel();
+  const queryClient = useQueryClient();
   const [role, setRole] = useState("");
   const [project, setProject] = useState("");
   const [active, setActive] = useState("");
@@ -30,6 +32,11 @@ export function UsersPanel() {
   const q = useDebounced(search.trim());
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<AdminUser | null>(null);
+
+  const whatsappOff = useMutation({
+    mutationFn: (id: string) => api.post(`${SETTINGS_API}/users/${id}/whatsapp-off`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: USERS_KEY }),
+  });
 
   const roles = useQuery({ queryKey: ROLES_KEY, queryFn: () => api.get<Role[]>(`${SETTINGS_API}/roles`) });
   const projects = useQuery({
@@ -97,6 +104,33 @@ export function UsersPanel() {
         },
       },
       {
+        id: "whatsapp",
+        enableSorting: false,
+        header: t("colWhatsapp"),
+        cell: ({ row }) => {
+          const user = row.original;
+          if (!user.notify_whatsapp) return t("whatsappOff");
+          return (
+            <div className="space-y-1.5 text-sm">
+              <p>
+                {user.notify_whatsapp_consent_at
+                  ? t("whatsappOn", { date: formatDateTime(user.notify_whatsapp_consent_at) })
+                  : t("whatsappOnNoDate")}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid={`user-whatsapp-off-${user.id}`}
+                disabled={whatsappOff.isPending}
+                onClick={() => whatsappOff.mutate(user.id)}
+              >
+                {t("whatsappTurnOff")}
+              </Button>
+            </div>
+          );
+        },
+      },
+      {
         id: "actions",
         enableSorting: false,
         header: () => <span className="sr-only">{common("edit")}</span>,
@@ -115,7 +149,7 @@ export function UsersPanel() {
         ),
       },
     ],
-    [common, roleLabel, t],
+    [common, roleLabel, t, whatsappOff],
   );
 
   return (
@@ -172,6 +206,7 @@ export function UsersPanel() {
           />
         </div>
       </div>
+      {whatsappOff.error ? <FormMessage error={whatsappOff.error} /> : null}
       <QueryState loading={users.isPending} error={users.error} onRetry={() => void users.refetch()}>
         <DataTable columns={columns} data={users.data ?? []} getRowId={(row) => row.id} empty={t("empty")} />
       </QueryState>

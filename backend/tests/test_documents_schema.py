@@ -150,7 +150,7 @@ async def test_the_number_counter_is_invisible_to_the_application(
         await rows("SELECT count(*) FROM document_number_counter", context)
 
 
-async def test_the_application_cannot_move_a_version_through_the_transition_function(
+async def test_the_application_cannot_move_a_version_through_the_worker_function(
     api: AsyncClient, worker_sync_engine: Engine, auth_world: AuthWorld, s3: httpx.AsyncClient
 ) -> None:
     """Переход статуса - путь воркера: приложению EXECUTE не выдан, даже в системной сессии."""
@@ -162,14 +162,18 @@ async def test_the_application_cannot_move_a_version_through_the_transition_func
     context = in_context(auth_world.users["estimator"], (identifier,), (legal,))
     with pytest.raises(DBAPIError, match="permission denied"):
         await rows(
-            "SELECT app.document_version_transition(CAST(:v AS uuid), 'on_approval', NULL)",
+            "SELECT app.version_move(CAST(:v AS uuid), 'on_approval', NULL, NULL)",
             context,
             {"v": version_id},
         )
 
 
-async def test_the_worker_path_follows_the_route_of_the_statuses(
-    api: AsyncClient, worker_sync_engine: Engine, auth_world: AuthWorld, s3: httpx.AsyncClient
+async def test_the_owner_path_follows_the_route_of_the_statuses(
+    api: AsyncClient,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    auth_world: AuthWorld,
+    s3: httpx.AsyncClient,
 ) -> None:
     legal, _code, identifier, heads = await _setup(
         api, auth_world, worker_sync_engine, ("estimator",)
@@ -177,30 +181,45 @@ async def test_the_worker_path_follows_the_route_of_the_statuses(
     document_id = await _draft(api, heads["estimator"], legal, identifier)
     version_id = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
     with (
-        pytest.raises(DBAPIError, match=r"document\.transition_invalid"),
+        pytest.raises(DBAPIError, match="permission denied"),
         worker_sync_engine.begin() as connection,
     ):
         connection.execute(
-            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'approved', NULL)"),
+            text("SELECT app.version_move(CAST(:v AS uuid), 'on_approval', NULL, NULL)"),
             {"v": version_id},
         )
-    with worker_sync_engine.begin() as connection:
+    with (
+        pytest.raises(DBAPIError, match=r"document\.transition_invalid"),
+        owner_sync_engine.begin() as connection,
+    ):
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         connection.execute(
-            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'on_approval', NULL)"),
+            text("SELECT app.version_move(CAST(:v AS uuid), 'approved', NULL, NULL)"),
+            {"v": version_id},
+        )
+    with owner_sync_engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
+        connection.execute(
+            text("SELECT app.version_move(CAST(:v AS uuid), 'on_approval', NULL, NULL)"),
             {"v": version_id},
         )
     with (
         pytest.raises(DBAPIError, match=r"document\.comment_required"),
-        worker_sync_engine.begin() as connection,
+        owner_sync_engine.begin() as connection,
     ):
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
         connection.execute(
-            text("SELECT app.document_version_transition(CAST(:v AS uuid), 'draft', ' ')"),
+            text("SELECT app.version_move(CAST(:v AS uuid), 'draft', ' ', NULL)"),
             {"v": version_id},
         )
 
 
 async def test_a_new_approval_makes_the_version_current_and_archives_the_previous(
-    api: AsyncClient, worker_sync_engine: Engine, auth_world: AuthWorld, s3: httpx.AsyncClient
+    api: AsyncClient,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    auth_world: AuthWorld,
+    s3: httpx.AsyncClient,
 ) -> None:
     legal, _code, identifier, heads = await _setup(
         api, auth_world, worker_sync_engine, ("estimator",)
@@ -208,8 +227,8 @@ async def test_a_new_approval_makes_the_version_current_and_archives_the_previou
     document_id = await _draft(api, heads["estimator"], legal, identifier)
     first = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
     second = (await upload(api, s3, document_id, heads["estimator"], PDF_OK, PDF)).json()["id"]
-    approve(worker_sync_engine, first)
-    approve(worker_sync_engine, second)
+    approve(owner_sync_engine, first)
+    approve(owner_sync_engine, second)
     with worker_sync_engine.connect() as connection:
         statuses = dict(
             connection.execute(

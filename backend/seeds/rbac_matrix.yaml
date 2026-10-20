@@ -227,6 +227,8 @@ extra:
   - {role: owner, permission: "settings:read"}
   - {role: owner, permission: "settings:write"}
   - {role: owner, permission: "settings:admin"}
+  # Журнал доставки уведомлений согласования (S6b, ADR-015 часть 6): только владелец.
+  - {role: owner, permission: "notifications:read"}
   # Справочник видов работ (таблица work, S2): в §7.3 его нет, а ни один модуль матрицы не подходит.
   # Объекты дали бы запись прорабу, ГПР тоже. По решению PO пишут ПТО и техдир (+ владелец),
   # читают все внутренние роли; внешним справочник закрыт.

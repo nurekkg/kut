@@ -26,6 +26,8 @@ test("машинист на 375 px офлайн: два объекта в ден
   const phone = await phoneContext(browser);
   const page = await phone.newPage();
   const errors = watchErrors(page);
+  // «Сегодня» телефона - дата сценария, а не часы в момент отрисовки: сценарий не зависит от полуночи по Бишкеку.
+  await page.clock.setFixedTime(new Date(`${day.date}T12:00:00+06:00`));
 
   await openMachinistPhone(page);
   await shot(page, "field-01-today");

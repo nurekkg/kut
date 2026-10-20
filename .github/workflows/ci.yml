@@ -5,6 +5,11 @@ on:
     branches: [main, 'phase-*', 'se-*', 's5*', 's6*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      mutants:
+        description: "Прогнать мутанты (job mutants: патчи из backend/tests/mutants)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -46,6 +51,8 @@ jobs:
     env:
       UV_FROZEN: "1"
       APP_ENV: test
+      APP_PUBLIC_URL: https://kut.example
+      WHATSAPP_ENABLED: "false"
       # Одноразовые учётки job-а (контейнер postgres живёт только на время прогона). Суперпользователь
       # postgres нужен лишь шагу bootstrap; приложение и тесты работают под ролями kut_*.
       KUT_OWNER_PASSWORD: ci_owner_password
@@ -126,6 +133,119 @@ jobs:
           DATABASE_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut
         run: uv run alembic check
 
+  mutants:
+    if: github.event_name == 'workflow_dispatch' && inputs.mutants
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: kut
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      UV_FROZEN: "1"
+      APP_ENV: test
+      APP_PUBLIC_URL: https://kut.example
+      WHATSAPP_ENABLED: "false"
+      # Одноразовые учётки job-а (контейнер postgres живёт только на время прогона). Суперпользователь
+      # postgres нужен лишь шагу bootstrap; приложение и тесты работают под ролями kut_*.
+      KUT_OWNER_PASSWORD: ci_owner_password
+      KUT_APP_PASSWORD: ci_app_password
+      KUT_PORTAL_PASSWORD: ci_portal_password
+      KUT_WORKER_PASSWORD: ci_worker_password
+      DATABASE_URL: postgresql+psycopg://kut_app:ci_app_password@localhost:5432/kut_test
+      DATABASE_PORTAL_URL: postgresql+psycopg://kut_portal:ci_portal_password@localhost:5432/kut_test
+      TEST_DATABASE_OWNER_URL: postgresql+psycopg://kut_owner:ci_owner_password@localhost:5432/kut_test
+      TEST_DATABASE_WORKER_URL: postgresql+psycopg://kut_worker:ci_worker_password@localhost:5432/kut_test
+      # Ключи JWT и TOTP: dev-плейсхолдеры из .env.example (kid dev-1), как у сервиса test в compose.
+      # Тесты ждут kid dev-1 и проверяют, что production отказывается от dev-ключей.
+      JWT_PRIVATE_KEYS: dev-1:GLp4ipa8ygJMpz5w-usHPDsFMC-QZyMJLNMKBU33drQ
+      JWT_ACTIVE_KID: dev-1
+      TOTP_ENCRYPTION_KEYS: dev-1:J4WKMm-ZdEWech8b3xRh2jNaRBI8NTBQQE46PaqMRGc
+      TOTP_ACTIVE_KEY_ID: dev-1
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      CELERY_RESULT_BACKEND: redis://localhost:6379/2
+      S3_ENDPOINT_URL: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: kut-files
+      S3_ACCESS_KEY: ci_access_key
+      S3_SECRET_KEY: ci_secret_key
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.21"
+          python-version: "3.12"
+          working-directory: backend
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync
+      - name: Start MinIO and create bucket
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER="$S3_ACCESS_KEY" -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 server /data
+          for _ in $(seq 1 30); do
+            curl -fsS http://localhost:9000/minio/health/live && break
+            sleep 1
+          done
+          docker exec minio mc alias set local http://localhost:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+          docker exec minio mc mb --ignore-existing "local/$S3_BUCKET"
+      - name: Bootstrap database roles
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: kut
+          KUT_BOOTSTRAP_TEST_DB: "1"
+        run: psql -X -q -v ON_ERROR_STOP=1 -f db/bootstrap.sql
+      - name: Мутанты - патч, целевые тесты, выживший мутант делает job красным
+        run: |
+          survived=0
+          while read -r id targets; do
+            [ -z "$id" ] && continue
+            git apply "backend/tests/mutants/${id}.patch"
+            set +e
+            (cd backend && uv run pytest -q -rf -p no:cacheprovider $targets) > "mutant-${id}.log" 2>&1
+            rc=$?
+            set -e
+            git checkout -- .
+            caught=1
+            for t in $targets; do
+              grep -qF "FAILED $t" "mutant-${id}.log" || caught=0
+            done
+            if [ "$caught" -eq 1 ]; then
+              echo "мутант ${id} пойман: целевой тест упал"
+            else
+              echo "::error::мутант ${id} не пойман: целевой тест не упал (код pytest ${rc}, см. mutant-${id}.log)"
+              survived=1
+            fi
+          done < backend/tests/mutants/manifest.txt
+          exit $survived
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -181,7 +301,7 @@ jobs:
       - name: Dev placeholders
         run: cp .env.example .env
       - name: Build images
-        run: docker compose build migrate api dev-seed web
+        run: docker compose build migrate api worker dev-seed web
       - name: Postgres, Redis, MinIO
         run: |
           docker compose up -d --wait postgres redis minio
@@ -201,6 +321,12 @@ jobs:
         run: |
           docker compose run --rm --no-deps dev-seed
           docker compose run --rm --no-deps dev-seed python -m app.modules.schedule.devseed_load
+      # Уведомления согласования (S6b): очередь разбирает воркер, расписание даёт beat. Без них
+      # журнал уведомлений в E2E пуст. Образ worker/beat собран тем же build api (backend-build).
+      - name: Worker and beat (notification queue)
+        run: |
+          docker compose up -d --no-deps worker beat
+          docker compose ps worker beat
       - name: Web (production build and start)
         run: |
           docker compose run -d --no-deps --service-ports --name kut-web web sh -c "npm run build && npx next start -p 3000 -H 0.0.0.0"

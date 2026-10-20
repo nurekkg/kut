@@ -26,6 +26,8 @@ export type FuelRow = { id: string; shift_id: string | null; liters: string | nu
 
 export type Prepared = {
   head: Session;
+  // Дата сценария (Бишкек, YYYY-MM-DD): фиксируется один раз и передаётся и назначениям, и часам браузера.
+  date: string;
   unitEast: UnitRow;
   unitSecond: UnitRow;
   east: Project;
@@ -34,7 +36,11 @@ export type Prepared = {
 };
 
 // Техника, назначения на сегодня и оператор машиниста. Единицы свежие: номера уникальны.
-export async function prepareDay(request: APIRequestContext, count: 1 | 2 = 2): Promise<Prepared> {
+export async function prepareDay(
+  request: APIRequestContext,
+  count: 1 | 2 = 2,
+  date: string = today(),
+): Promise<Prepared> {
   const head = await apiLogin(request, "equipment_head");
   const machinist = await apiLogin(request, "machinist");
   const east = await projectNamed(request, head, EAST);
@@ -43,9 +49,9 @@ export async function prepareDay(request: APIRequestContext, count: 1 | 2 = 2): 
   const unitEast = await newUnit(request, head, east, type);
   const unitSecond = count === 2 ? await newUnit(request, head, second, type) : unitEast;
   const operatorId = await operatorIdOf(request, machinist);
-  await assignToday(request, head, unitEast, east, operatorId);
-  if (count === 2) await assignToday(request, head, unitSecond, second, operatorId);
-  return { head, unitEast, unitSecond, east, second, operatorId };
+  await assignToday(request, head, unitEast, east, operatorId, date);
+  if (count === 2) await assignToday(request, head, unitSecond, second, operatorId, date);
+  return { head, date, unitEast, unitSecond, east, second, operatorId };
 }
 
 export async function operatorIdOf(request: APIRequestContext, session: Session): Promise<string> {
@@ -66,13 +72,14 @@ export async function assignToday(
   unit: UnitRow,
   project: Project,
   operatorId: string,
+  date: string = today(),
   hours = "8",
 ): Promise<void> {
   await post(request, head, "/api/v1/equipment/assignments", {
     project_id: project.id,
     equipment_unit_id: unit.id,
-    date_from: today(),
-    date_to: today(),
+    date_from: date,
+    date_to: date,
     planned_hours_per_day: hours,
     operator_id: operatorId,
   });

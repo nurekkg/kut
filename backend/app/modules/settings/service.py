@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import exists, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -251,6 +251,8 @@ async def list_users(
             User.totp_confirmed_at,
             User.password_changed_at,
             User.counterparty_id,
+            User.notify_whatsapp,
+            User.notify_whatsapp_consent_at,
             Counterparty.name.label("counterparty_name"),
             Role.id.label("role_id"),
             Role.code.label("role"),
@@ -323,6 +325,8 @@ async def list_users(
             counterparty_name=row.counterparty_name,
             project_ids=projects.get(row.id, []),
             legal_entity_ids=entities.get(row.id, []),
+            notify_whatsapp=row.notify_whatsapp,
+            notify_whatsapp_consent_at=row.notify_whatsapp_consent_at,
         )
         for row in rows
     ]
@@ -366,6 +370,19 @@ async def change_role(
 async def set_active(session: AsyncSession, user_id: uuid.UUID, active: bool) -> UserAdminOut:
     await admin.set_user_active(session, user_id=user_id, active=active)
     return await get_user(session, user_id)
+
+
+async def whatsapp_off(session: AsyncSession, user_id: uuid.UUID) -> None:
+    """Владелец выключает WhatsApp сотруднику (согласие отозвано; дату ставит гард БД)."""
+    found = (
+        await session.execute(
+            text("SELECT app.admin_whatsapp_off(CAST(:u AS uuid))"), {"u": user_id}
+        )
+    ).scalar_one()
+    if not found:
+        await session.rollback()
+        raise not_found()
+    await session.commit()
 
 
 async def reset_mfa(session: AsyncSession, user_id: uuid.UUID) -> UserAdminOut:

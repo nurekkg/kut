@@ -21,6 +21,7 @@ import type {
   VersionOut,
   ApprovalQueueItem,
   DecisionBody,
+  DelegationOut,
   RouteOut,
   RouteTemplate,
   SignedScanBody,
@@ -196,6 +197,14 @@ export function useRouteTemplates(enabled: boolean) {
   return useQuery({
     queryKey: [...DOCUMENTS_KEY, "route-templates"],
     queryFn: () => api.get<RouteTemplate[]>(`${DOCUMENTS_API}/route-templates`),
+    enabled,
+  });
+}
+
+export function useMyDelegations(enabled: boolean) {
+  return useQuery({
+    queryKey: [...DOCUMENTS_KEY, "delegations"],
+    queryFn: () => api.get<DelegationOut[]>(`${DOCUMENTS_API}/delegations`),
     enabled,
   });
 }

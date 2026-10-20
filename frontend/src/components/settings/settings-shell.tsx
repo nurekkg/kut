@@ -14,6 +14,7 @@ const TABS = [
   { href: "/settings/users", key: "users", permission: "settings:admin" },
   { href: "/settings/events", key: "events", permission: "settings:admin" },
   { href: "/settings/routes", key: "routes", permission: "documents:write:routes" },
+  { href: "/settings/notifications", key: "notifications", permission: "notifications:read" },
 ] as const;
 
 export function SettingsNav() {
@@ -55,10 +56,12 @@ export function AdminGate({ children }: { children: ReactNode }) {
   const t = useTranslations("Settings");
   const { user } = useAuth();
   const pathname = usePathname();
-  // Шаблоны маршрутов правят владелец и техдиректор (ADR-015 часть 5): их страница открыта по своему праву.
-  const routesPage =
-    pathname.startsWith("/settings/routes") && (user?.permissions.includes("documents:write:routes") ?? false);
-  if (!user?.permissions.includes("settings:admin") && !routesPage) {
+  // Шаблоны маршрутов правят владелец и техдиректор (ADR-015 часть 5), журнал уведомлений видит владелец
+  // (ADR-015 часть 6): их страницы открыты по своему праву.
+  const ownRightPage =
+    (pathname.startsWith("/settings/routes") && (user?.permissions.includes("documents:write:routes") ?? false)) ||
+    (pathname.startsWith("/settings/notifications") && (user?.permissions.includes("notifications:read") ?? false));
+  if (!user?.permissions.includes("settings:admin") && !ownRightPage) {
     return (
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 py-6">
         <p role="alert" className="text-sm">

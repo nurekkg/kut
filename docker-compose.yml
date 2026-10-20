@@ -13,6 +13,12 @@ x-backend-env: &backend-env
   S3_BUCKET: ${S3_BUCKET:-kut-files}
   S3_ACCESS_KEY: ${S3_ACCESS_KEY:-kut_dev_access}
   S3_SECRET_KEY: ${S3_SECRET_KEY:-kut_dev_secret_key}
+  # Уведомления (S6b): в dev и CI отправка только в журнал; WhatsApp включает заказчик (ops/whatsapp-connect).
+  APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3100}
+  WHATSAPP_ENABLED: ${WHATSAPP_ENABLED:-false}
+  WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+  WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+  WHATSAPP_API_VERSION: ${WHATSAPP_API_VERSION:-v21.0}
 
 # Ключи подписи JWT и шифрования TOTP: плейсхолдеры для разработки (префикс kid «dev» запрещён при
 # APP_ENV=production). Воркеру, beat и migrate ключи не выдаются.
@@ -217,6 +223,7 @@ services:
     environment:
       <<: *backend-env
       DATABASE_URL: postgresql+psycopg://kut_worker:${KUT_WORKER_PASSWORD:-kut_worker_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
+      DEV_SEED_OWNER_URL: postgresql+psycopg://kut_owner:${KUT_OWNER_PASSWORD:-kut_owner_dev_password}@postgres:5432/${POSTGRES_DB:-kut}
       TOTP_ENCRYPTION_KEYS: ${TOTP_ENCRYPTION_KEYS:-dev-1:J4WKMm-ZdEWech8b3xRh2jNaRBI8NTBQQE46PaqMRGc}
       TOTP_ACTIVE_KEY_ID: ${TOTP_ACTIVE_KEY_ID:-dev-1}
       DEV_SEED_PASSWORD: ${DEV_SEED_PASSWORD:-dev_password_change_me}

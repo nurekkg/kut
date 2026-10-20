@@ -46,10 +46,13 @@ async def s3() -> AsyncIterator[httpx.AsyncClient]:
 class Office:
     """Юрлицо, объект и пользователи одного теста: данные других тестов в выборки не попадают."""
 
-    def __init__(self, api: AsyncClient, auth_world: AuthWorld, engine: Engine) -> None:
+    def __init__(
+        self, api: AsyncClient, auth_world: AuthWorld, engine: Engine, owner_engine: Engine
+    ) -> None:
         self.api = api
         self.world = auth_world
         self.engine = engine
+        self.owner_engine = owner_engine
         self.legal, self.code = legal_entity(engine)
         self.project = project(engine, self.legal)
         self.heads: dict[str, dict[str, str]] = {}
@@ -109,14 +112,20 @@ class Office:
             amount=self.amounts.get(document_id),
         )
         assert response.status_code == 201, response.text
-        approve(self.engine, response.json()["id"])
+        approve(self.owner_engine, response.json()["id"])
         return response.json()
 
 
 async def test_the_foreman_sees_a_financial_document_without_its_sum_or_file(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator", "foreman")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open(
+        "estimator", "foreman"
+    )
     ks2 = await office.create(
         "estimator",
         {
@@ -164,9 +173,13 @@ async def test_the_foreman_sees_a_financial_document_without_its_sum_or_file(
 
 
 async def test_the_estimator_reads_the_sum_and_the_file_of_a_financial_document(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open("estimator")
     ks2 = await office.create(
         "estimator",
         {
@@ -194,9 +207,15 @@ async def test_the_estimator_reads_the_sum_and_the_file_of_a_financial_document(
 
 
 async def test_a_non_financial_file_is_open_to_the_foreman(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator", "foreman")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open(
+        "estimator", "foreman"
+    )
     act = await office.create("estimator", {"kind": "commissioning_act"})
     uploaded = await upload(api, s3, act["id"], office.heads["estimator"], PDF_OK, PDF)
     link = await api.get(
@@ -207,9 +226,15 @@ async def test_a_non_financial_file_is_open_to_the_foreman(
 
 
 async def test_the_customer_sees_his_approved_contract_with_its_sum_and_nothing_else(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator", "customer")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open(
+        "estimator", "customer"
+    )
     customer = office.counterparty(devseed.CUSTOMER)
     sub = office.counterparty(devseed.SUB_A)
     ours = await office.create(
@@ -270,9 +295,15 @@ async def test_the_customer_sees_his_approved_contract_with_its_sum_and_nothing_
 
 
 async def test_a_subcontractor_sees_only_its_own_approved_documents(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator", "sub_a")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open(
+        "estimator", "sub_a"
+    )
     own = await office.create(
         "estimator",
         {
@@ -310,9 +341,15 @@ async def test_a_subcontractor_sees_only_its_own_approved_documents(
 
 
 async def test_a_supplier_sees_its_own_waybill_and_no_contract_of_the_customer(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator", "supplier")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open(
+        "estimator", "supplier"
+    )
     waybill = await office.create(
         "estimator",
         {
@@ -335,9 +372,13 @@ async def test_a_supplier_sees_its_own_waybill_and_no_contract_of_the_customer(
 
 
 async def test_archiving_removes_the_document_from_outside_views_and_deletes_nothing(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open(
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open(
         "estimator", "owner", "customer", "foreman"
     )
     contract_doc = await office.create(
@@ -363,9 +404,9 @@ async def test_archiving_removes_the_document_from_outside_views_and_deletes_not
 
 
 async def test_a_user_cannot_create_a_document_in_an_object_outside_his_access(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine
+    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, owner_sync_engine: Engine
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open("estimator")
     foreign = project(worker_sync_engine, office.legal)
     response = await create_document(
         api,
@@ -381,9 +422,15 @@ async def test_a_user_cannot_create_a_document_in_an_object_outside_his_access(
 
 
 async def test_the_audit_journal_shows_the_sum_only_to_the_documents_financial_right(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator", "foreman")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open(
+        "estimator", "foreman"
+    )
     ks3 = await office.create(
         "estimator",
         {
@@ -445,9 +492,15 @@ _ = (AsyncIterator, AsyncEngine, get_sessionmaker, contract, PDF)
 
 
 async def test_an_archived_document_takes_no_new_version(
-    api: AsyncClient, auth_world: AuthWorld, worker_sync_engine: Engine, s3: httpx.AsyncClient
+    api: AsyncClient,
+    auth_world: AuthWorld,
+    worker_sync_engine: Engine,
+    owner_sync_engine: Engine,
+    s3: httpx.AsyncClient,
 ) -> None:
-    office = await Office(api, auth_world, worker_sync_engine).open("estimator", "owner")
+    office = await Office(api, auth_world, worker_sync_engine, owner_sync_engine).open(
+        "estimator", "owner"
+    )
     document = await office.create("estimator", {"kind": "commissioning_act"})
     archived = await api.post(
         f"{API}/documents/{document['id']}/archive", headers=office.heads["owner"]

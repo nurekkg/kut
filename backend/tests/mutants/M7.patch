@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py b/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
+index a9fbccf..b992d65 100644
+--- a/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
++++ b/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
+@@ -119,7 +119,7 @@ def upgrade() -> None:
+         "user",
+         sa.Column("notify_whatsapp_revoked_at", sa.DateTime(timezone=True), nullable=True),
+     )
+-    op.alter_column("user", "notify_whatsapp", server_default=sa.text("false"))
++    op.alter_column("user", "notify_whatsapp", server_default=sa.text("true"))
+     # Существующие строки - выключено. Владелец таблицы под FORCE RLS строк не видит, поэтому правка
+     # идёт через kut_auth (BYPASSRLS). Право kut_auth на колонки нужно функции admin_whatsapp_off.
+     op.execute('GRANT UPDATE (notify_whatsapp, updated_at) ON "user" TO kut_auth')

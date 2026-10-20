@@ -126,13 +126,7 @@ async def _route(session: AsyncSession, document_id: uuid.UUID, version_id: uuid
             {"v": source_id},
         )
     ).all()
-    names = await _names(
-        session,
-        {row.decided_by for row in steps}
-        | {row.on_behalf_of for row in steps}
-        | {row.actor_id for row in decisions}
-        | {row.on_behalf_of for row in decisions},
-    )
+    names = await service.document_names(session, [document_id])
     decision_rows = []
     for row in decisions:
         reason = await session.scalar(

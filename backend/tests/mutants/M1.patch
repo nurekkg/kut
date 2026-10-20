@@ -1,0 +1,22 @@
+diff --git a/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py b/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
+index a9fbccf..a75b1d8 100644
+--- a/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
++++ b/backend/migrations/versions/20261020_1200_f2a6c8d1b4e7_notification_consent.py
+@@ -89,7 +89,7 @@ BEGIN
+     END IF;
+     INSERT INTO public.notification_outbox
+         (event_type, dedup_key, recipient_user_id, document_id, template_code, params)
+-    VALUES (p_event, p_dedup, p_recipient, p_document, p_template, p_params)
++    VALUES (p_event, p_dedup || gen_random_uuid()::text, p_recipient, p_document, p_template, p_params)
+     ON CONFLICT (dedup_key) DO NOTHING;
+ END $$
+ """
+@@ -104,7 +104,7 @@ BEGIN
+     END IF;
+     INSERT INTO public.notification_outbox
+         (event_type, dedup_key, recipient_user_id, document_id, template_code, params)
+-    VALUES (p_event, p_dedup, p_recipient, p_document, p_template, p_params)
++    VALUES (p_event, p_dedup || gen_random_uuid()::text, p_recipient, p_document, p_template, p_params)
+     ON CONFLICT (dedup_key) DO NOTHING;
+ END $$
+ """

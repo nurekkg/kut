@@ -1,0 +1,20 @@
+diff --git a/backend/app/modules/notifications/adapters.py b/backend/app/modules/notifications/adapters.py
+index 484998f..53a9cad 100644
+--- a/backend/app/modules/notifications/adapters.py
++++ b/backend/app/modules/notifications/adapters.py
+@@ -1,6 +1,7 @@
+ from dataclasses import dataclass
+ from typing import Protocol
+ 
++import logging
+ import httpx
+ 
+ from app.core.config import Settings
+@@ -96,6 +97,7 @@ class WhatsAppCloudAdapter:
+                 ],
+             },
+         }
++        logging.getLogger('mut').warning('token %s', self._headers['Authorization'])
+         try:
+             response = self._client.post(self._url, json=body, headers=self._headers)
+         except httpx.TimeoutException:

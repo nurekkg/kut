@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261020_1100_e5c9f3b7d2a4_notifications.py b/backend/migrations/versions/20261020_1100_e5c9f3b7d2a4_notifications.py
+index a825a8c..199bdf1 100644
+--- a/backend/migrations/versions/20261020_1100_e5c9f3b7d2a4_notifications.py
++++ b/backend/migrations/versions/20261020_1100_e5c9f3b7d2a4_notifications.py
+@@ -67,7 +67,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+         SELECT 1 FROM public."user" u
+         JOIN public.role_permission rp ON rp.role_id = u.role_id
+         JOIN public.permission p ON p.id = rp.permission_id
+-        WHERE u.id = p_user AND p.module = 'documents' AND p.action = p_action
++        WHERE u.id = p_user AND p.module = 'documents' AND (p.action = p_action OR TRUE)
+           AND p.qualifier IS NULL AND rp.deleted_at IS NULL AND p.deleted_at IS NULL
+     )
+ $$

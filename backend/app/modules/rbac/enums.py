@@ -15,6 +15,7 @@ class Module(StrEnum):
     SETTINGS = "settings"
     WORKS = "works"
     EQUIPMENT = "equipment"
+    NOTIFICATIONS = "notifications"
 
 
 class Action(StrEnum):
