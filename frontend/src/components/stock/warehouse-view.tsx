@@ -121,7 +121,7 @@ export function WarehouseView({ projectId }: { projectId: string }) {
               </tr>
             </thead>
             <tbody>
-              {(balances.data ?? [])
+              {(materials.isSuccess ? (balances.data ?? []) : [])
                 .filter((row) => !byId.get(row.material_id)?.requires_certificate)
                 .map((row) => (
                   <tr className="border-t" key={`${row.material_id}`}>
@@ -132,7 +132,7 @@ export function WarehouseView({ projectId }: { projectId: string }) {
                     </td>
                   </tr>
                 ))}
-              {(batchBalances.data ?? [])
+              {(materials.isSuccess ? (batchBalances.data ?? []) : [])
                 .filter((row) => byId.get(row.material_id)?.requires_certificate)
                 .map((row) => (
                   <tr className="border-t" key={`${row.material_id}-${row.batch_id}`}>

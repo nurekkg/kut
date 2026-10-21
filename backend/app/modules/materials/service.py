@@ -4,7 +4,7 @@
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
@@ -109,6 +109,17 @@ async def update_material(
     session: AsyncSession, material_id: uuid.UUID, body: MaterialPatch
 ) -> MaterialOut:
     row = await _material(session, material_id)
+    if (
+        body.requires_certificate is not None
+        and body.requires_certificate != row.requires_certificate
+    ):
+        has_stock = await session.scalar(
+            text("SELECT app.material_has_movements(:m)"), {"m": row.id}
+        )
+        if has_stock:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "material.certificate_flag_locked"
+            )
     async with db_rules(session):
         for field in ("name", "requires_certificate", "active"):
             value = getattr(body, field)
@@ -166,6 +177,36 @@ async def add_batch(session: AsyncSession, material_id: uuid.UUID, body: BatchIn
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, "material.certificate_invalid"
             )
+        reused = await session.scalar(
+            select(MaterialBatch.id)
+            .where(
+                MaterialBatch.certificate_document_id == body.certificate_document_id,
+                MaterialBatch.material_id != row.id,
+                MaterialBatch.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        if reused is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "material.certificate_invalid"
+            )
+    existing = await session.scalar(
+        select(MaterialBatch).where(
+            MaterialBatch.material_id == row.id,
+            MaterialBatch.batch_no == body.batch_no,
+            MaterialBatch.deleted_at.is_(None),
+        )
+    )
+    if existing is not None and existing.certificate_document_id == body.certificate_document_id:
+        # Повтор после потери ответа: та же партия с тем же сертификатом - не вторая запись.
+        return BatchOut(
+            id=existing.id,
+            material_id=row.id,
+            batch_no=existing.batch_no,
+            certificate_document_id=existing.certificate_document_id,
+            customs_document_id=existing.customs_document_id,
+            country_of_origin=existing.country_of_origin,
+        )
     async with db_rules(session):
         batch = MaterialBatch(
             material_id=row.id,

@@ -930,3 +930,108 @@ async def test_the_procurement_sees_the_legal_entities_of_the_catalog(
         f"{API}/materials/legal-entities", headers=yard.desk.heads["foreman"]
     )
     assert foreman_view.status_code == 200, foreman_view.text
+
+
+async def test_a_certificate_flag_cannot_change_once_the_material_has_stock(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    await receive(api, owner_sync_engine, yard, 5)
+    flipped = await api.patch(
+        f"{API}/materials/{yard.material}",
+        json={"requires_certificate": True},
+        headers=yard.desk.heads["owner"],
+    )
+    assert flipped.status_code == 422, flipped.text
+    assert "material.certificate_flag_locked" in flipped.text
+
+
+async def test_a_repeated_batch_creation_returns_the_same_batch(
+    api, auth_world, worker_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
+    body = {"batch_no": "П-9", "certificate_document_id": await certificate_document(api, yard)}
+    first = await api.post(
+        f"{API}/materials/{yard.material}/batches", json=body, headers=yard.desk.heads["owner"]
+    )
+    second = await api.post(
+        f"{API}/materials/{yard.material}/batches", json=body, headers=yard.desk.heads["owner"]
+    )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["id"] == second.json()["id"]
+
+
+async def test_a_certificate_cannot_serve_another_material(api, auth_world, worker_sync_engine):
+    yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
+    owner = yard.desk.heads["owner"]
+    other = await api.post(
+        f"{API}/materials",
+        json={
+            "legal_entity_id": str(yard.desk.legal),
+            "code": f"M-{uuid4().hex[:6]}",
+            "name": "Другой материал",
+            "base_unit": "кг",
+            "requires_certificate": True,
+        },
+        headers=owner,
+    )
+    assert other.status_code == 201, other.text
+    certificate = await certificate_document(api, yard)
+    first = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "П-1", "certificate_document_id": certificate},
+        headers=owner,
+    )
+    assert first.status_code == 201, first.text
+    shared = await api.post(
+        f"{API}/materials/{other.json()['id']}/batches",
+        json={"batch_no": "П-2", "certificate_document_id": certificate},
+        headers=owner,
+    )
+    assert shared.status_code == 422, shared.text
+    assert "material.certificate_invalid" in shared.text
+
+
+async def test_an_archived_receipt_checks_the_balance_of_its_batch(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
+    owner = yard.desk.heads["owner"]
+    store = yard.desk.heads["storekeeper"]
+    batches = []
+    for number in ("П-1", "П-2"):
+        created = await api.post(
+            f"{API}/materials/{yard.material}/batches",
+            json={
+                "batch_no": number,
+                "certificate_document_id": await certificate_document(api, yard),
+            },
+            headers=owner,
+        )
+        assert created.status_code == 201, created.text
+        batches.append(created.json()["id"])
+    doc, first = await document(
+        api, store, yard, "m7_act", [receipt_line(yard, 10, batch=UUID(batches[0]))]
+    )
+    approve(owner_sync_engine, first)
+    line = issue_line(yard, 5)
+    line["material_batch_id"] = batches[0]
+    waybill, waybill_version = await document(api, store, yard, "waybill_internal", [line])
+    posted = await api.post(
+        f"{API}/stock/waybills/{waybill}/versions/{waybill_version}/post", headers=store
+    )
+    assert posted.status_code == 200, posted.text
+    async with httpx.AsyncClient(timeout=10) as s3:
+        scan = await upload(api, s3, doc, store, PDF_OK, PDF)
+    assert scan.status_code == 201, scan.text
+    second = scan.json()["id"]
+    saved = await api.put(
+        f"{API}/documents/{doc}/versions/{second}/lines",
+        json={"lines": [receipt_line(yard, 10, batch=UUID(batches[1]))]},
+        headers={**store, **idem()},
+    )
+    assert saved.status_code == 200, saved.text
+    with pytest.raises(DBAPIError, match=r"stock\.receipt_consumed"):
+        approve(owner_sync_engine, second)
+    assert await balance(api, yard) == 5

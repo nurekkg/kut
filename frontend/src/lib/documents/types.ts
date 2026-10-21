@@ -44,6 +44,7 @@ export type KindOut = {
   contract_required: boolean;
   links: string[];
   lines: boolean;
+  file_required: boolean;
 };
 
 export type VersionOut = {
@@ -51,8 +52,8 @@ export type VersionOut = {
   document_id: string;
   version_no: number;
   status: string;
-  content_type: string;
-  size_bytes: number;
+  content_type: string | null;
+  size_bytes: number | null;
   created_at: string;
   comment: string | null;
   checksum_sha256: string | null;

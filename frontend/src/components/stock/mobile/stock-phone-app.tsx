@@ -56,11 +56,16 @@ export function StockPhoneApp({ projectId }: { projectId: string }) {
 
       {warehouses.isSuccess && warehouseId === null && <p className="text-sm text-destructive">{t("noWarehouse")}</p>}
 
-      {project.data && tab === "receipt" && (
-        <ReceiptForm legalEntityId={project.data.legal_entity_id} projectId={projectId} warehouseId={warehouseId} />
+      {/* Обе формы смонтированы: переключение вкладки не теряет черновики и состояние повтора. */}
+      {project.data && (
+        <div hidden={tab !== "receipt"}>
+          <ReceiptForm legalEntityId={project.data.legal_entity_id} projectId={projectId} warehouseId={warehouseId} />
+        </div>
       )}
-      {project.data && tab === "issue" && (
-        <IssueForm legalEntityId={project.data.legal_entity_id} projectId={projectId} warehouseId={warehouseId} />
+      {project.data && (
+        <div hidden={tab !== "issue"}>
+          <IssueForm legalEntityId={project.data.legal_entity_id} projectId={projectId} warehouseId={warehouseId} />
+        </div>
       )}
     </div>
   );

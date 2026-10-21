@@ -18,7 +18,7 @@ import { todayIso } from "@/lib/schedule/dates";
 
 import { useStockErrorMessage } from "../use-stock-error";
 
-type Draft = ReceiptRow & { key: number; certFile: File | null };
+type Draft = ReceiptRow & { key: number; certFile: File | null; certDocId: string | null };
 
 // Приход на телефоне: позиции из справочника, для сертифицированных - партия и сертификат (камера),
 // затем скан накладной (камера) и отправка прорабу (М-7 идёт по маршруту «склад»).
@@ -42,7 +42,8 @@ export function ReceiptForm({
   const [done, setDone] = useState<string | null>(null);
   const [nextKey, setNextKey] = useState(1);
   // Черновик М-7 после сбоя на середине отправки: повтор продолжает тот же черновик.
-  const [draftAct, setDraftAct] = useState<{ id: string; versionId: string } | null>(null);
+  const [draftActId, setDraftActId] = useState<string | null>(null);
+  const [draftVersionId, setDraftVersionId] = useState<string | null>(null);
 
   function addMaterial(material: MaterialOut) {
     setRows((current) => [
@@ -56,6 +57,7 @@ export function ReceiptForm({
         batchId: null,
         certificateAttached: false,
         certFile: null,
+        certDocId: null,
       },
     ]);
     setNextKey((value) => value + 1);
@@ -80,29 +82,35 @@ export function ReceiptForm({
 
     setBusy(true);
     try {
-      // 1) Сертификат и партия для сертифицированных материалов. Партия сохраняется в состоянии сразу,
-      // поэтому повтор после сбоя не создаёт вторую партию с тем же номером.
+      // 1) Сертификат и партия для сертифицированных материалов. Документ сертификата создаётся один раз
+      // на строку и запоминается; партия сохраняется в состоянии сразу. Повтор после сбоя не плодит документы.
       let working = rows;
       for (const row of rows) {
         if (!row.material.requires_certificate || row.batchId !== null) continue;
         if (row.certFile === null) return setError(t("noCertificate", { name: row.material.name }));
-        const certificate = await api.post<DocumentDetail>(
-          DOCUMENTS_API,
-          {
-            kind: "material_certificate",
-            legal_entity_id: legalEntityId,
-            title: `${t("certTitle")} ${row.material.code} ${row.batchNo}`,
-          },
-          newIdempotencyKey(),
-        );
+        let certificateId = row.certDocId;
+        if (certificateId === null) {
+          const certificate = await api.post<DocumentDetail>(
+            DOCUMENTS_API,
+            {
+              kind: "material_certificate",
+              legal_entity_id: legalEntityId,
+              title: `${t("certTitle")} ${row.material.code} ${row.batchNo}`,
+            },
+            newIdempotencyKey(),
+          );
+          certificateId = certificate.id;
+          working = working.map((item) => (item.key === row.key ? { ...item, certDocId: certificateId } : item));
+          setRows(working);
+        }
         await uploadVersion(
           await prepareUpload(row.certFile, newIdempotencyKey()),
-          versionTransport(certificate.id),
+          versionTransport(certificateId),
           { comment: null, amount: null },
         );
         const batch = await api.post<BatchOut>(`${API}/materials/${row.material.id}/batches`, {
           batch_no: row.batchNo.trim(),
-          certificate_document_id: certificate.id,
+          certificate_document_id: certificateId,
           customs_document_id: null,
           country_of_origin: null,
         });
@@ -110,9 +118,9 @@ export function ReceiptForm({
         setRows(working);
       }
 
-      // 2) М-7: черновик создаётся один раз (повтор после сбоя идёт в тот же черновик), скан - версия с файлом.
-      let act = draftAct;
-      if (act === null) {
+      // 2) М-7: черновик запоминается сразу после создания, до загрузки скана; повтор продолжает тот же черновик.
+      let actId = draftActId;
+      if (actId === null) {
         const created = await api.post<DocumentDetail>(
           DOCUMENTS_API,
           {
@@ -123,27 +131,29 @@ export function ReceiptForm({
           },
           newIdempotencyKey(),
         );
+        actId = created.id;
+        setDraftActId(actId);
+      }
+      let versionId = draftVersionId;
+      if (versionId === null) {
         const version: VersionOut = await uploadVersion(
           await prepareUpload(scan, newIdempotencyKey()),
-          versionTransport(created.id),
+          versionTransport(actId),
           { comment: null, amount: null },
         );
-        act = { id: created.id, versionId: version.id };
-        setDraftAct(act);
+        versionId = version.id;
+        setDraftVersionId(versionId);
       }
       await api.put(
-        `${DOCUMENTS_API}/${act.id}/versions/${act.versionId}/lines`,
+        `${DOCUMENTS_API}/${actId}/versions/${versionId}/lines`,
         { lines: working.map((row) => receiptLinePayload(row, warehouseId)) },
         newIdempotencyKey(),
       );
-      await api.post(
-        `${DOCUMENTS_API}/${act.id}/versions/${act.versionId}/send`,
-        undefined,
-        newIdempotencyKey(),
-      );
+      await api.post(`${DOCUMENTS_API}/${actId}/versions/${versionId}/send`, undefined, newIdempotencyKey());
       setRows([]);
       setScan(null);
-      setDraftAct(null);
+      setDraftActId(null);
+      setDraftVersionId(null);
       setDone(t("sent"));
     } catch (cause) {
       setError(message(cause));
