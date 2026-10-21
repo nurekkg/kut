@@ -580,3 +580,42 @@ async def test_an_m7_on_approval_adds_nothing_to_stock(
     assert await balance(api, yard) == 0
     move(owner_sync_engine, version, "approved")
     assert await balance(api, yard) == 4
+
+
+async def test_a_reversal_of_a_consumed_receipt_is_refused(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    await receive(api, owner_sync_engine, yard, 10)
+    _, _, posted = await issue(api, yard, 8)
+    assert posted.status_code == 200, posted.text
+    receipt = next(row for row in await movements(api, yard) if row["kind"] == "receipt")
+    undone = await api.post(
+        f"{API}/stock/movements/{receipt['id']}/reverse", headers=yard.desk.heads["storekeeper"]
+    )
+    assert undone.status_code == 409, undone.text
+    assert "stock.insufficient" in undone.text
+    assert await balance(api, yard) == 2
+
+
+async def test_an_m7_line_without_material_is_refused_on_approval(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    _, version = await document(
+        api,
+        yard.desk.heads["storekeeper"],
+        yard,
+        "m7_act",
+        [
+            {
+                "name": "Без материала",
+                "unit": "кг",
+                "quantity": 1,
+                "warehouse_id": str(yard.warehouse),
+            }
+        ],
+    )
+    with pytest.raises(DBAPIError, match=r"stock\.material_required"):
+        approve(owner_sync_engine, version)
+    assert await balance(api, yard) == 0

@@ -1,12 +1,12 @@
 diff --git a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
 --- a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
 +++ b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
-@@ -197,7 +197,7 @@
+@@ -241,7 +241,7 @@
          base := ln.quantity * f;
          PERFORM app.stock_lock(ln.warehouse_id, m.id);
          bal := app.stock_balance(ln.warehouse_id, m.id, ln.material_batch_id);
--        IF bal < base THEN
-+        IF FALSE AND bal < base THEN
+-        IF bal < base OR app.stock_balance(ln.warehouse_id, m.id) < base THEN
++        IF FALSE THEN
              RAISE EXCEPTION 'stock.insufficient';
          END IF;
          INSERT INTO public.stock_movement (legal_entity_id, project_id, warehouse_id, material_id,

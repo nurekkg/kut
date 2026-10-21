@@ -154,6 +154,7 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "stock.warehouse_project": (422, "stock.warehouse_project"),
     "stock.issue_incomplete": (422, "stock.issue_incomplete"),
     "stock.kind_invalid": (422, "stock.kind_invalid"),
+    "stock.material_required": (422, "stock.material_required"),
     "stock.version_not_draft": (409, "stock.version_not_draft"),
     "stock.forbidden": (403, "forbidden"),
     "stock.not_found": (404, "not_found"),

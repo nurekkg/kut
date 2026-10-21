@@ -49,7 +49,13 @@ async def create_warehouse(session: AsyncSession, project_id: uuid.UUID, name: s
     return row
 
 
+async def _visible(session: AsyncSession, warehouse_id: uuid.UUID) -> None:
+    if await session.scalar(select(Warehouse.id).where(Warehouse.id == warehouse_id)) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
+
+
 async def balances(session: AsyncSession, warehouse_id: uuid.UUID) -> list[Balance]:
+    await _visible(session, warehouse_id)
     rows = (
         await session.execute(
             select(
@@ -78,6 +84,7 @@ async def balances(session: AsyncSession, warehouse_id: uuid.UUID) -> list[Balan
 async def movements(
     session: AsyncSession, warehouse_id: uuid.UUID, limit: int
 ) -> list[StockMovement]:
+    await _visible(session, warehouse_id)
     return list(
         (
             await session.scalars(

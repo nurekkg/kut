@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.auth.deps import get_db, get_principal, internal_only, require
+from app.modules.auth.deps import get_db, internal_only, require
 from app.modules.auth.principal import Principal
 from app.modules.equipment import imports as spreadsheet
 from app.modules.materials import service
@@ -28,19 +28,6 @@ CatalogWriter = Annotated[
     Principal,
     Depends(internal_only(require(Module.MATERIALS, Action.WRITE, qualifier="catalog"))),
 ]
-
-
-def _batch_writer(principal: Principal = Depends(get_principal)) -> Principal:
-    """Партии вносят снабженец (справочник) и кладовщик (приход): у обоих своё право записи."""
-    if principal.is_internal and (
-        principal.has(Module.MATERIALS, Action.WRITE, "catalog")
-        or principal.has(Module.MATERIALS, Action.WRITE, "stock")
-    ):
-        return principal
-    raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
-
-
-BatchWriter = Annotated[Principal, Depends(_batch_writer)]
 
 
 async def _body(request: Request) -> bytes:
@@ -107,7 +94,7 @@ async def add_unit(
 
 @router.post("/{material_id}/batches", status_code=status.HTTP_201_CREATED, response_model=BatchOut)
 async def add_batch(
-    material_id: uuid.UUID, body: BatchIn, session: Db, _principal: BatchWriter
+    material_id: uuid.UUID, body: BatchIn, session: Db, _principal: CatalogWriter
 ) -> BatchOut:
     return await service.add_batch(session, material_id, body)
 

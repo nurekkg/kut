@@ -43,6 +43,14 @@ def _kept(links: dict[int, Any], number: int, field: str) -> uuid.UUID | None:
     return getattr(row, field) if row is not None else None
 
 
+def _carry(links: dict[int, Any], line: Any) -> dict[int, Any]:
+    """Связи переносятся, если позиция с тем же номером имеет то же имя и единицу."""
+    row = links.get(line.position_no)
+    if row is not None and row.name == line.name and row.unit == line.unit:
+        return {line.position_no: row}
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class NewLine:
     position_no: int
@@ -391,6 +399,8 @@ async def import_lines(
         await session.execute(
             select(
                 DocumentLine.position_no,
+                DocumentLine.name,
+                DocumentLine.unit,
                 DocumentLine.work_id,
                 DocumentLine.project_node_id,
                 DocumentLine.material_id,
@@ -407,12 +417,12 @@ async def import_lines(
             name=line.name,
             unit=line.unit,
             quantity=line.quantity,
-            work_id=_kept(links, line.position_no, "work_id"),
-            project_node_id=_kept(links, line.position_no, "project_node_id"),
-            material_id=_kept(links, line.position_no, "material_id"),
-            material_batch_id=_kept(links, line.position_no, "material_batch_id"),
-            warehouse_id=_kept(links, line.position_no, "warehouse_id"),
-            responsible_user_id=_kept(links, line.position_no, "responsible_user_id"),
+            work_id=_kept(_carry(links, line), line.position_no, "work_id"),
+            project_node_id=_kept(_carry(links, line), line.position_no, "project_node_id"),
+            material_id=_kept(_carry(links, line), line.position_no, "material_id"),
+            material_batch_id=_kept(_carry(links, line), line.position_no, "material_batch_id"),
+            warehouse_id=_kept(_carry(links, line), line.position_no, "warehouse_id"),
+            responsible_user_id=_kept(_carry(links, line), line.position_no, "responsible_user_id"),
             unit_price=line.unit_price,
         )
         for line in parsed

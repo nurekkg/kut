@@ -1,7 +1,7 @@
 diff --git a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
 --- a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
 +++ b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
-@@ -100,7 +100,7 @@
+@@ -109,7 +109,7 @@
          IF f IS NULL THEN
              RAISE EXCEPTION 'material.unit_unknown';
          END IF;

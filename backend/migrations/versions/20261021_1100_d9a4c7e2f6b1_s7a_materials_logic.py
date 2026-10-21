@@ -82,11 +82,20 @@ BEGIN
     IF d.kind <> 'm7_act' THEN
         RETURN 0;
     END IF;
+    IF EXISTS (SELECT 1 FROM public.document_line
+               WHERE version_id = p_version AND deleted_at IS NULL AND material_id IS NULL) THEN
+        RAISE EXCEPTION 'stock.material_required';
+    END IF;
     FOR ln IN SELECT * FROM public.document_line
               WHERE version_id = p_version AND deleted_at IS NULL AND material_id IS NOT NULL
               ORDER BY position_no LOOP
         SELECT * INTO m FROM public.material WHERE id = ln.material_id;
         IF m.legal_entity_id <> v.legal_entity_id THEN
+            RAISE EXCEPTION 'stock.not_found';
+        END IF;
+        IF ln.material_batch_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM public.material_batch mb
+            WHERE mb.id = ln.material_batch_id AND mb.material_id = m.id) THEN
             RAISE EXCEPTION 'stock.not_found';
         END IF;
         IF ln.warehouse_id IS NULL THEN
@@ -126,11 +135,30 @@ END $$
 """
 
 VERSION_STOCK_AFTER = """
-CREATE FUNCTION app.version_stock_after() RETURNS trigger
+CREATE OR REPLACE FUNCTION app.version_stock_after() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE
+    s public.stock_movement;
 BEGIN
     IF NEW.status IN ('approved', 'signed') AND OLD.status IS DISTINCT FROM NEW.status THEN
         PERFORM app.receipt_from_m7(NEW.id);
+    ELSIF NEW.status = 'archived' AND OLD.status IN ('approved', 'signed') THEN
+        FOR s IN SELECT * FROM public.stock_movement m
+                 WHERE m.version_id = NEW.id AND m.kind IN ('receipt', 'issue')
+                   AND NOT EXISTS (SELECT 1 FROM public.stock_movement x
+                                   WHERE x.reversal_of_id = m.id)
+                 ORDER BY m.created_at, m.id LOOP
+            PERFORM app.stock_lock(s.warehouse_id, s.material_id);
+            IF s.qty > 0 AND app.stock_balance(s.warehouse_id, s.material_id) < s.qty THEN
+                RAISE EXCEPTION 'stock.insufficient';
+            END IF;
+            INSERT INTO public.stock_movement (legal_entity_id, project_id, warehouse_id, material_id,
+                batch_id, kind, qty, unit, quantity_in_unit, factor, document_id, version_id,
+                source_line_id, project_node_id, work_id, responsible_user_id, reversal_of_id, created_by)
+            VALUES (s.legal_entity_id, s.project_id, s.warehouse_id, s.material_id, s.batch_id,
+                'reversal', -s.qty, s.unit, s.quantity_in_unit, s.factor, s.document_id, s.version_id,
+                NULL, s.project_node_id, s.work_id, s.responsible_user_id, s.id, app.user_id());
+        END LOOP;
     END IF;
     RETURN NULL;
 END $$
@@ -147,6 +175,7 @@ DECLARE
     f numeric;
     base numeric;
     bal numeric;
+    r public.document_version;
     n integer := 0;
 BEGIN
     IF NOT app.has_permission('materials', 'write', 'stock') THEN
@@ -166,6 +195,9 @@ BEGIN
     IF NOT app.document_writable(d.id) THEN
         RAISE EXCEPTION 'document.forbidden';
     END IF;
+    IF d.archived_at IS NOT NULL THEN
+        RAISE EXCEPTION 'document.archived';
+    END IF;
     IF EXISTS (SELECT 1 FROM public.document_line
                WHERE version_id = p_version AND deleted_at IS NULL
                  AND (material_id IS NULL OR warehouse_id IS NULL
@@ -184,10 +216,22 @@ BEGIN
                  AND n.project_id IS DISTINCT FROM v.project_id) THEN
         RAISE EXCEPTION 'stock.not_found';
     END IF;
+    FOR r IN SELECT * FROM public.document_version
+             WHERE document_id = d.id AND status IN ('approved', 'signed') AND id <> p_version LOOP
+        UPDATE public.document_version SET status = 'archived', updated_at = now() WHERE id = r.id;
+        INSERT INTO public.document_status_event
+            (document_version_id, project_id, legal_entity_id, from_status, to_status, comment, actor_id)
+        VALUES (r.id, r.project_id, r.legal_entity_id, r.status, 'archived', NULL, app.user_id());
+    END LOOP;
     FOR ln IN SELECT * FROM public.document_line
               WHERE version_id = p_version AND deleted_at IS NULL ORDER BY position_no LOOP
         SELECT * INTO m FROM public.material WHERE id = ln.material_id;
         IF m.legal_entity_id <> v.legal_entity_id THEN
+            RAISE EXCEPTION 'stock.not_found';
+        END IF;
+        IF ln.material_batch_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM public.material_batch mb
+            WHERE mb.id = ln.material_batch_id AND mb.material_id = m.id) THEN
             RAISE EXCEPTION 'stock.not_found';
         END IF;
         f := app.material_factor(m.id, ln.unit);
@@ -197,7 +241,7 @@ BEGIN
         base := ln.quantity * f;
         PERFORM app.stock_lock(ln.warehouse_id, m.id);
         bal := app.stock_balance(ln.warehouse_id, m.id, ln.material_batch_id);
-        IF bal < base THEN
+        IF bal < base OR app.stock_balance(ln.warehouse_id, m.id) < base THEN
             RAISE EXCEPTION 'stock.insufficient';
         END IF;
         INSERT INTO public.stock_movement (legal_entity_id, project_id, warehouse_id, material_id,
@@ -212,6 +256,8 @@ BEGIN
     INSERT INTO public.document_status_event
         (document_version_id, project_id, legal_entity_id, from_status, to_status, comment, actor_id)
     VALUES (p_version, v.project_id, v.legal_entity_id, 'draft', 'approved', NULL, app.user_id());
+    UPDATE public.document SET current_version_id = p_version, updated_at = now()
+    WHERE id = d.id;
     RETURN n;
 END $$
 """
@@ -234,6 +280,9 @@ BEGIN
         RAISE EXCEPTION 'stock.reversal_of_reversal';
     END IF;
     PERFORM app.stock_lock(s.warehouse_id, s.material_id);
+    IF s.qty > 0 AND app.stock_balance(s.warehouse_id, s.material_id) < s.qty THEN
+        RAISE EXCEPTION 'stock.insufficient';
+    END IF;
     INSERT INTO public.stock_movement (legal_entity_id, project_id, warehouse_id, material_id,
         batch_id, kind, qty, unit, quantity_in_unit, factor, document_id, version_id,
         source_line_id, project_node_id, work_id, responsible_user_id, reversal_of_id, created_by)
@@ -271,6 +320,9 @@ BEGIN
     END IF;
     IF NOT app.document_writable(d.id) THEN
         RAISE EXCEPTION 'document.forbidden';
+    END IF;
+    IF d.kind = 'waybill_internal' THEN
+        RAISE EXCEPTION 'stock.kind_invalid';
     END IF;
     IF d.kind = 'm7_act' AND EXISTS (
         SELECT 1 FROM public.document_line ln

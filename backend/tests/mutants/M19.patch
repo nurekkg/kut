@@ -1,12 +1,12 @@
 diff --git a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
 --- a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
 +++ b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
-@@ -129,7 +129,7 @@
- CREATE FUNCTION app.version_stock_after() RETURNS trigger
- LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+@@ -140,7 +140,7 @@
+ DECLARE
+     s public.stock_movement;
  BEGIN
 -    IF NEW.status IN ('approved', 'signed') AND OLD.status IS DISTINCT FROM NEW.status THEN
 +    IF NEW.status IN ('on_approval', 'approved', 'signed') AND OLD.status IS DISTINCT FROM NEW.status THEN
          PERFORM app.receipt_from_m7(NEW.id);
-     END IF;
-     RETURN NULL;
+     ELSIF NEW.status = 'archived' AND OLD.status IN ('approved', 'signed') THEN
+         FOR s IN SELECT * FROM public.stock_movement m
