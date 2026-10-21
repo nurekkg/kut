@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py b/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
+--- a/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
++++ b/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
+@@ -480,7 +480,7 @@
+         " AND project_id = ANY ((SELECT app.project_ids())::uuid[]))"
+     )
+     # Движение пишут только функции склада (kut_auth): у kut_app нет INSERT, UPDATE и DELETE.
+-    op.execute("GRANT SELECT ON stock_movement TO kut_app")
++    op.execute("GRANT SELECT, UPDATE ON stock_movement TO kut_app")
+     op.execute("GRANT SELECT, INSERT ON stock_movement TO kut_auth")
+     op.execute(
+         "GRANT SELECT ON material, material_unit, material_batch, material_price, warehouse TO kut_auth"

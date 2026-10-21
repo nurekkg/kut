@@ -62,6 +62,7 @@ KINDS: Final[dict[str, KindSpec]] = {
     "waybill_internal": KindSpec("ВН", EITHER, False, lines=True),
     "invoice_esf": KindSpec("ЭСФ", LEGAL, True, counterparty=True),
     "m7_act": KindSpec("М7", EITHER, False, lines=True),
+    "inventory_act": KindSpec("ИНВ", OBJECT, False, lines=True),
     "material_request": KindSpec(
         "ЗМ", OBJECT, False, links=frozenset({Link.PROJECT_NODE}), lines=True
     ),
@@ -95,6 +96,9 @@ CUSTOMER_KINDS: Final = frozenset(
 SUBCONTRACTOR_KINDS: Final = frozenset(
     {"contract_subcontract", "ks2", "ks3", "ks6", "hidden_works_act", "ird"}
 )
+# Виды, которые вносит кладовщик (ADR-016 часть 5): М-7 и внутренняя накладная (ВН).
+STOCK_KINDS: Final = frozenset({"m7_act", "waybill_internal"})
+INVENTORY_KIND: Final = "inventory_act"
 SUPPLIER_KINDS: Final = frozenset(
     {"contract_supply", "waybill_torg12", "waybill_m15", "invoice_esf", "material_request"}
 )
@@ -134,6 +138,7 @@ KIND_TITLES: Final[dict[str, str]] = {
     "invoice_esf": "Счёт-фактура (ЭСФ)",
     "m7_act": "Акт М-7",
     "material_request": "Заявка на материалы",
+    "inventory_act": "Акт инвентаризации",
     "commissioning_act": "Акт ввода в эксплуатацию",
     "equipment_passport": "Паспорт техники",
     "equipment_technical_inspection": "Техосмотр",

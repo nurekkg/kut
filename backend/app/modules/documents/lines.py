@@ -9,6 +9,7 @@
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import column, func, select, table, update
@@ -36,6 +37,12 @@ AMOUNTS = table(
 )
 
 
+def _kept(links: dict[int, Any], number: int, field: str) -> uuid.UUID | None:
+    """Связь позиции, сохранённая в черновике: переносится при перестройке списка."""
+    row = links.get(number)
+    return getattr(row, field) if row is not None else None
+
+
 @dataclass(frozen=True, slots=True)
 class NewLine:
     position_no: int
@@ -45,6 +52,10 @@ class NewLine:
     work_id: uuid.UUID | None
     project_node_id: uuid.UUID | None
     unit_price: Decimal | None
+    material_id: uuid.UUID | None = None
+    material_batch_id: uuid.UUID | None = None
+    warehouse_id: uuid.UUID | None = None
+    responsible_user_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,8 +101,20 @@ async def _draft(session: AsyncSession, document_id: uuid.UUID, version_id: uuid
     return _Draft(document_id, version_id, row.legal_entity_id, row.project_id, row.kind)
 
 
+# Склад и ответственный - только для внутренних: внешним роли портала читают лишь PORTAL_LINE.
+INTERNAL_LINE_COLUMNS = (
+    DocumentLine.material_id,
+    DocumentLine.material_batch_id,
+    DocumentLine.warehouse_id,
+    DocumentLine.responsible_user_id,
+)
+
+
 async def list_lines(
-    session: AsyncSession, document_id: uuid.UUID, version_id: uuid.UUID
+    session: AsyncSession,
+    principal: Principal,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
 ) -> LinesOut:
     visible = await session.scalar(
         select(DocumentVersion.id).where(
@@ -101,6 +124,7 @@ async def list_lines(
     if visible is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
     source_id = await session.scalar(select(func.app.version_source(version_id)))
+    internal = INTERNAL_LINE_COLUMNS if principal.is_internal else ()
     rows = (
         await session.execute(
             select(
@@ -110,6 +134,7 @@ async def list_lines(
                 DocumentLine.quantity,
                 DocumentLine.work_id,
                 DocumentLine.project_node_id,
+                *internal,
                 AMOUNTS.c.unit_price,
                 AMOUNTS.c.amount,
             )
@@ -130,6 +155,10 @@ async def list_lines(
             quantity=row.quantity,
             work_id=row.work_id,
             project_node_id=row.project_node_id,
+            material_id=getattr(row, "material_id", None),
+            material_batch_id=getattr(row, "material_batch_id", None),
+            warehouse_id=getattr(row, "warehouse_id", None),
+            responsible_user_id=getattr(row, "responsible_user_id", None),
             unit_price=row.unit_price,
             amount=row.amount,
         )
@@ -182,6 +211,10 @@ async def _replace(
                 quantity=line.quantity,
                 work_id=line.work_id,
                 project_node_id=line.project_node_id,
+                material_id=line.material_id,
+                material_batch_id=line.material_batch_id,
+                warehouse_id=line.warehouse_id,
+                responsible_user_id=line.responsible_user_id,
                 updated_at=func.now(),
                 updated_by=principal.user_id,
             )
@@ -203,6 +236,10 @@ async def _replace(
             quantity=line.quantity,
             work_id=line.work_id,
             project_node_id=line.project_node_id,
+            material_id=line.material_id,
+            material_batch_id=line.material_batch_id,
+            warehouse_id=line.warehouse_id,
+            responsible_user_id=line.responsible_user_id,
         )
         session.add(row)
         created[line.position_no] = row
@@ -290,12 +327,16 @@ async def replace_lines(
                 quantity=item.quantity,
                 work_id=item.work_id,
                 project_node_id=item.project_node_id,
+                material_id=item.material_id,
+                material_batch_id=item.material_batch_id,
+                warehouse_id=item.warehouse_id,
+                responsible_user_id=item.responsible_user_id,
                 unit_price=None,
             )
         )
     async with db_rules(session):
         await _replace(session, principal, draft, new_lines)
-    return await list_lines(session, document_id, version_id)
+    return await list_lines(session, principal, document_id, version_id)
 
 
 async def set_prices(
@@ -328,7 +369,7 @@ async def set_prices(
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "document.line_unknown")
             await _write_price(session, principal, draft, line_id, item.unit_price)
         await session.flush()
-    return await list_lines(session, document_id, version_id)
+    return await list_lines(session, principal, document_id, version_id)
 
 
 async def import_lines(
@@ -349,23 +390,33 @@ async def import_lines(
     live_links = (
         await session.execute(
             select(
-                DocumentLine.position_no, DocumentLine.work_id, DocumentLine.project_node_id
+                DocumentLine.position_no,
+                DocumentLine.work_id,
+                DocumentLine.project_node_id,
+                DocumentLine.material_id,
+                DocumentLine.material_batch_id,
+                DocumentLine.warehouse_id,
+                DocumentLine.responsible_user_id,
             ).where(DocumentLine.version_id == version_id, DocumentLine.deleted_at.is_(None))
         )
     ).all()
-    links = {row.position_no: (row.work_id, row.project_node_id) for row in live_links}
+    links = {row.position_no: row for row in live_links}
     new_lines = [
         NewLine(
             position_no=line.position_no,
             name=line.name,
             unit=line.unit,
             quantity=line.quantity,
-            work_id=links.get(line.position_no, (None, None))[0],
-            project_node_id=links.get(line.position_no, (None, None))[1],
+            work_id=_kept(links, line.position_no, "work_id"),
+            project_node_id=_kept(links, line.position_no, "project_node_id"),
+            material_id=_kept(links, line.position_no, "material_id"),
+            material_batch_id=_kept(links, line.position_no, "material_batch_id"),
+            warehouse_id=_kept(links, line.position_no, "warehouse_id"),
+            responsible_user_id=_kept(links, line.position_no, "responsible_user_id"),
             unit_price=line.unit_price,
         )
         for line in parsed
     ]
     async with db_rules(session):
         await _replace(session, principal, draft, new_lines)
-    return await list_lines(session, document_id, version_id)
+    return await list_lines(session, principal, document_id, version_id)

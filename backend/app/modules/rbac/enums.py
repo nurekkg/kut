@@ -56,6 +56,10 @@ QUALIFIED_PERMISSIONS: Final[tuple[tuple[Module, Action, str], ...]] = (
     (Module.DOCUMENTS, Action.WRITE, "lines"),
     # Шаблоны маршрута согласования (S6a-2): владелец и техдиректор.
     (Module.DOCUMENTS, Action.WRITE, "routes"),
+    # Материалы и склад (ADR-016 часть 5, S7a): справочник, приход и выдача, цены закупок (Q3).
+    (Module.MATERIALS, Action.WRITE, "catalog"),
+    (Module.MATERIALS, Action.WRITE, "stock"),
+    (Module.PROCUREMENT, Action.READ, "prices"),
 )
 
 

@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py b/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
+--- a/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
++++ b/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
+@@ -406,7 +406,7 @@
+     op.execute(
+         "INSERT INTO approval_route_step_template (template_id, position, role_code)"
+         " SELECT t.id, s.position, s.role_code FROM approval_route_template t"
+-        " JOIN (VALUES ('warehouse', 1, 'foreman'),"
++        " JOIN (VALUES ('warehouse', 1, 'estimator'),"
+         " ('procurement', 1, 'technical_director'), ('procurement', 2, 'finance_director'),"
+         " ('inventory', 1, 'foreman'), ('inventory', 2, 'technical_director')) AS s(code, position, role_code)"
+         " ON s.code = t.code"

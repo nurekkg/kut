@@ -300,12 +300,27 @@ class DocumentLine(BusinessBase):
     project_node_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("project_node.id"), default=None
     )
+    # Материал и склад (ADR-016 часть 5, S7a); заготовка заявки - без внешнего ключа до S8b.
+    material_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    material_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("material_batch.id"), default=None
+    )
+    warehouse_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("warehouse.id"), default=None)
+    responsible_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id"), default=None
+    )
+    purchase_request_line_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["project_id", "legal_entity_id"],
             ["project.id", "project.legal_entity_id"],
             name="fk_document_line_project_id_project",
+        ),
+        ForeignKeyConstraint(
+            ["material_id", "legal_entity_id"],
+            ["material.id", "material.legal_entity_id"],
+            name="fk_document_line_material_id_material",
         ),
         Index(
             "uq_document_line_version_id_position_no",

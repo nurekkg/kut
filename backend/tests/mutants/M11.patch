@@ -1,0 +1,16 @@
+diff --git a/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py b/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
+--- a/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
++++ b/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
+@@ -469,10 +469,10 @@
+     op.execute(
+         "CREATE POLICY warehouse_write_app ON warehouse FOR ALL TO kut_app USING ("
+         " (SELECT app.is_internal()) AND (SELECT app.has_permission('materials', 'write', 'catalog'))"
+-        " AND project_id = ANY ((SELECT app.project_ids())::uuid[]))"
++        ")"
+         " WITH CHECK ("
+         " (SELECT app.is_internal()) AND (SELECT app.has_permission('materials', 'write', 'catalog'))"
+-        " AND project_id = ANY ((SELECT app.project_ids())::uuid[]))"
++        ")"
+     )
+     op.execute(
+         "CREATE POLICY stock_movement_select_app ON stock_movement FOR SELECT TO kut_app USING ("

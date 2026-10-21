@@ -166,6 +166,11 @@ class LineIn(BaseModel):
     quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
     work_id: uuid.UUID | None = None
     project_node_id: uuid.UUID | None = None
+    # Материал и склад (ADR-016, S7a): для М-7 и ВН, остальным видам не нужны.
+    material_id: uuid.UUID | None = None
+    material_batch_id: uuid.UUID | None = None
+    warehouse_id: uuid.UUID | None = None
+    responsible_user_id: uuid.UUID | None = None
 
 
 class LinesIn(BaseModel):
@@ -197,6 +202,10 @@ class LineOut(BaseModel):
     quantity: Decimal
     work_id: uuid.UUID | None = None
     project_node_id: uuid.UUID | None = None
+    material_id: uuid.UUID | None = None
+    material_batch_id: uuid.UUID | None = None
+    warehouse_id: uuid.UUID | None = None
+    responsible_user_id: uuid.UUID | None = None
     # Цена и сумма - только с правом на деньги вида (RLS представления); без права - null.
     unit_price: Decimal | None = None
     amount: Decimal | None = None

@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
+--- a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
++++ b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
+@@ -230,7 +230,7 @@
+     IF NOT FOUND OR NOT (s.project_id = ANY (app.project_ids())) THEN
+         RAISE EXCEPTION 'stock.not_found';
+     END IF;
+-    IF s.kind = 'reversal' THEN
++    IF FALSE AND s.kind = 'reversal' THEN
+         RAISE EXCEPTION 'stock.reversal_of_reversal';
+     END IF;
+     PERFORM app.stock_lock(s.warehouse_id, s.material_id);

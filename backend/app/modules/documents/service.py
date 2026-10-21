@@ -49,6 +49,7 @@ from app.modules.documents.types import (
     MAX_FILE_BYTES,
     MONEY_EQUIPMENT_KINDS,
     STATUS_TITLES,
+    STOCK_KINDS,
     Link,
     Scope,
 )
@@ -187,6 +188,8 @@ def _kind_allowed(principal: Principal, kind: str) -> bool:
         return kind == INSPECTION_KIND and principal.has(
             Module.EQUIPMENT, Action.WRITE, "maintenance"
         )
+    if kind in STOCK_KINDS and principal.has(Module.MATERIALS, Action.WRITE, "stock"):
+        return True
     return principal.has(Module.DOCUMENTS, Action.WRITE)
 
 

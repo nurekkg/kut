@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
+--- a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
++++ b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
+@@ -100,7 +100,7 @@
+         IF f IS NULL THEN
+             RAISE EXCEPTION 'material.unit_unknown';
+         END IF;
+-        IF m.requires_certificate THEN
++        IF FALSE AND m.requires_certificate THEN
+             IF ln.material_batch_id IS NULL THEN
+                 RAISE EXCEPTION 'material.certificate_required';
+             END IF;

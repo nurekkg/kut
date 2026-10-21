@@ -71,10 +71,20 @@ RoutesWriter = Annotated[
     Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="routes"))),
 ]
 # Позиции версии: право documents:write:lines (ADR-015 часть 4); деньги проверяют сервис и БД.
-LinesWriter = Annotated[
-    Principal,
-    Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="lines"))),
-]
+
+
+def _lines_writer(principal: Principal = Depends(get_principal)) -> Principal:
+    """Позиции: право на позиции документов (сметчик, снабженец, прораб) либо право кладовщика на
+    М-7 и ВН. Какие виды доступны, решает политика БД (line_writable)."""
+    if principal.is_internal and (
+        principal.has(Module.DOCUMENTS, Action.WRITE, "lines")
+        or principal.has(Module.MATERIALS, Action.WRITE, "stock")
+    ):
+        return principal
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+
+
+LinesWriter = Annotated[Principal, Depends(_lines_writer)]
 VersionStatus = Literal["draft", "on_approval", "approved", "signed", "archived"]
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -319,10 +329,10 @@ async def lines_template(_principal: Reader) -> Response:
 
 @router.get("/{document_id}/versions/{version_id}/lines", response_model=LinesOut)
 async def version_lines(
-    document_id: uuid.UUID, version_id: uuid.UUID, session: Db, _principal: Reader
+    document_id: uuid.UUID, version_id: uuid.UUID, session: Db, principal: Reader
 ) -> LinesOut:
     """Позиции видны всем, кто видит версию; цена и сумма - только с правом на деньги вида."""
-    return await lines.list_lines(session, document_id, version_id)
+    return await lines.list_lines(session, principal, document_id, version_id)
 
 
 @router.put("/{document_id}/versions/{version_id}/lines", response_model=LinesOut)
