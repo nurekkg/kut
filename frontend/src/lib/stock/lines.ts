@@ -8,6 +8,8 @@ export type ReceiptRow = {
   unit: string;
   batchNo: string;
   batchId: string | null;
+  // Сертификат-файл выбран (партия создаётся при отправке, поэтому batchId ещё null).
+  certificateAttached: boolean;
 };
 
 export type IssueRow = {
@@ -37,7 +39,7 @@ export function receiptProblems(row: ReceiptRow): RowProblem[] {
   if (parseQuantity(row.quantity) === null) problems.push("quantity");
   if (row.material.requires_certificate) {
     if (row.batchNo.trim() === "") problems.push("batch");
-    if (row.batchId === null) problems.push("certificate");
+    if (!row.certificateAttached) problems.push("certificate");
   }
   return problems;
 }

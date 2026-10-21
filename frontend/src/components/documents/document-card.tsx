@@ -94,7 +94,8 @@ export function DocumentCard({ documentId }: { documentId: string }) {
   const canUpload = internal && d.archived_at === null && canWriteKind(d.kind, permissions);
   const canArchiveNow = internal && d.archived_at === null && canArchive(permissions);
   const current = d.current_version;
-  const downloadable = canDownload(d, permissions, internal);
+  // Версия без файла (ВН, инвентаризация): скачивать нечего.
+  const downloadable = canDownload(d, permissions, internal) && current?.content_type != null;
   const versions = [...d.versions].sort((a, b) => b.version_no - a.version_no);
   const usesLines = kinds.data?.some((kind) => kind.code === d.kind && kind.lines) ?? false;
   // Название объекта отдаёт сервер по видимости; внешним справочника объектов не открыт.
@@ -257,7 +258,11 @@ export function DocumentCard({ documentId }: { documentId: string }) {
                     <div className="flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
                       {version.author_name ? <span>{t("authorValue", { name: version.author_name })}</span> : null}
                       <span className="tabular-nums">{formatDay(version.created_at)}</span>
-                      <span className="tabular-nums">{t("sizeMb", { value: formatMegabytes(version.size_bytes) })}</span>
+                      {version.size_bytes !== null ? (
+                        <span className="tabular-nums">
+                          {t("sizeMb", { value: formatMegabytes(version.size_bytes) })}
+                        </span>
+                      ) : null}
                       {version.amount !== null ? (
                         <span className="tabular-nums text-foreground" data-testid="document-version-amount">
                           {t("versionAmount", { amount: formatMoney(version.amount) })}

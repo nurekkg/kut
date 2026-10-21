@@ -66,13 +66,28 @@ test("единицы выбора: базовая и единицы с коэф�
 });
 
 test("приход: сертифицированный материал без партии и сертификата - проблемы строки", () => {
-  const empty = { material: CERTIFIED, quantity: "10", unit: "кг", batchNo: "", batchId: null };
+  const empty = {
+    material: CERTIFIED,
+    quantity: "10",
+    unit: "кг",
+    batchNo: "",
+    batchId: null,
+    certificateAttached: false,
+  };
   expect(receiptProblems(empty)).toEqual(["batch", "certificate"]);
-  const ready = { ...empty, batchNo: "П-1", batchId: "55555555-5555-4555-8555-555555555555" };
+  // Партия создаётся при отправке: до неё достаточно номера партии и прикреплённого сертификата.
+  const ready = { ...empty, batchNo: "П-1", certificateAttached: true };
   expect(receiptProblems(ready)).toEqual([]);
-  expect(receiptProblems({ material: PLAIN, quantity: "", unit: "кг", batchNo: "", batchId: null })).toEqual([
-    "quantity",
-  ]);
+  expect(
+    receiptProblems({
+      material: PLAIN,
+      quantity: "",
+      unit: "кг",
+      batchNo: "",
+      batchId: null,
+      certificateAttached: false,
+    }),
+  ).toEqual(["quantity"]);
 });
 
 test("выдача: сертифицированному материалу нужна партия, остальным - нет", () => {

@@ -11,6 +11,7 @@ import { api, newIdempotencyKey } from "@/lib/api";
 import { DOCUMENTS_API } from "@/lib/documents/queries";
 import type { DocumentDetail } from "@/lib/documents/types";
 import { API } from "@/lib/projects/keys";
+import { todayIso } from "@/lib/schedule/dates";
 import type { TreeNode } from "@/lib/projects/types";
 import { issueLinePayload, issueProblems, unitChoices, type IssueRow } from "@/lib/stock/lines";
 import { useBatchBalances, useMaterials, usePostWaybill } from "@/lib/stock/queries";
@@ -44,6 +45,7 @@ export function IssueForm({
   const [rows, setRows] = useState<Draft[]>([]);
   const [picked, setPicked] = useState("");
   const [nextKey, setNextKey] = useState(1);
+  const [draftWaybill, setDraftWaybill] = useState<{ id: string; versionId: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,21 +86,32 @@ export function IssueForm({
 
     setBusy(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
-      const waybill = await api.post<DocumentDetail>(
-        DOCUMENTS_API,
-        { kind: "waybill_internal", legal_entity_id: legalEntityId, project_id: projectId, title: `${t("title")} ${today}` },
-        newIdempotencyKey(),
-      );
-      const version = waybill.versions[0];
-      if (!version) return setError(t("noVersion"));
+      // Черновик ВН создаётся один раз (версия без файла): повтор после сбоя идёт в тот же черновик.
+      let draft = draftWaybill;
+      if (draft === null) {
+        const waybill = await api.post<DocumentDetail>(
+          DOCUMENTS_API,
+          {
+            kind: "waybill_internal",
+            legal_entity_id: legalEntityId,
+            project_id: projectId,
+            title: `${t("title")} ${todayIso()}`,
+          },
+          newIdempotencyKey(),
+        );
+        const version = waybill.versions[0];
+        if (!version) return setError(t("noVersion"));
+        draft = { id: waybill.id, versionId: version.id };
+        setDraftWaybill(draft);
+      }
       await api.put(
-        `${DOCUMENTS_API}/${waybill.id}/versions/${version.id}/lines`,
+        `${DOCUMENTS_API}/${draft.id}/versions/${draft.versionId}/lines`,
         { lines: rows.map((row) => issueLinePayload(row, warehouseId, node.id, responsible)) },
         newIdempotencyKey(),
       );
-      const result = await post.mutateAsync({ documentId: waybill.id, versionId: version.id });
+      const result = await post.mutateAsync({ documentId: draft.id, versionId: draft.versionId });
       setRows([]);
+      setDraftWaybill(null);
       setDone(t("posted", { count: result.movements }));
     } catch (cause) {
       setError(message(cause));

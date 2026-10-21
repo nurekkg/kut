@@ -14,6 +14,7 @@ import { API } from "@/lib/projects/keys";
 import { receiptLinePayload, receiptProblems, unitChoices, type ReceiptRow } from "@/lib/stock/lines";
 import type { BatchOut, MaterialOut } from "@/lib/stock/types";
 import { useMaterials } from "@/lib/stock/queries";
+import { todayIso } from "@/lib/schedule/dates";
 
 import { useStockErrorMessage } from "../use-stock-error";
 
@@ -40,6 +41,8 @@ export function ReceiptForm({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [nextKey, setNextKey] = useState(1);
+  // Черновик М-7 после сбоя на середине отправки: повтор продолжает тот же черновик.
+  const [draftAct, setDraftAct] = useState<{ id: string; versionId: string } | null>(null);
 
   function addMaterial(material: MaterialOut) {
     setRows((current) => [
@@ -51,6 +54,7 @@ export function ReceiptForm({
         unit: material.base_unit,
         batchNo: "",
         batchId: null,
+        certificateAttached: false,
         certFile: null,
       },
     ]);
@@ -69,14 +73,16 @@ export function ReceiptForm({
     if (rows.length === 0) return setError(t("noPositions"));
     if (scan === null) return setError(t("noScan"));
     for (const row of rows) {
-      const problems = receiptProblems(row);
+      const certificateAttached = row.certFile !== null || row.batchId !== null;
+      const problems = receiptProblems({ ...row, certificateAttached });
       if (problems.length > 0) return setError(t("rowProblem", { name: row.material.name }));
     }
 
     setBusy(true);
     try {
-      // 1) Сертификат и партия для сертифицированных материалов: файл - документ вида СЕРТ, затем партия.
-      const batches = new Map<number, string>();
+      // 1) Сертификат и партия для сертифицированных материалов. Партия сохраняется в состоянии сразу,
+      // поэтому повтор после сбоя не создаёт вторую партию с тем же номером.
+      let working = rows;
       for (const row of rows) {
         if (!row.material.requires_certificate || row.batchId !== null) continue;
         if (row.certFile === null) return setError(t("noCertificate", { name: row.material.name }));
@@ -100,34 +106,44 @@ export function ReceiptForm({
           customs_document_id: null,
           country_of_origin: null,
         });
-        batches.set(row.key, batch.id);
+        working = working.map((item) => (item.key === row.key ? { ...item, batchId: batch.id } : item));
+        setRows(working);
       }
-      const ready = rows.map((row) => ({ ...row, batchId: batches.get(row.key) ?? row.batchId }));
 
-      // 2) М-7: черновик, скан накладной (версия с файлом), позиции, отправка прорабу.
-      const today = new Date().toISOString().slice(0, 10);
-      const act = await api.post<DocumentDetail>(
-        DOCUMENTS_API,
-        { kind: "m7_act", legal_entity_id: legalEntityId, project_id: projectId, title: `${t("actTitle")} ${today}` },
-        newIdempotencyKey(),
-      );
-      const version: VersionOut = await uploadVersion(
-        await prepareUpload(scan, newIdempotencyKey()),
-        versionTransport(act.id),
-        { comment: null, amount: null },
-      );
+      // 2) М-7: черновик создаётся один раз (повтор после сбоя идёт в тот же черновик), скан - версия с файлом.
+      let act = draftAct;
+      if (act === null) {
+        const created = await api.post<DocumentDetail>(
+          DOCUMENTS_API,
+          {
+            kind: "m7_act",
+            legal_entity_id: legalEntityId,
+            project_id: projectId,
+            title: `${t("actTitle")} ${todayIso()}`,
+          },
+          newIdempotencyKey(),
+        );
+        const version: VersionOut = await uploadVersion(
+          await prepareUpload(scan, newIdempotencyKey()),
+          versionTransport(created.id),
+          { comment: null, amount: null },
+        );
+        act = { id: created.id, versionId: version.id };
+        setDraftAct(act);
+      }
       await api.put(
-        `${DOCUMENTS_API}/${act.id}/versions/${version.id}/lines`,
-        { lines: ready.map((row) => receiptLinePayload(row, warehouseId)) },
+        `${DOCUMENTS_API}/${act.id}/versions/${act.versionId}/lines`,
+        { lines: working.map((row) => receiptLinePayload(row, warehouseId)) },
         newIdempotencyKey(),
       );
       await api.post(
-        `${DOCUMENTS_API}/${act.id}/versions/${version.id}/send`,
+        `${DOCUMENTS_API}/${act.id}/versions/${act.versionId}/send`,
         undefined,
         newIdempotencyKey(),
       );
       setRows([]);
       setScan(null);
+      setDraftAct(null);
       setDone(t("sent"));
     } catch (cause) {
       setError(message(cause));

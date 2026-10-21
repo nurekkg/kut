@@ -51,7 +51,13 @@ export function MaterialsImportDialog({
     try {
       const report = await importMaterials(legalEntityId, file, dryRun);
       if (dryRun) {
-        setChecked(report);
+        // Превью с ошибками строк: показываем их и не разрешаем импорт.
+        if (report.issues.length > 0) {
+          setIssues(report.issues);
+          setChecked(null);
+        } else {
+          setChecked(report);
+        }
       } else {
         await queryClient.invalidateQueries({ queryKey: MATERIALS_KEY });
         onClose();
