@@ -6,6 +6,11 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class LegalEntityRef(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
 class UnitIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

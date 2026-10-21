@@ -883,3 +883,64 @@ async def test_a_dry_run_import_writes_nothing(api, auth_world, worker_sync_engi
         f"{API}/materials", params={"legal_entity_id": str(yard.desk.legal)}, headers=owner
     )
     assert not {row["code"] for row in listed.json()} & {"ПРЕВ-1", "ПРЕВ-2"}
+
+
+async def test_a_batch_is_refused_on_a_receipt_for_a_material_without_certificate(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    batch = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "Б-2"},
+        headers=yard.desk.heads["owner"],
+    )
+    assert batch.status_code == 201, batch.text
+    _, version = await document(
+        api,
+        yard.desk.heads["storekeeper"],
+        yard,
+        "m7_act",
+        [receipt_line(yard, 5, batch=UUID(batch.json()["id"]))],
+    )
+    with pytest.raises(DBAPIError, match=r"stock\.batch_not_applicable"):
+        approve(owner_sync_engine, version)
+    assert await balance(api, yard) == 0
+
+
+async def test_a_certificate_without_a_file_is_refused_for_a_batch(
+    api, auth_world, worker_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
+    store = yard.desk.heads["storekeeper"]
+    created = await api.post(
+        f"{API}/documents",
+        json={
+            "kind": "material_certificate",
+            "legal_entity_id": str(yard.desk.legal),
+            "title": "Сертификат без файла",
+        },
+        headers={**store, **idem()},
+    )
+    assert created.status_code == 201, created.text
+    refused = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "С-5", "certificate_document_id": created.json()["id"]},
+        headers=yard.desk.heads["owner"],
+    )
+    assert refused.status_code == 422, refused.text
+    assert "material.certificate_invalid" in refused.text
+
+
+async def test_the_procurement_sees_the_legal_entities_of_the_catalog(
+    api, auth_world, worker_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    listed = await api.get(
+        f"{API}/materials/legal-entities", headers=yard.desk.heads["procurement"]
+    )
+    assert listed.status_code == 200, listed.text
+    assert str(yard.desk.legal) in {row["id"] for row in listed.json()}
+    foreman_view = await api.get(
+        f"{API}/materials/legal-entities", headers=yard.desk.heads["foreman"]
+    )
+    assert foreman_view.status_code == 200, foreman_view.text

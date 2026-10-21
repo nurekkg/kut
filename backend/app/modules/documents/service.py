@@ -864,13 +864,13 @@ async def download_url(
             .where(DocumentVersion.id == version_id, DocumentVersion.document_id == document_id)
         )
     ).one_or_none()
-    if row is None:
+    if row is None or row.content_type is None:
         raise _not_found()
     key = await session.scalar(
         text("SELECT app.document_version_storage_key(:version)"), {"version": version_id}
     )
     if key is None:
-        raise _not_found()
+        raise _forbidden()
     filename = f"{row.kind}-v{row.version_no}.{EXTENSIONS[row.content_type]}"
     url = storage.presign_download(key, row.content_type, filename, DOWNLOAD_TTL_SECONDS)
     return DownloadOut(url=url, expires_in=DOWNLOAD_TTL_SECONDS)

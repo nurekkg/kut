@@ -2,6 +2,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.deps import get_db, get_principal, internal_only, require
@@ -12,12 +13,14 @@ from app.modules.materials.schemas import (
     BatchIn,
     BatchOut,
     ImportReport,
+    LegalEntityRef,
     MaterialIn,
     MaterialOut,
     MaterialPatch,
     PriceIn,
     UnitIn,
 )
+from app.modules.org.models import LegalEntity
 from app.modules.rbac.enums import Action, Module
 
 router = APIRouter(prefix="/materials", tags=["materials"])
@@ -85,6 +88,15 @@ async def import_materials(
     return await service.import_materials(
         session, legal_entity_id, filename, await _body(request), dry_run
     )
+
+
+@router.get("/legal-entities", response_model=list[LegalEntityRef])
+async def visible_legal_entities(session: Db, _principal: Reader) -> list[LegalEntityRef]:
+    """Юрлица, видимые пользователю (RLS): список для справочника и импорта склада."""
+    rows = await session.execute(
+        select(LegalEntity.id, LegalEntity.name).order_by(LegalEntity.name, LegalEntity.id)
+    )
+    return [LegalEntityRef.model_validate(row, from_attributes=True) for row in rows]
 
 
 @router.get("/{material_id}", response_model=MaterialOut)

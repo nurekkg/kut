@@ -29,7 +29,7 @@ export function MaterialsView() {
 
   const entities = useQuery({
     queryKey: ["legal-entities"],
-    queryFn: () => api.get<LegalEntity[]>(`${API}/legal-entities`),
+    queryFn: () => api.get<LegalEntity[]>(`${API}/materials/legal-entities`),
   });
   const [chosen, setChosen] = useState<string | null>(null);
   const legalEntityId = chosen ?? entities.data?.[0]?.id ?? null;

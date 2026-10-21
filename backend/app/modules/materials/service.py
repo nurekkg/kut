@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
-from app.modules.documents.models import Document
+from app.modules.documents.models import Document, DocumentVersion
 from app.modules.equipment import imports as spreadsheet
 from app.modules.materials.models import Material, MaterialBatch, MaterialPrice, MaterialUnit
 from app.modules.materials.schemas import (
@@ -142,10 +142,27 @@ async def add_batch(session: AsyncSession, material_id: uuid.UUID, body: BatchIn
     if row.requires_certificate and body.certificate_document_id is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "material.certificate_required")
     if body.certificate_document_id is not None:
-        kind = await session.scalar(
-            select(Document.kind).where(Document.id == body.certificate_document_id)
+        certificate = (
+            await session.execute(
+                select(Document.kind, Document.legal_entity_id).where(
+                    Document.id == body.certificate_document_id
+                )
+            )
+        ).one_or_none()
+        has_file = await session.scalar(
+            select(DocumentVersion.id)
+            .where(
+                DocumentVersion.document_id == body.certificate_document_id,
+                DocumentVersion.s3_key.is_not(None),
+            )
+            .limit(1)
         )
-        if kind != "material_certificate":
+        if (
+            certificate is None
+            or certificate.kind != "material_certificate"
+            or certificate.legal_entity_id != row.legal_entity_id
+            or has_file is None
+        ):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, "material.certificate_invalid"
             )
