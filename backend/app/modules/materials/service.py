@@ -190,6 +190,12 @@ async def add_batch(session: AsyncSession, material_id: uuid.UUID, body: BatchIn
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, "material.certificate_invalid"
             )
+    if body.customs_document_id is not None:
+        customs_entity = await session.scalar(
+            select(Document.legal_entity_id).where(Document.id == body.customs_document_id)
+        )
+        if customs_entity != row.legal_entity_id:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "material.customs_invalid")
     existing = await session.scalar(
         select(MaterialBatch).where(
             MaterialBatch.material_id == row.id,

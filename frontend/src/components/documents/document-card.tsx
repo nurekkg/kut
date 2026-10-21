@@ -298,7 +298,7 @@ export function DocumentCard({ documentId }: { documentId: string }) {
                         {linesOf === version.id ? linesT("close") : linesT("title")}
                       </Button>
                     ) : null}
-                    {downloadable ? (
+                    {canDownload(d, permissions, internal) && version.content_type != null ? (
                       <Button
                         type="button"
                         variant="outline"

@@ -2,7 +2,7 @@ import { expect, test } from "../helpers/test";
 import { get } from "../helpers/api";
 import { EAST_NAME, projectNamed } from "../helpers/equipment";
 import { desktopContext, shot, signIn } from "../helpers/ui";
-import { certifiedMaterial, ownerSession } from "../helpers/stock";
+import { certifiedMaterial, grantLegalAccess, ownerSession } from "../helpers/stock";
 
 // S7b, сценарий 4: план-цена закупок не попадает в DOM у прораба, мастера и кладовщика (не скрыта CSS).
 // Внешние роли (покупатель, поставщик) экранов склада не видят. Фактическое поведение записывается
@@ -14,6 +14,10 @@ test("план-цена не в DOM у прораба, мастера и кла�
   const owner = await ownerSession(request);
   const east = await projectNamed(request, owner, EAST_NAME);
   const material = await certifiedMaterial(request, owner, east.legal_entity_id);
+  // Карточка видна только при доступе к юрлицу; без него проверка «цены нет» прошла бы на экране ошибки.
+  for (const login of ["foreman", "master", "storekeeper"]) {
+    await grantLegalAccess(request, owner, login, east.legal_entity_id);
+  }
 
   const put = await request.put(`/api/v1/materials/${material.id}/price`, {
     headers: { Authorization: `Bearer ${owner.token}` },
@@ -30,8 +34,8 @@ test("план-цена не в DOM у прораба, мастера и кла�
     await signIn(page, user);
     await page.goto(`/materials/${material.id}`);
     await page.waitForLoadState("networkidle");
-    const visible = await page.getByText(material.name).count();
-    test.info().annotations.push({ type: "fact", description: `${user}: карточка видна=${visible > 0}, url=${new URL(page.url()).pathname}` });
+    await expect(page.getByRole("heading", { name: material.name, level: 1 })).toBeVisible({ timeout: 90_000 });
+    test.info().annotations.push({ type: "fact", description: `${user}: карточка видна, url=${new URL(page.url()).pathname}` });
     await expect(page.getByText("План-цена")).toHaveCount(0);
     expect(await page.content()).not.toContain("150.50");
     await shot(page, `stock-materials-card-${user}`, true);

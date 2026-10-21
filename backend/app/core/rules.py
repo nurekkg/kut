@@ -158,6 +158,7 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "stock.batch_required": (422, "stock.batch_required"),
     "stock.batch_not_applicable": (422, "stock.batch_not_applicable"),
     "stock.receipt_consumed": (409, "stock.receipt_consumed"),
+    "batch.frozen": (409, "batch.frozen"),
     "document.file_required": (422, "document.file_required"),
     "stock.version_not_draft": (409, "stock.version_not_draft"),
     "stock.forbidden": (403, "forbidden"),

@@ -7,7 +7,8 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { api, newIdempotencyKey } from "@/lib/api";
+import { ApiError } from "@/lib/auth/api";
+import { api } from "@/lib/api";
 import { DOCUMENTS_API } from "@/lib/documents/queries";
 import type { DocumentDetail } from "@/lib/documents/types";
 import { API } from "@/lib/projects/keys";
@@ -15,6 +16,7 @@ import { todayIso } from "@/lib/schedule/dates";
 import type { TreeNode } from "@/lib/projects/types";
 import { issueLinePayload, issueProblems, unitChoices, type IssueRow } from "@/lib/stock/lines";
 import { useBatchBalances, useMaterials, usePostWaybill } from "@/lib/stock/queries";
+import { useStepKeys } from "@/lib/stock/step-keys";
 import type { MaterialOut } from "@/lib/stock/types";
 
 import { useStockErrorMessage } from "../use-stock-error";
@@ -41,6 +43,7 @@ export function IssueForm({
   });
   const batches = useBatchBalances(warehouseId);
   const post = usePostWaybill();
+  const steps = useStepKeys();
   const [nodeId, setNodeId] = useState("");
   const [rows, setRows] = useState<Draft[]>([]);
   const [picked, setPicked] = useState("");
@@ -86,7 +89,7 @@ export function IssueForm({
 
     setBusy(true);
     try {
-      // Черновик ВН создаётся один раз (версия без файла): повтор после сбоя идёт в тот же черновик.
+      // Черновик ВН создаётся один раз (версия без файла): повтор после сбоя идёт в тот же черновик и с тем же ключом.
       let draft = draftWaybill;
       if (draft === null) {
         const waybill = await api.post<DocumentDetail>(
@@ -97,19 +100,35 @@ export function IssueForm({
             project_id: projectId,
             title: `${t("title")} ${todayIso()}`,
           },
-          newIdempotencyKey(),
+          steps.keyFor("waybill"),
         );
+        steps.forget("waybill");
         const version = waybill.versions[0];
         if (!version) return setError(t("noVersion"));
         draft = { id: waybill.id, versionId: version.id };
         setDraftWaybill(draft);
       }
+      const lines = rows.map((row) => issueLinePayload(row, warehouseId, node.id, responsible));
       await api.put(
         `${DOCUMENTS_API}/${draft.id}/versions/${draft.versionId}/lines`,
-        { lines: rows.map((row) => issueLinePayload(row, warehouseId, node.id, responsible)) },
-        newIdempotencyKey(),
+        { lines },
+        steps.keyFor(`lines:${JSON.stringify(lines)}`),
       );
-      const result = await post.mutateAsync({ documentId: draft.id, versionId: draft.versionId });
+      let result;
+      try {
+        result = await post.mutateAsync({ documentId: draft.id, versionId: draft.versionId });
+      } catch (cause) {
+        // Проведение уже прошло в прошлой попытке (ответ потерян): черновик наш, остатки списаны один раз.
+        if (cause instanceof ApiError && cause.code === "stock.version_not_draft") {
+          steps.clear();
+          setRows([]);
+          setDraftWaybill(null);
+          setDone(t("alreadyPosted"));
+          return;
+        }
+        throw cause;
+      }
+      steps.clear();
       setRows([]);
       setDraftWaybill(null);
       setDone(t("posted", { count: result.movements }));
@@ -121,7 +140,7 @@ export function IssueForm({
   }
 
   return (
-    <div className="space-y-5">
+    <fieldset className="space-y-5" disabled={busy}>
       <section className="space-y-2">
         <p className="text-sm font-medium">{t("node")}</p>
         <NativeSelect className="h-12 w-full text-base" onChange={(event) => setNodeId(event.target.value)} value={nodeId}>
@@ -214,6 +233,6 @@ export function IssueForm({
       <Button className="min-h-12 w-full text-base" disabled={busy || responsible === null} onClick={submit} type="button">
         {busy ? t("sending") : t("submit")}
       </Button>
-    </div>
+    </fieldset>
   );
 }

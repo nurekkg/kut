@@ -1035,3 +1035,40 @@ async def test_an_archived_receipt_checks_the_balance_of_its_batch(
     with pytest.raises(DBAPIError, match=r"stock\.receipt_consumed"):
         approve(owner_sync_engine, second)
     assert await balance(api, yard) == 5
+
+
+async def test_a_batch_with_movements_keeps_its_number_and_certificate(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
+    created = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "П-10", "certificate_document_id": await certificate_document(api, yard)},
+        headers=yard.desk.heads["owner"],
+    )
+    assert created.status_code == 201, created.text
+    batch = created.json()["id"]
+    await receive(api, owner_sync_engine, yard, 5, batch=UUID(batch))
+    who = who_at(auth_world.users["owner"], yard)
+    with pytest.raises(DBAPIError, match=r"batch\.frozen"):
+        await call(
+            who, "UPDATE material_batch SET batch_no = 'П-11' WHERE id = :id", id=UUID(batch)
+        )
+    assert await balance(api, yard) == 5
+
+
+async def test_a_customs_document_must_be_visible_in_the_legal_entity(
+    api, auth_world, worker_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
+    response = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={
+            "batch_no": "П-12",
+            "certificate_document_id": await certificate_document(api, yard),
+            "customs_document_id": str(uuid4()),
+        },
+        headers=yard.desk.heads["owner"],
+    )
+    assert response.status_code == 422, response.text
+    assert "material.customs_invalid" in response.text

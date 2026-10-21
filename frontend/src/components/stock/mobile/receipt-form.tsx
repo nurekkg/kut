@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { api, newIdempotencyKey } from "@/lib/api";
+import { api } from "@/lib/api";
 import { DOCUMENTS_API, versionTransport } from "@/lib/documents/queries";
 import { prepareUpload, uploadVersion, UPLOAD_ACCEPT } from "@/lib/documents/upload";
 import type { DocumentDetail, VersionOut } from "@/lib/documents/types";
@@ -14,11 +14,12 @@ import { API } from "@/lib/projects/keys";
 import { receiptLinePayload, receiptProblems, unitChoices, type ReceiptRow } from "@/lib/stock/lines";
 import type { BatchOut, MaterialOut } from "@/lib/stock/types";
 import { useMaterials } from "@/lib/stock/queries";
+import { useStepKeys } from "@/lib/stock/step-keys";
 import { todayIso } from "@/lib/schedule/dates";
 
 import { useStockErrorMessage } from "../use-stock-error";
 
-type Draft = ReceiptRow & { key: number; certFile: File | null; certDocId: string | null };
+type Draft = ReceiptRow & { key: number; certFile: File | null; certDocId: string | null; certLoaded: boolean };
 
 // Приход на телефоне: позиции из справочника, для сертифицированных - партия и сертификат (камера),
 // затем скан накладной (камера) и отправка прорабу (М-7 идёт по маршруту «склад»).
@@ -34,6 +35,7 @@ export function ReceiptForm({
   const t = useTranslations("Stock.phone.receipt");
   const message = useStockErrorMessage();
   const materials = useMaterials(legalEntityId, true);
+  const steps = useStepKeys();
   const [rows, setRows] = useState<Draft[]>([]);
   const [scan, setScan] = useState<File | null>(null);
   const [picked, setPicked] = useState("");
@@ -41,7 +43,7 @@ export function ReceiptForm({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [nextKey, setNextKey] = useState(1);
-  // Черновик М-7 после сбоя на середине отправки: повтор продолжает тот же черновик.
+  // Черновик М-7 после сбоя на середине отправки: повтор продолжает тот же черновик и ту же версию.
   const [draftActId, setDraftActId] = useState<string | null>(null);
   const [draftVersionId, setDraftVersionId] = useState<string | null>(null);
 
@@ -58,6 +60,7 @@ export function ReceiptForm({
         certificateAttached: false,
         certFile: null,
         certDocId: null,
+        certLoaded: false,
       },
     ]);
     setNextKey((value) => value + 1);
@@ -82,8 +85,8 @@ export function ReceiptForm({
 
     setBusy(true);
     try {
-      // 1) Сертификат и партия для сертифицированных материалов. Документ сертификата создаётся один раз
-      // на строку и запоминается; партия сохраняется в состоянии сразу. Повтор после сбоя не плодит документы.
+      // 1) Сертификат и партия для сертифицированных материалов. Каждый шаг запоминается: документ сертификата,
+      // его файл и партия. Повтор после сбоя продолжает с того шага, на котором остановился.
       let working = rows;
       for (const row of rows) {
         if (!row.material.requires_certificate || row.batchId !== null) continue;
@@ -97,17 +100,23 @@ export function ReceiptForm({
               legal_entity_id: legalEntityId,
               title: `${t("certTitle")} ${row.material.code} ${row.batchNo}`,
             },
-            newIdempotencyKey(),
+            steps.keyFor(`cert:${row.key}`),
           );
           certificateId = certificate.id;
+          steps.forget(`cert:${row.key}`);
           working = working.map((item) => (item.key === row.key ? { ...item, certDocId: certificateId } : item));
           setRows(working);
         }
-        await uploadVersion(
-          await prepareUpload(row.certFile, newIdempotencyKey()),
-          versionTransport(certificateId),
-          { comment: null, amount: null },
-        );
+        if (!row.certLoaded) {
+          await uploadVersion(
+            await prepareUpload(row.certFile, steps.keyFor(`cert-file:${row.key}`)),
+            versionTransport(certificateId),
+            { comment: null, amount: null },
+          );
+          steps.forget(`cert-file:${row.key}`);
+          working = working.map((item) => (item.key === row.key ? { ...item, certLoaded: true } : item));
+          setRows(working);
+        }
         const batch = await api.post<BatchOut>(`${API}/materials/${row.material.id}/batches`, {
           batch_no: row.batchNo.trim(),
           certificate_document_id: certificateId,
@@ -118,7 +127,7 @@ export function ReceiptForm({
         setRows(working);
       }
 
-      // 2) М-7: черновик запоминается сразу после создания, до загрузки скана; повтор продолжает тот же черновик.
+      // 2) М-7: черновик и версия со сканом запоминаются сразу после создания; повтор продолжает их.
       let actId = draftActId;
       if (actId === null) {
         const created = await api.post<DocumentDetail>(
@@ -129,27 +138,31 @@ export function ReceiptForm({
             project_id: projectId,
             title: `${t("actTitle")} ${todayIso()}`,
           },
-          newIdempotencyKey(),
+          steps.keyFor("act"),
         );
         actId = created.id;
+        steps.forget("act");
         setDraftActId(actId);
       }
       let versionId = draftVersionId;
       if (versionId === null) {
         const version: VersionOut = await uploadVersion(
-          await prepareUpload(scan, newIdempotencyKey()),
+          await prepareUpload(scan, steps.keyFor("scan")),
           versionTransport(actId),
           { comment: null, amount: null },
         );
+        steps.forget("scan");
         versionId = version.id;
         setDraftVersionId(versionId);
       }
+      const lines = working.map((row) => receiptLinePayload(row, warehouseId));
       await api.put(
         `${DOCUMENTS_API}/${actId}/versions/${versionId}/lines`,
-        { lines: working.map((row) => receiptLinePayload(row, warehouseId)) },
-        newIdempotencyKey(),
+        { lines },
+        steps.keyFor(`lines:${JSON.stringify(lines)}`),
       );
-      await api.post(`${DOCUMENTS_API}/${actId}/versions/${versionId}/send`, undefined, newIdempotencyKey());
+      await api.post(`${DOCUMENTS_API}/${actId}/versions/${versionId}/send`, undefined, steps.keyFor("send"));
+      steps.clear();
       setRows([]);
       setScan(null);
       setDraftActId(null);
@@ -165,7 +178,7 @@ export function ReceiptForm({
   const choices = materials.data ?? [];
 
   return (
-    <div className="space-y-5">
+    <fieldset className="space-y-5" disabled={busy}>
       <section className="space-y-2">
         <p className="text-sm font-medium">{t("basis")}</p>
         <p className="rounded-md border px-3 py-3 text-sm">{t("noRequest")}</p>
@@ -240,7 +253,10 @@ export function ReceiptForm({
                     accept={UPLOAD_ACCEPT}
                     capture="environment"
                     className="block w-full min-h-12 text-sm"
-                    onChange={(event) => patch(row.key, { certFile: event.target.files?.[0] ?? null })}
+                    onChange={(event) => {
+                      steps.forget(`cert-file:${row.key}`);
+                      patch(row.key, { certFile: event.target.files?.[0] ?? null, certLoaded: false });
+                    }}
                     type="file"
                   />
                 </label>
@@ -257,10 +273,14 @@ export function ReceiptForm({
       <section className="space-y-2">
         <p className="text-sm font-medium">{t("scan")}</p>
         <input
-          accept="image/*,application/pdf"
+          accept={UPLOAD_ACCEPT}
           capture="environment"
           className="block w-full min-h-12 text-sm"
-          onChange={(event) => setScan(event.target.files?.[0] ?? null)}
+          onChange={(event) => {
+            steps.forget("scan");
+            setDraftVersionId(null);
+            setScan(event.target.files?.[0] ?? null);
+          }}
           type="file"
         />
         {scan && <p className="text-xs text-muted-foreground">{scan.name}</p>}
@@ -272,6 +292,6 @@ export function ReceiptForm({
       <Button className="min-h-12 w-full text-base" disabled={busy} onClick={submit} type="button">
         {busy ? t("sending") : t("submit")}
       </Button>
-    </div>
+    </fieldset>
   );
 }

@@ -37,7 +37,8 @@ test("приход М-7 с партией и сертификатом, согл�
   await signIn(store, "storekeeper");
   await store.goto(`/m/stock/${east.id}`);
   await store.getByRole("button", { name: "Приход" }).click();
-  await store.locator("select").first().selectOption(material.id);
+  // Обе формы склада смонтированы (неактивная скрыта): берём видимые select.
+  await store.locator("select:visible").first().selectOption(material.id);
   await store.getByLabel("Количество фактически").fill("2");
   await store.getByLabel("Единица").selectOption("мешок");
   await store.getByLabel("Номер партии").fill(batchNo);
@@ -71,9 +72,11 @@ test("приход М-7 с партией и сертификатом, согл�
   const tree = await get<NodeRow[]>(request, owner, `/api/v1/projects/${east.id}/tree`);
   const node = tree.find((item) => item.master_user_id);
   expect(node, "на объекте нет участка с мастером").toBeTruthy();
+  // Остатки по партиям кладовщик видит после переоткрытия экрана: утверждение прорабом пришло позже загрузки.
+  await store.reload({ waitUntil: "networkidle" });
   await store.getByRole("button", { name: "Выдача" }).click();
-  await store.locator("select").nth(0).selectOption(node!.id);
-  await store.locator("select").nth(1).selectOption(material.id);
+  await store.locator("select:visible").nth(0).selectOption(node!.id);
+  await store.locator("select:visible").nth(1).selectOption(material.id);
   await store.getByLabel("Количество", { exact: false }).fill("10");
   await store.getByLabel("Единица").selectOption("кг");
   await store.getByLabel("Партия").selectOption({ index: 1 });
