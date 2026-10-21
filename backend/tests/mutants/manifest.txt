@@ -15,3 +15,5 @@ M14 tests/test_materials_stock.py::test_a_receipt_converts_units_to_the_base_uni
 M15 tests/test_materials_stock.py::test_the_plan_price_is_seen_only_with_the_procurement_right
 M16 tests/test_materials_stock.py::test_a_waybill_takes_stock_and_refuses_a_shortage
 M17 tests/test_materials_stock.py::test_a_reversal_restores_the_balance_once
+M18 tests/test_materials_stock.py::test_an_m7_is_routed_to_the_warehouse_group
+M19 tests/test_materials_stock.py::test_an_m7_on_approval_adds_nothing_to_stock

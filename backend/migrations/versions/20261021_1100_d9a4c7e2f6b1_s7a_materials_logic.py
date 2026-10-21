@@ -93,7 +93,7 @@ BEGIN
             RAISE EXCEPTION 'stock.warehouse_required';
         END IF;
         SELECT * INTO w FROM public.warehouse WHERE id = ln.warehouse_id;
-        IF w.project_id <> v.project_id THEN
+        IF w.project_id IS DISTINCT FROM v.project_id THEN
             RAISE EXCEPTION 'stock.warehouse_project';
         END IF;
         f := app.material_factor(m.id, ln.unit);
@@ -175,13 +175,13 @@ BEGIN
     IF EXISTS (SELECT 1 FROM public.document_line dl
                JOIN public.warehouse w ON w.id = dl.warehouse_id
                WHERE dl.version_id = p_version AND dl.deleted_at IS NULL
-                 AND w.project_id <> v.project_id) THEN
+                 AND w.project_id IS DISTINCT FROM v.project_id) THEN
         RAISE EXCEPTION 'stock.warehouse_project';
     END IF;
     IF EXISTS (SELECT 1 FROM public.document_line dl
                JOIN public.project_node n ON n.id = dl.project_node_id
                WHERE dl.version_id = p_version AND dl.deleted_at IS NULL
-                 AND n.project_id <> v.project_id) THEN
+                 AND n.project_id IS DISTINCT FROM v.project_id) THEN
         RAISE EXCEPTION 'stock.not_found';
     END IF;
     FOR ln IN SELECT * FROM public.document_line

@@ -629,6 +629,8 @@ async def create_document(
         raise _forbidden()
     if spec.scope is Scope.OBJECT and body.project_id is None:
         raise _unprocessable("document.scope_invalid")
+    if body.kind in STOCK_KINDS and body.project_id is None:
+        raise _unprocessable("document.scope_invalid")
     if spec.scope is Scope.LEGAL_ENTITY and body.project_id is not None:
         raise _unprocessable("document.scope_invalid")
     if spec.counterparty and body.counterparty_id is None:

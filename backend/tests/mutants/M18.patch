@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
+--- a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
++++ b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
+@@ -53,7 +53,7 @@
+ CREATE FUNCTION app.route_template_code(p_kind text, p_financial boolean) RETURNS text
+ LANGUAGE sql IMMUTABLE AS $$
+     SELECT CASE p_kind
+-        WHEN 'm7_act' THEN 'warehouse'
++        WHEN 'm7_act' THEN 'money'
+         WHEN 'material_request' THEN 'procurement'
+         WHEN 'inventory_act' THEN 'inventory'
+         ELSE CASE WHEN p_financial THEN 'money' ELSE 'other' END

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from httpx import Response
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 
@@ -536,3 +537,46 @@ async def test_a_reversal_is_refused_outside_the_object(
     with pytest.raises(DBAPIError, match=r"stock\.not_found"):
         await call(outside, "SELECT app.stock_reverse(:m)", m=UUID(receipt["id"]))
     assert await balance(api, yard) == 5
+
+
+def move(engine: Engine, version_id: str, target: str) -> None:
+    """Перевод версии по маршруту без шагов согласования (как сид): владелец под kut_auth."""
+    with engine.begin() as connection:
+        connection.execute(text("SET LOCAL ROLE kut_auth"))
+        connection.execute(
+            text("SELECT app.version_move(CAST(:v AS uuid), :to, NULL, NULL)"),
+            {"v": version_id, "to": target},
+        )
+
+
+async def test_a_stock_document_needs_an_object(api, auth_world, worker_sync_engine):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    refused = await api.post(
+        f"{API}/documents",
+        json={
+            "kind": "m7_act",
+            "legal_entity_id": str(yard.desk.legal),
+            "title": "М-7 без объекта",
+        },
+        headers={**yard.desk.heads["storekeeper"], **idem()},
+    )
+    assert refused.status_code == 422, refused.text
+    assert "document.scope_invalid" in refused.text
+
+
+async def test_an_m7_is_routed_to_the_warehouse_group():
+    rows = await call(None, "SELECT app.route_template_code('m7_act', false)")
+    assert rows[0][0] == "warehouse"
+
+
+async def test_an_m7_on_approval_adds_nothing_to_stock(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    _, version = await document(
+        api, yard.desk.heads["storekeeper"], yard, "m7_act", [receipt_line(yard, 4)]
+    )
+    move(owner_sync_engine, version, "on_approval")
+    assert await balance(api, yard) == 0
+    move(owner_sync_engine, version, "approved")
+    assert await balance(api, yard) == 4
