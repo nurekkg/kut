@@ -745,9 +745,11 @@ async def test_a_storekeeper_creates_a_batch_only_with_a_certificate_document(
     )
     assert missing.status_code == 422, missing.text
     assert "material.certificate_required" in missing.text
+    # Документ М-7 со сканом: единственная преграда - вид (файл есть, юрлицо то же).
+    m7_doc, _ = await document(api, store, yard, "m7_act", [receipt_line(yard, 1)])
     wrong_kind = await api.post(
         f"{API}/materials/{yard.material}/batches",
-        json={"batch_no": "С-3", "certificate_document_id": (await m7_document_id(api, yard))},
+        json={"batch_no": "С-3", "certificate_document_id": m7_doc},
         headers=store,
     )
     assert wrong_kind.status_code == 422, wrong_kind.text
@@ -758,22 +760,6 @@ async def test_a_storekeeper_creates_a_batch_only_with_a_certificate_document(
         headers=store,
     )
     assert created.status_code == 201, created.text
-
-
-async def m7_document_id(api, yard: Yard) -> str:
-    """Документ М-7 объекта (не сертификат) - для проверки вида сертификата в партии."""
-    created = await api.post(
-        f"{API}/documents",
-        json={
-            "kind": "m7_act",
-            "legal_entity_id": str(yard.desk.legal),
-            "project_id": str(yard.desk.project),
-            "title": "М-7 не сертификат",
-        },
-        headers={**yard.desk.heads["storekeeper"], **idem()},
-    )
-    assert created.status_code == 201, created.text
-    return created.json()["id"]
 
 
 async def test_material_factor_is_hidden_for_a_foreign_legal_entity(
