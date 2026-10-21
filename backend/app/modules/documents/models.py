@@ -117,10 +117,10 @@ class DocumentVersion(BusinessBase):
     project_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
     version_no: Mapped[int] = mapped_column(Integer)
-    s3_key: Mapped[str]
-    content_type: Mapped[str] = mapped_column(String(128))
-    size_bytes: Mapped[int] = mapped_column(BigInteger)
-    checksum_sha256: Mapped[str] = mapped_column(String(64))
+    s3_key: Mapped[str | None] = mapped_column(default=None)
+    content_type: Mapped[str | None] = mapped_column(String(128), default=None)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
     # У kut_app колонка не читается (миграция c9e2d4b7a1f6): значение отдаёт app.version_comment.
     comment: Mapped[str | None] = mapped_column(String(2000), default=None)
     status: Mapped[str] = mapped_column(String(16), server_default="draft")
@@ -135,6 +135,13 @@ class DocumentVersion(BusinessBase):
             name="fk_document_version_project_id_project",
         ),
         UniqueConstraint("s3_key", name="uq_document_version_s3_key"),
+        CheckConstraint(
+            "(s3_key IS NULL AND content_type IS NULL AND size_bytes IS NULL"
+            " AND checksum_sha256 IS NULL)"
+            " OR (s3_key IS NOT NULL AND content_type IS NOT NULL AND size_bytes IS NOT NULL"
+            " AND checksum_sha256 IS NOT NULL)",
+            name="file_all_or_none",
+        ),
         Index(
             "uq_document_version_document_id_version_no", "document_id", "version_no", unique=True
         ),

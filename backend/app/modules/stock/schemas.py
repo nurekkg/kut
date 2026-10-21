@@ -26,6 +26,8 @@ class BalanceOut(BaseModel):
     material_id: uuid.UUID
     base_unit: str
     qty: Decimal
+    batch_id: uuid.UUID | None = None
+    batch_no: str | None = None
 
 
 class MovementOut(BaseModel):

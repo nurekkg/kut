@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+--- a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
++++ b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+@@ -263,7 +263,7 @@
+             WHERE mb.id = ln.material_batch_id AND mb.material_id = m.id) THEN
+             RAISE EXCEPTION 'stock.not_found';
+         END IF;
+-        IF m.requires_certificate AND ln.material_batch_id IS NULL THEN
++        IF FALSE AND m.requires_certificate AND ln.material_batch_id IS NULL THEN
+             RAISE EXCEPTION 'stock.batch_required';
+         END IF;
+         IF NOT m.requires_certificate AND ln.material_batch_id IS NOT NULL THEN

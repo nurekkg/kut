@@ -266,6 +266,7 @@ ADR_MATERIALS_GRANTS = {
     ("technical_director", "procurement", "read", "prices"),
     ("accountant", "procurement", "read", "prices"),
     ("procurement", "procurement", "read", "prices"),
+    ("storekeeper", "materials", "write", "batch"),
 }
 
 

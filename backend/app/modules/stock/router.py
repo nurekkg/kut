@@ -48,11 +48,21 @@ async def create_warehouse(
 
 
 @router.get("/stock/balances", response_model=list[BalanceOut])
-async def balances(session: Db, _principal: Reader, warehouse_id: uuid.UUID) -> list[BalanceOut]:
-    rows = await service.balances(session, warehouse_id)
+async def balances(
+    session: Db,
+    _principal: Reader,
+    warehouse_id: uuid.UUID,
+    by_batch: bool = Query(default=False),
+) -> list[BalanceOut]:
+    rows = await service.balances(session, warehouse_id, by_batch)
     return [
         BalanceOut(
-            warehouse_id=r.warehouse_id, material_id=r.material_id, base_unit=r.base_unit, qty=r.qty
+            warehouse_id=r.warehouse_id,
+            material_id=r.material_id,
+            base_unit=r.base_unit,
+            qty=r.qty,
+            batch_id=r.batch_id,
+            batch_no=r.batch_no,
         )
         for r in rows
     ]

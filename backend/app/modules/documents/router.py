@@ -136,6 +136,7 @@ async def kinds(_principal: Reader) -> list[KindOut]:
             contract_required=spec.contract,
             links=sorted(link.value for link in spec.links),
             lines=spec.lines,
+            file_required=spec.file_required,
         )
         for code, spec in KINDS.items()
     ]

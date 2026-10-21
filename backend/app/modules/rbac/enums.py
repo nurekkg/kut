@@ -59,6 +59,7 @@ QUALIFIED_PERMISSIONS: Final[tuple[tuple[Module, Action, str], ...]] = (
     # Материалы и склад (ADR-016 часть 5, S7a): справочник, приход и выдача, цены закупок (Q3).
     (Module.MATERIALS, Action.WRITE, "catalog"),
     (Module.MATERIALS, Action.WRITE, "stock"),
+    (Module.MATERIALS, Action.WRITE, "batch"),
     (Module.PROCUREMENT, Action.READ, "prices"),
 )
 

@@ -36,6 +36,8 @@ class KindSpec:
     links: frozenset[Link] = frozenset()
     # Позиции версии (ADR-015 часть 4): виды, где версия состоит из строк работ или материалов.
     lines: bool = False
+    # Файл версии обязателен; ВН и акт инвентаризации - электронные, без файла (S7b).
+    file_required: bool = True
 
 
 OBJECT: Final = Scope.OBJECT
@@ -59,10 +61,11 @@ KINDS: Final[dict[str, KindSpec]] = {
     "ird": KindSpec("ИД", OBJECT, False, links=frozenset({Link.PROJECT_NODE, Link.WORK})),
     "waybill_torg12": KindSpec("ТОРГ12", EITHER, True, counterparty=True, lines=True),
     "waybill_m15": KindSpec("М15", EITHER, True, counterparty=True, lines=True),
-    "waybill_internal": KindSpec("ВН", EITHER, False, lines=True),
+    "waybill_internal": KindSpec("ВН", EITHER, False, lines=True, file_required=False),
     "invoice_esf": KindSpec("ЭСФ", LEGAL, True, counterparty=True),
     "m7_act": KindSpec("М7", EITHER, False, lines=True),
-    "inventory_act": KindSpec("ИНВ", OBJECT, False, lines=True),
+    "material_certificate": KindSpec("СЕРТ", LEGAL, False),
+    "inventory_act": KindSpec("ИНВ", OBJECT, False, lines=True, file_required=False),
     "material_request": KindSpec(
         "ЗМ", OBJECT, False, links=frozenset({Link.PROJECT_NODE}), lines=True
     ),
@@ -99,6 +102,7 @@ SUBCONTRACTOR_KINDS: Final = frozenset(
 # Виды, которые вносит кладовщик (ADR-016 часть 5): М-7 и внутренняя накладная (ВН).
 STOCK_KINDS: Final = frozenset({"m7_act", "waybill_internal"})
 INVENTORY_KIND: Final = "inventory_act"
+CERTIFICATE_KIND: Final = "material_certificate"
 SUPPLIER_KINDS: Final = frozenset(
     {"contract_supply", "waybill_torg12", "waybill_m15", "invoice_esf", "material_request"}
 )
@@ -137,6 +141,7 @@ KIND_TITLES: Final[dict[str, str]] = {
     "waybill_internal": "Внутреннее перемещение",
     "invoice_esf": "Счёт-фактура (ЭСФ)",
     "m7_act": "Акт М-7",
+    "material_certificate": "Сертификат материала",
     "material_request": "Заявка на материалы",
     "inventory_act": "Акт инвентаризации",
     "commissioning_act": "Акт ввода в эксплуатацию",

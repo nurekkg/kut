@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+--- a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
++++ b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+@@ -87,7 +87,7 @@
+ 
+ MATERIAL_FACTOR_AFTER = """
+ CREATE OR REPLACE FUNCTION app.material_factor(p_material uuid, p_unit text) RETURNS numeric
+-LANGUAGE sql STABLE SET search_path = pg_catalog AS $$
++LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+     SELECT CASE WHEN p_unit = m.base_unit THEN 1::numeric ELSE (
+         SELECT u.factor FROM public.material_unit u
+         WHERE u.material_id = m.id AND u.unit = p_unit AND u.deleted_at IS NULL) END

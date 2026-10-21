@@ -23,6 +23,7 @@ from tests.documents_support import (  # noqa: F401
     approve,
     give_access,
     leave_no_access_behind,
+    legal_entity,
     open_desk,
     project,
     upload,
@@ -128,11 +129,15 @@ async def document(
     created = await api.post(f"{API}/documents", json=body, headers={**headers, **idem()})
     assert created.status_code == 201, created.text
     doc_id = created.json()["id"]
-    # Версия появляется со сканом (загрузка), позиции редактируются в черновике версии.
-    async with httpx.AsyncClient(timeout=10) as s3:
-        scan = await upload(api, s3, doc_id, headers, PDF_OK, PDF)
-    assert scan.status_code == 201, scan.text
-    version_id = scan.json()["id"]
+    if kind in ("waybill_internal", "inventory_act"):
+        # Электронные виды (S7b): версия создана при создании документа, без файла.
+        version_id = created.json()["versions"][0]["id"]
+    else:
+        # Версия М-7 появляется со сканом (загрузка), позиции редактируются в черновике версии.
+        async with httpx.AsyncClient(timeout=10) as s3:
+            scan = await upload(api, s3, doc_id, headers, PDF_OK, PDF)
+        assert scan.status_code == 201, scan.text
+        version_id = scan.json()["id"]
     saved = await api.put(
         f"{API}/documents/{doc_id}/versions/{version_id}/lines",
         json={"lines": lines},
@@ -140,6 +145,25 @@ async def document(
     )
     assert saved.status_code == 200, saved.text
     return doc_id, version_id
+
+
+async def certificate_document(api, yard: Yard) -> str:
+    """Сертификат материала (S7b): вид material_certificate, юрлица, файл загружает кладовщик."""
+    headers = yard.desk.heads["storekeeper"]
+    created = await api.post(
+        f"{API}/documents",
+        json={
+            "kind": "material_certificate",
+            "legal_entity_id": str(yard.desk.legal),
+            "title": f"Сертификат {uuid4().hex[:6]}",
+        },
+        headers={**headers, **idem()},
+    )
+    assert created.status_code == 201, created.text
+    async with httpx.AsyncClient(timeout=10) as s3:
+        scan = await upload(api, s3, created.json()["id"], headers, PDF_OK, PDF)
+    assert scan.status_code == 201, scan.text
+    return created.json()["id"]
 
 
 async def receive(
@@ -221,9 +245,7 @@ async def test_a_certified_material_needs_a_batch_with_a_certificate(
 ):
     yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
     owner = yard.desk.heads["owner"]
-    certificate, _ = await document(
-        api, yard.desk.heads["storekeeper"], yard, "m7_act", [receipt_line(yard, 1)]
-    )
+    certificate = await certificate_document(api, yard)
     _, version = await document(
         api, yard.desk.heads["storekeeper"], yard, "m7_act", [receipt_line(yard, 3)]
     )
@@ -619,3 +641,245 @@ async def test_an_m7_line_without_material_is_refused_on_approval(
     with pytest.raises(DBAPIError, match=r"stock\.material_required"):
         approve(owner_sync_engine, version)
     assert await balance(api, yard) == 0
+
+
+async def test_a_waybill_is_created_without_a_file(api, auth_world, worker_sync_engine):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    created = await api.post(
+        f"{API}/documents",
+        json={
+            "kind": "waybill_internal",
+            "legal_entity_id": str(yard.desk.legal),
+            "project_id": str(yard.desk.project),
+            "title": "ВН без файла",
+        },
+        headers={**yard.desk.heads["storekeeper"], **idem()},
+    )
+    assert created.status_code == 201, created.text
+    (version,) = created.json()["versions"]
+    assert version["status"] == "draft"
+    assert version["content_type"] is None
+    assert version["size_bytes"] is None
+
+
+async def test_an_m7_version_without_a_file_is_refused_by_the_database(
+    api, auth_world, worker_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    created = await api.post(
+        f"{API}/documents",
+        json={
+            "kind": "m7_act",
+            "legal_entity_id": str(yard.desk.legal),
+            "project_id": str(yard.desk.project),
+            "title": "М-7 без скана",
+        },
+        headers={**yard.desk.heads["storekeeper"], **idem()},
+    )
+    assert created.status_code == 201, created.text
+    with pytest.raises(DBAPIError, match=r"document\.file_required"):
+        await call(
+            who_at(auth_world.users["storekeeper"], yard),
+            "INSERT INTO document_version (id, document_id, legal_entity_id, project_id,"
+            " version_no, status) VALUES (gen_random_uuid(), :d, :le, :p, 1, 'draft')",
+            d=UUID(created.json()["id"]),
+            le=yard.desk.legal,
+            p=yard.desk.project,
+        )
+
+
+async def test_a_certified_waybill_line_needs_a_batch(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
+    store = yard.desk.heads["storekeeper"]
+    batch = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "С-1", "certificate_document_id": await certificate_document(api, yard)},
+        headers=yard.desk.heads["owner"],
+    )
+    assert batch.status_code == 201, batch.text
+    await receive(api, owner_sync_engine, yard, 10, batch=UUID(batch.json()["id"]))
+    line = issue_line(yard, 2)
+    doc, version = await document(api, store, yard, "waybill_internal", [line])
+    posted = await api.post(f"{API}/stock/waybills/{doc}/versions/{version}/post", headers=store)
+    assert posted.status_code == 422, posted.text
+    assert "stock.batch_required" in posted.text
+    line["material_batch_id"] = batch.json()["id"]
+    doc, version = await document(api, store, yard, "waybill_internal", [line])
+    posted = await api.post(f"{API}/stock/waybills/{doc}/versions/{version}/post", headers=store)
+    assert posted.status_code == 200, posted.text
+    assert await balance(api, yard) == 8
+
+
+async def test_a_batch_is_refused_on_a_waybill_for_a_material_without_certificate(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    batch = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "Б-1"},
+        headers=yard.desk.heads["owner"],
+    )
+    assert batch.status_code == 201, batch.text
+    await receive(api, owner_sync_engine, yard, 5)
+    store = yard.desk.heads["storekeeper"]
+    line = issue_line(yard, 1)
+    line["material_batch_id"] = batch.json()["id"]
+    doc, version = await document(api, store, yard, "waybill_internal", [line])
+    posted = await api.post(f"{API}/stock/waybills/{doc}/versions/{version}/post", headers=store)
+    assert posted.status_code == 422, posted.text
+    assert "stock.batch_not_applicable" in posted.text
+    assert await balance(api, yard) == 5
+
+
+async def test_a_storekeeper_creates_a_batch_only_with_a_certificate_document(
+    api, auth_world, worker_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine, certificate=True)
+    store = yard.desk.heads["storekeeper"]
+    missing = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "С-2"},
+        headers=store,
+    )
+    assert missing.status_code == 422, missing.text
+    assert "material.certificate_required" in missing.text
+    wrong_kind = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "С-3", "certificate_document_id": (await m7_document_id(api, yard))},
+        headers=store,
+    )
+    assert wrong_kind.status_code == 422, wrong_kind.text
+    assert "material.certificate_invalid" in wrong_kind.text
+    created = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={"batch_no": "С-4", "certificate_document_id": await certificate_document(api, yard)},
+        headers=store,
+    )
+    assert created.status_code == 201, created.text
+
+
+async def m7_document_id(api, yard: Yard) -> str:
+    """Документ М-7 объекта (не сертификат) - для проверки вида сертификата в партии."""
+    created = await api.post(
+        f"{API}/documents",
+        json={
+            "kind": "m7_act",
+            "legal_entity_id": str(yard.desk.legal),
+            "project_id": str(yard.desk.project),
+            "title": "М-7 не сертификат",
+        },
+        headers={**yard.desk.heads["storekeeper"], **idem()},
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+async def test_material_factor_is_hidden_for_a_foreign_legal_entity(
+    api, auth_world, worker_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    owner = yard.desk.heads["owner"]
+    other_entity, _ = legal_entity(worker_sync_engine)
+    give_access(worker_sync_engine, [auth_world.users["owner"]], (), other_entity)
+    await principal_store.bump_scope()
+    foreign = await api.post(
+        f"{API}/materials",
+        json={
+            "legal_entity_id": str(other_entity),
+            "code": f"F-{uuid4().hex[:6]}",
+            "name": "Чужой материал",
+            "base_unit": "кг",
+        },
+        headers=owner,
+    )
+    assert foreign.status_code == 201, foreign.text
+    unit = await api.post(
+        f"{API}/materials/{foreign.json()['id']}/units",
+        json={"unit": "мешок", "factor": 25},
+        headers=owner,
+    )
+    assert unit.status_code == 201, unit.text
+    own = await api.post(
+        f"{API}/materials/{yard.material}/units",
+        json={"unit": "мешок", "factor": 25},
+        headers=owner,
+    )
+    assert own.status_code == 201, own.text
+    who = who_at(auth_world.users["storekeeper"], yard)
+    own_factor = await call(who, "SELECT app.material_factor(:m, 'мешок')", m=yard.material)
+    assert own_factor[0][0] == 25
+    hidden = await call(
+        who, "SELECT app.material_factor(:m, 'мешок')", m=UUID(foreign.json()["id"])
+    )
+    assert hidden[0][0] is None
+
+
+async def test_an_archived_receipt_partly_issued_says_receipt_consumed(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    store = yard.desk.heads["storekeeper"]
+    doc, first = await document(api, store, yard, "m7_act", [receipt_line(yard, 10)])
+    approve(owner_sync_engine, first)
+    _, _, posted = await issue(api, yard, 8)
+    assert posted.status_code == 200, posted.text
+    assert await balance(api, yard) == 2
+    async with httpx.AsyncClient(timeout=10) as s3:
+        scan = await upload(api, s3, doc, store, PDF_OK, PDF)
+    assert scan.status_code == 201, scan.text
+    second = scan.json()["id"]
+    saved = await api.put(
+        f"{API}/documents/{doc}/versions/{second}/lines",
+        json={"lines": [receipt_line(yard, 5)]},
+        headers={**store, **idem()},
+    )
+    assert saved.status_code == 200, saved.text
+    with pytest.raises(DBAPIError, match=r"stock\.receipt_consumed"):
+        approve(owner_sync_engine, second)
+    assert await balance(api, yard) == 2
+
+
+async def test_a_new_version_with_the_same_receipt_keeps_the_balance(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    store = yard.desk.heads["storekeeper"]
+    doc, first = await document(api, store, yard, "m7_act", [receipt_line(yard, 10)])
+    approve(owner_sync_engine, first)
+    _, _, posted = await issue(api, yard, 8)
+    assert posted.status_code == 200, posted.text
+    async with httpx.AsyncClient(timeout=10) as s3:
+        scan = await upload(api, s3, doc, store, PDF_OK, PDF)
+    second = scan.json()["id"]
+    saved = await api.put(
+        f"{API}/documents/{doc}/versions/{second}/lines",
+        json={"lines": [receipt_line(yard, 10)]},
+        headers={**store, **idem()},
+    )
+    assert saved.status_code == 200, saved.text
+    approve(owner_sync_engine, second)
+    assert await balance(api, yard) == 2
+
+
+async def test_a_dry_run_import_writes_nothing(api, auth_world, worker_sync_engine):
+    yard = await make_yard(api, auth_world, worker_sync_engine)
+    owner = yard.desk.heads["owner"]
+    data = "артикул;наименование;базовая единица\nПРЕВ-1;Цемент;мешок\nПРЕВ-2;Песок;кг\n"
+    preview = await api.post(
+        f"{API}/materials/import",
+        params={
+            "legal_entity_id": str(yard.desk.legal),
+            "filename": "materials.csv",
+            "dry_run": "true",
+        },
+        content=data.encode("utf-8"),
+        headers={**owner, "Content-Type": "text/csv"},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["created"] == 2
+    listed = await api.get(
+        f"{API}/materials", params={"legal_entity_id": str(yard.desk.legal)}, headers=owner
+    )
+    assert not {row["code"] for row in listed.json()} & {"ПРЕВ-1", "ПРЕВ-2"}

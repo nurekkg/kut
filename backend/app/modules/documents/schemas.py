@@ -26,6 +26,7 @@ class KindOut(BaseModel):
     contract_required: bool
     links: list[str]
     lines: bool
+    file_required: bool
 
 
 class LinkIn(BaseModel):
@@ -57,8 +58,8 @@ class VersionOut(BaseModel):
     document_id: uuid.UUID
     version_no: int
     status: str
-    content_type: str
-    size_bytes: int
+    content_type: str | None = None
+    size_bytes: int | None = None
     created_at: datetime
     comment: str | None = None
     checksum_sha256: str | None = None

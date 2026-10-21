@@ -188,6 +188,8 @@ def _kind_allowed(principal: Principal, kind: str) -> bool:
         return kind == INSPECTION_KIND and principal.has(
             Module.EQUIPMENT, Action.WRITE, "maintenance"
         )
+    if kind == "material_certificate" and principal.has(Module.MATERIALS, Action.WRITE, "batch"):
+        return True
     if kind in STOCK_KINDS and principal.has(Module.MATERIALS, Action.WRITE, "stock"):
         return True
     return principal.has(Module.DOCUMENTS, Action.WRITE)
@@ -679,6 +681,19 @@ async def create_document(
                     **{_LINK_COLUMN[Link(link.kind)]: link.id},
                 )
             )
+        if not spec.file_required:
+            version_no = await session.scalar(
+                text("SELECT app.document_next_version(:document)"), {"document": document.id}
+            )
+            session.add(
+                DocumentVersion(
+                    document_id=document.id,
+                    legal_entity_id=document.legal_entity_id,
+                    project_id=document.project_id,
+                    version_no=version_no,
+                    status="draft",
+                )
+            )
         await session.flush()
     return await get_document(session, principal, document.id)
 
@@ -855,7 +870,7 @@ async def download_url(
         text("SELECT app.document_version_storage_key(:version)"), {"version": version_id}
     )
     if key is None:
-        raise _forbidden()
+        raise _not_found()
     filename = f"{row.kind}-v{row.version_no}.{EXTENSIONS[row.content_type]}"
     url = storage.presign_download(key, row.content_type, filename, DOWNLOAD_TTL_SECONDS)
     return DownloadOut(url=url, expires_in=DOWNLOAD_TTL_SECONDS)

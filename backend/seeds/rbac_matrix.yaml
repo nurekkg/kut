@@ -218,6 +218,7 @@ extra:
   - {role: procurement, permission: "materials:write:catalog"}
   # М-7 и ВН - кладовщик (вместо документов по §7.3, отступление записано в tz-changes, раздел 13).
   - {role: storekeeper, permission: "materials:write:stock"}
+  - {role: storekeeper, permission: "materials:write:batch"}
   # Цены закупок (Q3): владелец, финдир, техдир, бухгалтер, снабженец.
   - {role: owner, permission: "procurement:read:prices"}
   - {role: finance_director, permission: "procurement:read:prices"}

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
 from app.modules.documents.models import DocumentVersion
-from app.modules.materials.models import Material
+from app.modules.materials.models import Material, MaterialBatch
 from app.modules.objects.models import Project
 from app.modules.stock.models import StockMovement, Warehouse
 
@@ -22,6 +22,8 @@ class Balance:
     material_id: uuid.UUID
     base_unit: str
     qty: Decimal
+    batch_id: uuid.UUID | None = None
+    batch_no: str | None = None
 
 
 async def list_warehouses(session: AsyncSession, project_id: uuid.UUID | None) -> list[Warehouse]:
@@ -54,31 +56,54 @@ async def _visible(session: AsyncSession, warehouse_id: uuid.UUID) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
 
 
-async def balances(session: AsyncSession, warehouse_id: uuid.UUID) -> list[Balance]:
+async def balances(
+    session: AsyncSession, warehouse_id: uuid.UUID, by_batch: bool = False
+) -> list[Balance]:
     await _visible(session, warehouse_id)
     rows = (
         await session.execute(
             select(
                 StockMovement.warehouse_id,
                 StockMovement.material_id,
+                StockMovement.batch_id,
+                MaterialBatch.batch_no,
                 Material.base_unit,
                 func.sum(StockMovement.qty).label("qty"),
             )
             .join(Material, Material.id == StockMovement.material_id)
+            .outerjoin(MaterialBatch, MaterialBatch.id == StockMovement.batch_id)
             .where(StockMovement.warehouse_id == warehouse_id)
-            .group_by(StockMovement.warehouse_id, StockMovement.material_id, Material.base_unit)
-            .order_by(Material.base_unit)
+            .group_by(
+                StockMovement.warehouse_id,
+                StockMovement.material_id,
+                StockMovement.batch_id,
+                MaterialBatch.batch_no,
+                Material.base_unit,
+            )
+            .order_by(Material.base_unit, MaterialBatch.batch_no)
         )
     ).all()
-    return [
-        Balance(
-            warehouse_id=row.warehouse_id,
-            material_id=row.material_id,
-            base_unit=row.base_unit,
-            qty=row.qty,
+    if by_batch:
+        return [
+            Balance(
+                warehouse_id=row.warehouse_id,
+                material_id=row.material_id,
+                base_unit=row.base_unit,
+                qty=row.qty,
+                batch_id=row.batch_id,
+                batch_no=row.batch_no,
+            )
+            for row in rows
+            if row.qty != 0
+        ]
+    totals: dict[uuid.UUID, Balance] = {}
+    for row in rows:
+        previous = totals.get(row.material_id)
+        qty = row.qty if previous is None else previous.qty + row.qty
+        totals[row.material_id] = Balance(
+            warehouse_id=warehouse_id, material_id=row.material_id, base_unit=row.base_unit, qty=qty
         )
-        for row in rows
-    ]
+    return list(totals.values())
 
 
 async def movements(

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
+from app.modules.documents.models import Document
 from app.modules.equipment import imports as spreadsheet
 from app.modules.materials.models import Material, MaterialBatch, MaterialPrice, MaterialUnit
 from app.modules.materials.schemas import (
@@ -138,6 +139,16 @@ async def add_unit(session: AsyncSession, material_id: uuid.UUID, body: UnitIn) 
 
 async def add_batch(session: AsyncSession, material_id: uuid.UUID, body: BatchIn) -> BatchOut:
     row = await _material(session, material_id)
+    if row.requires_certificate and body.certificate_document_id is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "material.certificate_required")
+    if body.certificate_document_id is not None:
+        kind = await session.scalar(
+            select(Document.kind).where(Document.id == body.certificate_document_id)
+        )
+        if kind != "material_certificate":
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "material.certificate_invalid"
+            )
     async with db_rules(session):
         batch = MaterialBatch(
             material_id=row.id,
@@ -199,7 +210,11 @@ def _cell(cells: list[str], columns: dict[str, int], name: str) -> str:
 
 
 async def import_materials(
-    session: AsyncSession, legal_entity_id: uuid.UUID, filename: str, data: bytes
+    session: AsyncSession,
+    legal_entity_id: uuid.UUID,
+    filename: str,
+    data: bytes,
+    dry_run: bool = False,
 ) -> ImportReport:
     """Импорт XLSX или CSV: всё или ничего. Любая ошибка строки - файл не записывается."""
     rows = spreadsheet.parse(filename, data)
@@ -245,6 +260,8 @@ async def import_materials(
             continue
         seen.add(code)
         parsed.append({"code": code, "name": name, "base_unit": unit, "requires_certificate": flag})
+    if dry_run:
+        return ImportReport(created=0 if issues else len(parsed), issues=issues)
     if issues:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

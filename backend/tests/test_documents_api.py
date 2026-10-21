@@ -80,8 +80,12 @@ async def test_the_kinds_catalog_lists_every_kind_with_its_scope(
     response = await api.get(f"{API}/documents/kinds", headers=await headers_for(api, "foreman"))
     assert response.status_code == 200, response.text
     kinds = {item["code"]: item for item in response.json()}
-    assert len(kinds) == 25
+    assert len(kinds) == 26
     assert kinds["inventory_act"]["prefix"] == "ИНВ"
+    assert kinds["waybill_internal"]["file_required"] is False
+    assert kinds["inventory_act"]["file_required"] is False
+    assert kinds["m7_act"]["file_required"] is True
+    assert kinds["material_certificate"]["prefix"] == "СЕРТ"
     assert kinds["ks2"]["prefix"] == "КС2"
     assert kinds["ks2"]["scope"] == "object" and kinds["ks2"]["financial"] is True
     assert kinds["hidden_works_act"]["financial"] is False
