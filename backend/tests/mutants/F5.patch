@@ -1,0 +1,12 @@
+diff --git a/frontend/src/components/stock/mobile/receipt-form.tsx b/frontend/src/components/stock/mobile/receipt-form.tsx
+--- a/frontend/src/components/stock/mobile/receipt-form.tsx
++++ b/frontend/src/components/stock/mobile/receipt-form.tsx
+@@ -146,7 +146,7 @@
+       let versionId = draftVersionId;
+       if (versionId === null) {
+         const version: VersionOut = await uploadVersion(
+-          await steps.uploadFor("scan", scan),
++          await steps.uploadFor("scan", null as unknown as File),
+           versionTransport(actId),
+           { comment: null, amount: null },
+         );

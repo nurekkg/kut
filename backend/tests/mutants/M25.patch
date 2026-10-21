@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+--- a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
++++ b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+@@ -457,6 +457,9 @@
+ 
+ 
+ def upgrade() -> None:
++    op.execute("ALTER TABLE stock_movement DISABLE TRIGGER stock_movement_append_only")
++    op.execute("GRANT UPDATE, DELETE ON stock_movement TO kut_app")
++    op.execute("CREATE POLICY stock_movement_edit_mut ON stock_movement FOR ALL TO kut_app USING (true) WITH CHECK (true)")
+     for column in FILE_COLUMNS:
+         op.alter_column("document_version", column, nullable=True)
+     op.create_check_constraint(
