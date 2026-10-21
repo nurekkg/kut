@@ -238,6 +238,7 @@ export function ReceiptForm({
                   <span className="block text-muted-foreground">{t("batchNo")}</span>
                   <Input
                     className="h-12 text-base"
+                    disabled={row.batchId !== null}
                     onChange={(event) => patch(row.key, { batchNo: event.target.value })}
                     value={row.batchNo}
                   />
@@ -250,6 +251,7 @@ export function ReceiptForm({
                     accept={UPLOAD_ACCEPT}
                     capture="environment"
                     className="block w-full min-h-12 text-sm"
+                    disabled={row.batchId !== null}
                     onChange={(event) => {
                       steps.forget(`cert-file:${row.key}`);
                       patch(row.key, { certFile: event.target.files?.[0] ?? null, certLoaded: false });
