@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { api } from "@/lib/api";
 import { DOCUMENTS_API, versionTransport } from "@/lib/documents/queries";
-import { prepareUpload, uploadVersion, UPLOAD_ACCEPT } from "@/lib/documents/upload";
+import { uploadVersion, UPLOAD_ACCEPT } from "@/lib/documents/upload";
 import type { DocumentDetail, VersionOut } from "@/lib/documents/types";
 import { API } from "@/lib/projects/keys";
 import { receiptLinePayload, receiptProblems, unitChoices, type ReceiptRow } from "@/lib/stock/lines";
@@ -93,14 +93,16 @@ export function ReceiptForm({
         if (row.certFile === null) return setError(t("noCertificate", { name: row.material.name }));
         let certificateId = row.certDocId;
         if (certificateId === null) {
+          // Заголовок без номера партии: правка номера после сбоя не меняет запрос, повтор идёт с тем же ключом.
+          const body = {
+            kind: "material_certificate",
+            legal_entity_id: legalEntityId,
+            title: `${t("certTitle")} ${row.material.code}`,
+          };
           const certificate = await api.post<DocumentDetail>(
             DOCUMENTS_API,
-            {
-              kind: "material_certificate",
-              legal_entity_id: legalEntityId,
-              title: `${t("certTitle")} ${row.material.code} ${row.batchNo}`,
-            },
-            steps.keyFor(`cert:${row.key}`),
+            body,
+            steps.keyFor(`cert:${row.key}`, JSON.stringify(body)),
           );
           certificateId = certificate.id;
           steps.forget(`cert:${row.key}`);
@@ -109,7 +111,7 @@ export function ReceiptForm({
         }
         if (!row.certLoaded) {
           await uploadVersion(
-            await prepareUpload(row.certFile, steps.keyFor(`cert-file:${row.key}`)),
+            await steps.uploadFor(`cert-file:${row.key}`, row.certFile),
             versionTransport(certificateId),
             { comment: null, amount: null },
           );
@@ -130,16 +132,13 @@ export function ReceiptForm({
       // 2) М-7: черновик и версия со сканом запоминаются сразу после создания; повтор продолжает их.
       let actId = draftActId;
       if (actId === null) {
-        const created = await api.post<DocumentDetail>(
-          DOCUMENTS_API,
-          {
-            kind: "m7_act",
-            legal_entity_id: legalEntityId,
-            project_id: projectId,
-            title: `${t("actTitle")} ${todayIso()}`,
-          },
-          steps.keyFor("act"),
-        );
+        const body = {
+          kind: "m7_act",
+          legal_entity_id: legalEntityId,
+          project_id: projectId,
+          title: `${t("actTitle")} ${todayIso()}`,
+        };
+        const created = await api.post<DocumentDetail>(DOCUMENTS_API, body, steps.keyFor("act", JSON.stringify(body)));
         actId = created.id;
         steps.forget("act");
         setDraftActId(actId);
@@ -147,7 +146,7 @@ export function ReceiptForm({
       let versionId = draftVersionId;
       if (versionId === null) {
         const version: VersionOut = await uploadVersion(
-          await prepareUpload(scan, steps.keyFor("scan")),
+          await steps.uploadFor("scan", scan),
           versionTransport(actId),
           { comment: null, amount: null },
         );
@@ -156,12 +155,10 @@ export function ReceiptForm({
         setDraftVersionId(versionId);
       }
       const lines = working.map((row) => receiptLinePayload(row, warehouseId));
-      await api.put(
-        `${DOCUMENTS_API}/${actId}/versions/${versionId}/lines`,
-        { lines },
-        steps.keyFor(`lines:${JSON.stringify(lines)}`),
-      );
-      await api.post(`${DOCUMENTS_API}/${actId}/versions/${versionId}/send`, undefined, steps.keyFor("send"));
+      const linesUrl = `${DOCUMENTS_API}/${actId}/versions/${versionId}/lines`;
+      await api.put(linesUrl, { lines }, steps.keyFor("lines", `${linesUrl} ${JSON.stringify(lines)}`));
+      const sendUrl = `${DOCUMENTS_API}/${actId}/versions/${versionId}/send`;
+      await api.post(sendUrl, undefined, steps.keyFor("send", sendUrl));
       steps.clear();
       setRows([]);
       setScan(null);

@@ -92,16 +92,13 @@ export function IssueForm({
       // Черновик ВН создаётся один раз (версия без файла): повтор после сбоя идёт в тот же черновик и с тем же ключом.
       let draft = draftWaybill;
       if (draft === null) {
-        const waybill = await api.post<DocumentDetail>(
-          DOCUMENTS_API,
-          {
-            kind: "waybill_internal",
-            legal_entity_id: legalEntityId,
-            project_id: projectId,
-            title: `${t("title")} ${todayIso()}`,
-          },
-          steps.keyFor("waybill"),
-        );
+        const body = {
+          kind: "waybill_internal",
+          legal_entity_id: legalEntityId,
+          project_id: projectId,
+          title: `${t("title")} ${todayIso()}`,
+        };
+        const waybill = await api.post<DocumentDetail>(DOCUMENTS_API, body, steps.keyFor("waybill", JSON.stringify(body)));
         steps.forget("waybill");
         const version = waybill.versions[0];
         if (!version) return setError(t("noVersion"));
@@ -109,11 +106,8 @@ export function IssueForm({
         setDraftWaybill(draft);
       }
       const lines = rows.map((row) => issueLinePayload(row, warehouseId, node.id, responsible));
-      await api.put(
-        `${DOCUMENTS_API}/${draft.id}/versions/${draft.versionId}/lines`,
-        { lines },
-        steps.keyFor(`lines:${JSON.stringify(lines)}`),
-      );
+      const linesUrl = `${DOCUMENTS_API}/${draft.id}/versions/${draft.versionId}/lines`;
+      await api.put(linesUrl, { lines }, steps.keyFor("lines", `${linesUrl} ${JSON.stringify(lines)}`));
       let result;
       try {
         result = await post.mutateAsync({ documentId: draft.id, versionId: draft.versionId });
