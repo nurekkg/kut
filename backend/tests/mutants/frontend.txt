@@ -1,0 +1,3 @@
+F1 tests/unit-stock.spec.ts
+F2 tests/unit-stock.spec.ts
+F3 tests/unit-stock.spec.ts

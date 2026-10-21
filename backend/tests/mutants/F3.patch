@@ -1,0 +1,12 @@
+diff --git a/frontend/src/lib/stock/lines.ts b/frontend/src/lib/stock/lines.ts
+--- a/frontend/src/lib/stock/lines.ts
++++ b/frontend/src/lib/stock/lines.ts
+@@ -24,7 +24,7 @@
+   const normalized = value.trim().replace(",", ".");
+   if (!/^\d{1,14}(\.\d{1,4})?$/.test(normalized)) return null;
+   const parsed = Number(normalized);
+-  return parsed > 0 ? parsed : null;
++  return parsed >= 0 ? parsed : null;
+ }
+ 
+ // Единицы для выбора: базовая единица материала и единицы с коэффициентом.
