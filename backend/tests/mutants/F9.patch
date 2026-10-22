@@ -1,0 +1,13 @@
+diff --git a/frontend/src/lib/stock/draft-store.ts b/frontend/src/lib/stock/draft-store.ts
+index 0093cd9..7e2e764 100644
+--- a/frontend/src/lib/stock/draft-store.ts
++++ b/frontend/src/lib/stock/draft-store.ts
+@@ -31,7 +31,7 @@ export function fileFingerprint(file: File): string {
+ // Ключ сертификата в приходе: одна партия - один сертификат. Две партии одного материала с разными номерами -
+ // два сертификата; одна и та же партия в двух строках - один сертификат.
+ export function certificateKey(materialId: string, batchNo: string): string {
+-  return `${materialId}|${batchNo.trim()}`;
++  return materialId;
+ }
+ 
+ export function readDraft<T>(name: string): T | null {

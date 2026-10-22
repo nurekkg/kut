@@ -1,3 +1,5 @@
 F1 tests/unit-stock.spec.ts
 F2 tests/unit-stock.spec.ts
 F3 tests/unit-stock.spec.ts
+F8 tests/unit-format.spec.ts
+F9 tests/unit-draft.spec.ts
