@@ -14,7 +14,7 @@ depends_on: str | Sequence[str] | None = None
 
 GUARD = """
 CREATE OR REPLACE FUNCTION app.material_batch_guard() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 BEGIN
     IF (OLD.batch_no, OLD.certificate_document_id, OLD.customs_document_id, OLD.country_of_origin)
         IS DISTINCT FROM

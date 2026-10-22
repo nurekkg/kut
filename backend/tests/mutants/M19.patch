@@ -1,7 +1,7 @@
-diff --git a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
---- a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
-+++ b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
-@@ -140,7 +140,7 @@
+diff --git a/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py b/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
+--- a/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
++++ b/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
+@@ -47,7 +47,7 @@
  DECLARE
      s public.stock_movement;
  BEGIN

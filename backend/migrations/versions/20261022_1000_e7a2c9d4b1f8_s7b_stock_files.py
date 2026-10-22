@@ -8,6 +8,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
+from migrations.helpers import narrow_check
+
 revision: str = "e7a2c9d4b1f8"
 down_revision: str | Sequence[str] | None = "d9a4c7e2f6b1"
 branch_labels: str | Sequence[str] | None = None
@@ -513,28 +515,23 @@ def downgrade() -> None:
     )
     op.execute("DROP POLICY material_batch_write_app ON material_batch")
     op.execute(BATCH_POLICY_BEFORE)
-    op.drop_constraint(op.f("ck_document_scope_valid"), "document", type_="check")
-    op.create_check_constraint(
-        op.f("ck_document_scope_valid"), "document", _scope_check(LEGAL_BEFORE)
-    )
-    op.drop_constraint(
-        op.f("ck_document_number_counter_kind_valid"), "document_number_counter", type_="check"
-    )
-    op.create_check_constraint(
-        op.f("ck_document_number_counter_kind_valid"),
+    narrow_check("document", "ck_document_scope_valid", _scope_check(LEGAL_BEFORE))
+    narrow_check(
         "document_number_counter",
+        "ck_document_number_counter_kind_valid",
         f"kind IN ({_in(KINDS_BEFORE)})",
     )
-    op.drop_constraint(op.f("ck_document_kind_valid"), "document", type_="check")
-    op.create_check_constraint(
-        op.f("ck_document_kind_valid"), "document", f"kind IN ({_in(KINDS_BEFORE)})"
-    )
+    narrow_check("document", "ck_document_kind_valid", f"kind IN ({_in(KINDS_BEFORE)})")
     op.execute("DROP TRIGGER IF EXISTS document_version_file_guard ON document_version")
     op.execute("SET LOCAL ROLE kut_auth")
     op.execute("DROP FUNCTION IF EXISTS app.version_file_guard()")
     op.execute("RESET ROLE")
-    op.drop_constraint(
-        op.f("ck_document_version_file_all_or_none"), "document_version", type_="check"
+    # NOT NULL возвращается, только если версий без файла нет; иначе колонки остаются необязательными
+    # (откат не удаляет документы), и ограничение «всё или ничего» остаётся на месте.
+    columns = "".join(
+        f" ALTER TABLE document_version ALTER COLUMN {c} SET NOT NULL;" for c in FILE_COLUMNS
     )
-    for column in FILE_COLUMNS:
-        op.alter_column("document_version", column, nullable=False)
+    op.execute(
+        "DO $$ BEGIN ALTER TABLE document_version DROP CONSTRAINT ck_document_version_file_all_or_none;"
+        f"{columns} EXCEPTION WHEN not_null_violation THEN NULL; END $$"
+    )

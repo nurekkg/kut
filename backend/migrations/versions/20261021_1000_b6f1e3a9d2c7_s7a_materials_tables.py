@@ -16,7 +16,13 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-from migrations.helpers import business_table, create_audit_triggers, force_rls, grant
+from migrations.helpers import (
+    business_table,
+    create_audit_triggers,
+    force_rls,
+    grant,
+    narrow_check,
+)
 
 revision: str = "b6f1e3a9d2c7"
 down_revision: str | Sequence[str] | None = "c4e8b1d6f2a9"
@@ -558,24 +564,19 @@ def downgrade() -> None:
         "approval_route_template",
         "code IN ('money', 'other')",
     )
-    op.drop_constraint(
-        op.f("ck_document_number_counter_kind_valid"), "document_number_counter", type_="check"
-    )
-    op.create_check_constraint(
-        op.f("ck_document_number_counter_kind_valid"),
+    narrow_check(
         "document_number_counter",
+        "ck_document_number_counter_kind_valid",
         "kind IN (" + _in(tuple(k for k in KINDS_NEW if k != "inventory_act")) + ")",
     )
-    op.drop_constraint(op.f("ck_document_scope_valid"), "document", type_="check")
-    op.drop_constraint(op.f("ck_document_kind_valid"), "document", type_="check")
-    op.create_check_constraint(
-        op.f("ck_document_kind_valid"),
+    narrow_check(
         "document",
+        "ck_document_kind_valid",
         "kind IN (" + _in(tuple(k for k in KINDS_NEW if k != "inventory_act")) + ")",
     )
-    op.create_check_constraint(
-        op.f("ck_document_scope_valid"),
+    narrow_check(
         "document",
+        "ck_document_scope_valid",
         "CASE WHEN kind IN ("
         + _in(tuple(k for k in OBJECT_NEW if k != "inventory_act"))
         + ") THEN project_id IS NOT NULL WHEN kind IN ("

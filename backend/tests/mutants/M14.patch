@@ -1,7 +1,7 @@
-diff --git a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
---- a/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
-+++ b/backend/migrations/versions/20261021_1100_d9a4c7e2f6b1_s7a_materials_logic.py
-@@ -123,7 +123,7 @@
+diff --git a/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py b/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
+--- a/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
++++ b/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
+@@ -209,7 +209,7 @@
              batch_id, kind, qty, unit, quantity_in_unit, factor, document_id, version_id,
              source_line_id, created_by)
          VALUES (v.legal_entity_id, v.project_id, w.id, m.id, ln.material_batch_id, 'receipt',
