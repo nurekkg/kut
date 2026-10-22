@@ -1,12 +1,13 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { api } from "@/lib/api";
+import { ApiError } from "@/lib/auth/api";
 import { DOCUMENTS_API, versionTransport } from "@/lib/documents/queries";
 import { uploadVersion, UPLOAD_ACCEPT } from "@/lib/documents/upload";
 import type { DocumentDetail, VersionOut } from "@/lib/documents/types";
@@ -15,11 +16,15 @@ import { receiptLinePayload, receiptProblems, unitChoices, type ReceiptRow } fro
 import type { BatchOut, MaterialOut } from "@/lib/stock/types";
 import { useMaterials } from "@/lib/stock/queries";
 import { useStepKeys } from "@/lib/stock/step-keys";
+import { readDraft, writeDraft, type ReceiptDraft } from "@/lib/stock/draft-store";
 import { todayIso } from "@/lib/schedule/dates";
 
 import { useStockErrorMessage } from "../use-stock-error";
 
 type Draft = ReceiptRow & { key: number; certFile: File | null; certDocId: string | null; certLoaded: boolean };
+
+// Коды ответа API: версия М-7 уже не черновик, то есть отправка прошла раньше (до перезагрузки или при потере ответа).
+const SENT_CODES = ["document.version_not_draft", "approval.version_not_draft", "document.lines_not_draft"];
 
 // Приход на телефоне: позиции из справочника, для сертифицированных - партия и сертификат (камера),
 // затем скан накладной (камера) и отправка прорабу (М-7 идёт по маршруту «склад»).
@@ -43,9 +48,18 @@ export function ReceiptForm({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [nextKey, setNextKey] = useState(1);
+  const draftName = `receipt:${projectId}`;
   // Черновик М-7 после сбоя на середине отправки: повтор продолжает тот же черновик и ту же версию.
-  const [draftActId, setDraftActId] = useState<string | null>(null);
-  const [draftVersionId, setDraftVersionId] = useState<string | null>(null);
+  // Идентификаторы созданных документов лежат в sessionStorage: перезагрузка вкладки не заводит второй акт.
+  const [saved] = useState(() => readDraft<ReceiptDraft>(draftName));
+  const [draftActId, setDraftActId] = useState<string | null>(saved?.actId ?? null);
+  const [draftVersionId, setDraftVersionId] = useState<string | null>(saved?.versionId ?? null);
+  const certDocs = useRef<Record<string, string>>(saved?.certDocs ?? {});
+
+  function remember(actId: string | null, versionId: string | null) {
+    const empty = actId === null && Object.keys(certDocs.current).length === 0;
+    writeDraft(draftName, empty ? null : { actId, versionId, certDocs: certDocs.current });
+  }
 
   function addMaterial(material: MaterialOut) {
     setRows((current) => [
@@ -84,6 +98,7 @@ export function ReceiptForm({
     }
 
     setBusy(true);
+    let reachedLines = false;
     try {
       // 1) Сертификат и партия для сертифицированных материалов. Каждый шаг запоминается: документ сертификата,
       // его файл и партия. Повтор после сбоя продолжает с того шага, на котором остановился.
@@ -91,7 +106,7 @@ export function ReceiptForm({
       for (const row of rows) {
         if (!row.material.requires_certificate || row.batchId !== null) continue;
         if (row.certFile === null) return setError(t("noCertificate", { name: row.material.name }));
-        let certificateId = row.certDocId;
+        let certificateId = row.certDocId ?? certDocs.current[row.material.id] ?? null;
         if (certificateId === null) {
           // Заголовок без номера партии: правка номера после сбоя не меняет запрос, повтор идёт с тем же ключом.
           const body = {
@@ -106,6 +121,8 @@ export function ReceiptForm({
           );
           certificateId = certificate.id;
           steps.forget(`cert:${row.key}`);
+          certDocs.current = { ...certDocs.current, [row.material.id]: certificate.id };
+          remember(draftActId, draftVersionId);
           working = working.map((item) => (item.key === row.key ? { ...item, certDocId: certificateId } : item));
           setRows(working);
         }
@@ -142,6 +159,7 @@ export function ReceiptForm({
         actId = created.id;
         steps.forget("act");
         setDraftActId(actId);
+        remember(actId, null);
       }
       let versionId = draftVersionId;
       if (versionId === null) {
@@ -153,7 +171,9 @@ export function ReceiptForm({
         steps.forget("scan");
         versionId = version.id;
         setDraftVersionId(versionId);
+        remember(actId, versionId);
       }
+      reachedLines = true;
       const lines = working.map((row) => receiptLinePayload(row, warehouseId));
       const linesUrl = `${DOCUMENTS_API}/${actId}/versions/${versionId}/lines`;
       await api.put(linesUrl, { lines }, steps.keyFor("lines", `${linesUrl} ${JSON.stringify(lines)}`));
@@ -164,9 +184,23 @@ export function ReceiptForm({
       setScan(null);
       setDraftActId(null);
       setDraftVersionId(null);
+      certDocs.current = {};
+      writeDraft(draftName, null);
       setDone(t("sent"));
     } catch (cause) {
-      setError(message(cause));
+      if (reachedLines && cause instanceof ApiError && SENT_CODES.includes(cause.code)) {
+        // Отправка уже прошла в прошлой попытке (до перезагрузки или при потере ответа): акт не в черновике.
+        steps.clear();
+        setRows([]);
+        setScan(null);
+        setDraftActId(null);
+        setDraftVersionId(null);
+        certDocs.current = {};
+        writeDraft(draftName, null);
+        setDone(t("sent"));
+      } else {
+        setError(message(cause));
+      }
     } finally {
       setBusy(false);
     }
@@ -278,6 +312,7 @@ export function ReceiptForm({
           onChange={(event) => {
             steps.forget("scan");
             setDraftVersionId(null);
+            remember(draftActId, null);
             setScan(event.target.files?.[0] ?? null);
           }}
           type="file"

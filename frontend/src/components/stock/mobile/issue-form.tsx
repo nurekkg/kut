@@ -16,6 +16,7 @@ import { todayIso } from "@/lib/schedule/dates";
 import type { TreeNode } from "@/lib/projects/types";
 import { issueLinePayload, issueProblems, unitChoices, type IssueRow } from "@/lib/stock/lines";
 import { useBatchBalances, useMaterials, usePostWaybill } from "@/lib/stock/queries";
+import { readDraft, writeDraft, type IssueDraft } from "@/lib/stock/draft-store";
 import { useStepKeys } from "@/lib/stock/step-keys";
 import type { MaterialOut } from "@/lib/stock/types";
 
@@ -48,7 +49,9 @@ export function IssueForm({
   const [rows, setRows] = useState<Draft[]>([]);
   const [picked, setPicked] = useState("");
   const [nextKey, setNextKey] = useState(1);
-  const [draftWaybill, setDraftWaybill] = useState<{ id: string; versionId: string } | null>(null);
+  const draftName = `issue:${projectId}`;
+  // Черновик ВН после сбоя: повтор идёт в тот же ВН. Идентификатор лежит в sessionStorage: перезагрузка не заводит второй.
+  const [draftWaybill, setDraftWaybill] = useState<IssueDraft | null>(() => readDraft<IssueDraft>(draftName));
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -104,6 +107,7 @@ export function IssueForm({
         if (!version) return setError(t("noVersion"));
         draft = { id: waybill.id, versionId: version.id };
         setDraftWaybill(draft);
+        writeDraft(draftName, draft);
       }
       const lines = rows.map((row) => issueLinePayload(row, warehouseId, node.id, responsible));
       const linesUrl = `${DOCUMENTS_API}/${draft.id}/versions/${draft.versionId}/lines`;
@@ -117,6 +121,7 @@ export function IssueForm({
           steps.clear();
           setRows([]);
           setDraftWaybill(null);
+          writeDraft(draftName, null);
           setDone(t("alreadyPosted"));
           return;
         }
@@ -125,6 +130,7 @@ export function IssueForm({
       steps.clear();
       setRows([]);
       setDraftWaybill(null);
+      writeDraft(draftName, null);
       setDone(t("posted", { count: result.movements }));
     } catch (cause) {
       setError(message(cause));
