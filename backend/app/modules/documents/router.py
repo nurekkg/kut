@@ -20,6 +20,7 @@ from app.modules.documents.schemas import (
     DocumentOut,
     DownloadOut,
     EventOut,
+    InventoryPrefillIn,
     KindOut,
     LinesIn,
     LinesOut,
@@ -351,6 +352,33 @@ async def replace_version_lines(
     async def handler() -> tuple[int, LinesOut]:
         return status.HTTP_200_OK, await lines.replace_lines(
             session, principal, document_id, version_id, body
+        )
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, body.model_dump(mode="json")),
+        handler=handler,
+    )
+    return result.to_response()
+
+
+@router.post("/{document_id}/versions/{version_id}/inventory/prefill", response_model=LinesOut)
+async def prefill_inventory(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    body: InventoryPrefillIn,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: LinesWriter,
+) -> Response:
+    """Позиции акта по учётным остаткам склада, факт пуст. Повтор с ключом - тот же ответ."""
+
+    async def handler() -> tuple[int, LinesOut]:
+        return status.HTTP_200_OK, await lines.prefill_inventory(
+            session, principal, document_id, version_id, body.warehouse_id
         )
 
     result = await run_idempotent(

@@ -302,7 +302,10 @@ class DocumentLine(BusinessBase):
     position_no: Mapped[int] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(300))
     unit: Mapped[str] = mapped_column(String(20))
-    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    # Пустой факт (NULL) - только в инвентаризации до ввода; иначе количество положительное.
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None)
+    # Учётный остаток на момент отправки на маршрут; ставит функция склада (ADR-016, S7c).
+    snapshot_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None)
     work_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("work.id"), default=None)
     project_node_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("project_node.id"), default=None
@@ -337,7 +340,7 @@ class DocumentLine(BusinessBase):
             postgresql_where=text("deleted_at IS NULL"),
         ),
         CheckConstraint("position_no >= 1", name="position_positive"),
-        CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("quantity >= 0", name="quantity_nonnegative"),
         CheckConstraint("btrim(name) <> ''", name="name_not_blank"),
         CheckConstraint("btrim(unit) <> ''", name="unit_not_blank"),
     )

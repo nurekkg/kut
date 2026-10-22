@@ -164,7 +164,8 @@ class LineIn(BaseModel):
     position_no: int | None = Field(default=None, ge=1, le=2000000)
     name: str = Field(min_length=1, max_length=300)
     unit: str = Field(min_length=1, max_length=20)
-    quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
+    # Пустой факт - только у строк инвентаризации до ввода; остальным видам нужно больше нуля.
+    quantity: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=4)
     work_id: uuid.UUID | None = None
     project_node_id: uuid.UUID | None = None
     # Материал и склад (ADR-016, S7a): для М-7 и ВН, остальным видам не нужны.
@@ -178,6 +179,14 @@ class LinesIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     lines: list[LineIn] = Field(max_length=2000)
+
+
+class InventoryPrefillIn(BaseModel):
+    """Склад акта пересчёта (ADR-016, S7c): позиции предзаполняются по его учётным остаткам."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    warehouse_id: uuid.UUID
 
 
 class PriceIn(BaseModel):
@@ -200,7 +209,7 @@ class LineOut(BaseModel):
     position_no: int
     name: str
     unit: str
-    quantity: Decimal
+    quantity: Decimal | None
     work_id: uuid.UUID | None = None
     project_node_id: uuid.UUID | None = None
     material_id: uuid.UUID | None = None
@@ -210,6 +219,13 @@ class LineOut(BaseModel):
     # Цена и сумма - только с правом на деньги вида (RLS представления); без права - null.
     unit_price: Decimal | None = None
     amount: Decimal | None = None
+    # Инвентаризация (S7c): снимок и остаток склада - внутренним. Цена плана и стоимость
+    # расхождения - с правом на закупочные цены (RLS представления); без права - null.
+    snapshot_qty: Decimal | None = None
+    balance_now: Decimal | None = None
+    discrepancy: Decimal | None = None
+    plan_price: Decimal | None = None
+    value: Decimal | None = None
 
 
 class LinesOut(BaseModel):

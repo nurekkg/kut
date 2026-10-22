@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import column, func, select, table, update
+from sqlalchemy import and_, case, column, exists, func, null, select, table, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
@@ -24,9 +24,11 @@ from app.modules.documents.models import (
     DocumentLinePrice,
     DocumentVersion,
 )
-from app.modules.documents.schemas import LineOut, LinesIn, LinesOut, PricesIn
-from app.modules.documents.types import LINE_KINDS
+from app.modules.documents.schemas import LineIn, LineOut, LinesIn, LinesOut, PricesIn
+from app.modules.documents.types import INVENTORY_KIND, LINE_KINDS
+from app.modules.materials.models import Material, MaterialBatch, MaterialPrice
 from app.modules.rbac.enums import Action, Module
+from app.modules.stock.models import StockMovement, Warehouse
 
 # Сумма позиции и цена - представление с security_invoker: RLS цен действует через него.
 AMOUNTS = table(
@@ -56,7 +58,7 @@ class NewLine:
     position_no: int
     name: str
     unit: str
-    quantity: Decimal
+    quantity: Decimal | None
     work_id: uuid.UUID | None
     project_node_id: uuid.UUID | None
     unit_price: Decimal | None
@@ -115,7 +117,47 @@ INTERNAL_LINE_COLUMNS = (
     DocumentLine.material_batch_id,
     DocumentLine.warehouse_id,
     DocumentLine.responsible_user_id,
+    DocumentLine.snapshot_qty,
+    # Остаток склада сейчас (для акта пересчёта); без склада - null.
+    case(
+        (DocumentLine.warehouse_id.is_(None), null()),
+        else_=func.app.stock_balance(
+            DocumentLine.warehouse_id, DocumentLine.material_id, DocumentLine.material_batch_id
+        ),
+    ).label("balance_now"),
 )
+
+
+def _line_out(row: Any) -> LineOut:
+    """Позиция для ответа. Расхождение и стоимость считает сервис: снимок и остаток - внутренним.
+    Цена плана приходит только с правом на закупочные цены (RLS); без него стоимости нет."""
+    snapshot = getattr(row, "snapshot_qty", None)
+    discrepancy = None
+    if row.quantity is not None and snapshot is not None:
+        discrepancy = row.quantity - snapshot
+    plan_price = getattr(row, "plan_price", None)
+    value = None
+    if discrepancy is not None and plan_price is not None:
+        value = discrepancy * plan_price
+    return LineOut(
+        position_no=row.position_no,
+        name=row.name,
+        unit=row.unit,
+        quantity=row.quantity,
+        work_id=row.work_id,
+        project_node_id=row.project_node_id,
+        material_id=getattr(row, "material_id", None),
+        material_batch_id=getattr(row, "material_batch_id", None),
+        warehouse_id=getattr(row, "warehouse_id", None),
+        responsible_user_id=getattr(row, "responsible_user_id", None),
+        unit_price=row.unit_price,
+        amount=row.amount,
+        snapshot_qty=snapshot,
+        balance_now=getattr(row, "balance_now", None),
+        discrepancy=discrepancy,
+        plan_price=plan_price,
+        value=value,
+    )
 
 
 async def list_lines(
@@ -132,46 +174,40 @@ async def list_lines(
     if visible is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
     source_id = await session.scalar(select(func.app.version_source(version_id)))
-    internal = INTERNAL_LINE_COLUMNS if principal.is_internal else ()
+    internal = principal.is_internal
+    statement = (
+        select(
+            DocumentLine.position_no,
+            DocumentLine.name,
+            DocumentLine.unit,
+            DocumentLine.quantity,
+            DocumentLine.work_id,
+            DocumentLine.project_node_id,
+            *(INTERNAL_LINE_COLUMNS if internal else ()),
+            *((MaterialPrice.unit_price.label("plan_price"),) if internal else ()),
+            AMOUNTS.c.unit_price,
+            AMOUNTS.c.amount,
+        )
+        .select_from(DocumentLine)
+        .outerjoin(AMOUNTS, AMOUNTS.c.line_id == DocumentLine.id)
+    )
+    if internal:
+        statement = statement.outerjoin(
+            MaterialPrice,
+            and_(
+                MaterialPrice.material_id == DocumentLine.material_id,
+                MaterialPrice.deleted_at.is_(None),
+            ),
+        )
     rows = (
         await session.execute(
-            select(
-                DocumentLine.position_no,
-                DocumentLine.name,
-                DocumentLine.unit,
-                DocumentLine.quantity,
-                DocumentLine.work_id,
-                DocumentLine.project_node_id,
-                *internal,
-                AMOUNTS.c.unit_price,
-                AMOUNTS.c.amount,
-            )
-            .select_from(DocumentLine)
-            .outerjoin(AMOUNTS, AMOUNTS.c.line_id == DocumentLine.id)
-            .where(
+            statement.where(
                 DocumentLine.document_id == document_id,
                 DocumentLine.version_id == source_id,
-            )
-            .order_by(DocumentLine.position_no)
+            ).order_by(DocumentLine.position_no)
         )
     ).all()
-    lines = [
-        LineOut(
-            position_no=row.position_no,
-            name=row.name,
-            unit=row.unit,
-            quantity=row.quantity,
-            work_id=row.work_id,
-            project_node_id=row.project_node_id,
-            material_id=getattr(row, "material_id", None),
-            material_batch_id=getattr(row, "material_batch_id", None),
-            warehouse_id=getattr(row, "warehouse_id", None),
-            responsible_user_id=getattr(row, "responsible_user_id", None),
-            unit_price=row.unit_price,
-            amount=row.amount,
-        )
-        for row in rows
-    ]
+    lines = [_line_out(row) for row in rows]
     # Итог справочный: сумма позиций, только если цена и сумма видны по каждой позиции.
     total = None
     if lines and all(line.amount is not None for line in lines):
@@ -345,6 +381,82 @@ async def replace_lines(
     async with db_rules(session):
         await _replace(session, principal, draft, new_lines)
     return await list_lines(session, principal, document_id, version_id)
+
+
+async def prefill_inventory(
+    session: AsyncSession,
+    principal: Principal,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    warehouse_id: uuid.UUID,
+) -> LinesOut:
+    """Акт пересчёта: позиции склада с ненулевым учётным остатком (по партиям у сертифицированных).
+    Факт пуст - его вводит кладовщик. Заполняет только пустой черновик, факт не трогает."""
+    draft = await _draft(session, document_id, version_id)
+    if draft.kind != INVENTORY_KIND:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "inventory.not_inventory")
+    filled = await session.scalar(
+        select(
+            exists().where(DocumentLine.version_id == version_id, DocumentLine.deleted_at.is_(None))
+        )
+    )
+    if filled:
+        raise HTTPException(status.HTTP_409_CONFLICT, "inventory.already_filled")
+    warehouse = await session.scalar(select(Warehouse).where(Warehouse.id == warehouse_id))
+    if warehouse is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
+    if warehouse.project_id != draft.project_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "stock.warehouse_project")
+    rows = (
+        await session.execute(
+            select(
+                StockMovement.material_id,
+                Material.requires_certificate,
+                StockMovement.batch_id,
+                func.sum(StockMovement.qty).label("qty"),
+            )
+            .join(Material, Material.id == StockMovement.material_id)
+            .where(StockMovement.warehouse_id == warehouse_id)
+            .group_by(
+                StockMovement.material_id, Material.requires_certificate, StockMovement.batch_id
+            )
+        )
+    ).all()
+    balances: dict[tuple[uuid.UUID, uuid.UUID | None], Decimal] = {}
+    for row in rows:
+        key = (row.material_id, row.batch_id if row.requires_certificate else None)
+        balances[key] = balances.get(key, Decimal(0)) + row.qty
+    counted = [key for key, qty in balances.items() if qty != 0]
+    materials = {
+        m.id: m
+        for m in await session.scalars(
+            select(Material).where(Material.id.in_([key[0] for key in counted]))
+        )
+    }
+    batches = {
+        b.id: b
+        for b in await session.scalars(
+            select(MaterialBatch).where(
+                MaterialBatch.id.in_([key[1] for key in counted if key[1] is not None])
+            )
+        )
+    }
+    prepared = []
+    for material_id, batch_id in counted:
+        material = materials[material_id]
+        batch_no = batches[batch_id].batch_no if batch_id is not None else None
+        name = material.name if batch_no is None else f"{material.name}, партия {batch_no}"
+        line = LineIn(
+            name=name,
+            unit=material.base_unit,
+            quantity=None,
+            material_id=material_id,
+            material_batch_id=batch_id,
+            warehouse_id=warehouse_id,
+        )
+        prepared.append((material.name, batch_no or "", line))
+    body = LinesIn(lines=[line for _, _, line in sorted(prepared, key=lambda item: item[:2])])
+    return await replace_lines(session, principal, document_id, version_id, body)
 
 
 async def set_prices(

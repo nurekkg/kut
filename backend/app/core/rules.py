@@ -123,6 +123,7 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "line.deleted": (409, "document.line_deleted"),
     "line.node_invalid": (422, "document.line_invalid"),
     "line.priced_delete_forbidden": (403, "line.priced_delete_forbidden"),
+    "line.quantity_invalid": (422, "document.line_quantity_invalid"),
     "document.archived": (409, "document.archived"),
     # Маршруты согласования (S6a-2, ADR-015 часть 5): решения, шаги, замещение, шаблоны.
     "approval.forbidden": (403, "forbidden"),
@@ -170,6 +171,14 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "user.consent_version_required": (422, "consent.version_required"),
     "approval.delegation_not_found": (404, "not_found"),
     "document.parent_not_approved": (409, "document.parent_not_approved"),
+    # Инвентаризация (ADR-016, S7c): снимок при отправке, корректировка при утверждении.
+    "inventory.not_counted": (422, "inventory.not_counted"),
+    "inventory.line_incomplete": (422, "inventory.line_incomplete"),
+    "inventory.duplicate_line": (422, "inventory.duplicate_line"),
+    "inventory.batch_required": (422, "inventory.batch_required"),
+    "inventory.no_snapshot": (409, "inventory.no_snapshot"),
+    "inventory.negative": (409, "inventory.negative"),
+    "stock.adjustment_consumed": (409, "stock.adjustment_consumed"),
 }
 
 # Имя нарушенного ограничения или индекса -> (статус, код ответа).
@@ -180,6 +189,8 @@ CONSTRAINT_RULES: dict[str, tuple[int, str]] = {
     "uq_material_price_material_id": (409, "material.price_taken"),
     "uq_warehouse_project_id_name": (409, "warehouse.name_taken"),
     "uq_stock_movement_reversal_of_id": (409, "stock.already_reversed"),
+    "uq_stock_movement_adjustment_source": (409, "stock.already_adjusted"),
+    "ck_document_line_quantity_nonnegative": (422, "document.line_quantity_invalid"),
     "ck_stock_movement_qty_not_zero": (422, "stock.qty_invalid"),
     "ck_stock_movement_issue_node_and_responsible": (422, "stock.issue_incomplete"),
     "uq_project_node_root_code": (409, "node_code_taken"),

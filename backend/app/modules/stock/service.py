@@ -139,6 +139,10 @@ async def post_waybill(session: AsyncSession, document_id: uuid.UUID, version_id
 
 
 async def reverse(session: AsyncSession, movement_id: uuid.UUID) -> uuid.UUID:
+    # Корректировку инвентаризации отменяет только акт, а не сторно вручную (ADR-016, S7c).
+    kind = await session.scalar(select(StockMovement.kind).where(StockMovement.id == movement_id))
+    if kind == "adjustment":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "stock.adjustment_reverse")
     async with db_rules(session):
         new_id = await session.scalar(
             text("SELECT app.stock_reverse(CAST(:m AS uuid))"), {"m": str(movement_id)}

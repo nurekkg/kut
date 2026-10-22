@@ -102,6 +102,12 @@ class StockMovement(BusinessBase):
             postgresql_where=text("kind = 'receipt' AND source_line_id IS NOT NULL"),
         ),
         Index(
+            "uq_stock_movement_adjustment_source",
+            "source_line_id",
+            unique=True,
+            postgresql_where=text("kind = 'adjustment' AND source_line_id IS NOT NULL"),
+        ),
+        Index(
             "uq_stock_movement_reversal_of_id",
             "reversal_of_id",
             unique=True,

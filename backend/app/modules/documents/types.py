@@ -99,9 +99,9 @@ CUSTOMER_KINDS: Final = frozenset(
 SUBCONTRACTOR_KINDS: Final = frozenset(
     {"contract_subcontract", "ks2", "ks3", "ks6", "hidden_works_act", "ird"}
 )
-# Виды, которые вносит кладовщик (ADR-016 часть 5): М-7 и внутренняя накладная (ВН).
-STOCK_KINDS: Final = frozenset({"m7_act", "waybill_internal"})
+# Виды, которые вносит кладовщик (ADR-016 часть 5): М-7, внутренняя накладная (ВН), акт пересчёта.
 INVENTORY_KIND: Final = "inventory_act"
+STOCK_KINDS: Final = frozenset({"m7_act", "waybill_internal", INVENTORY_KIND})
 CERTIFICATE_KIND: Final = "material_certificate"
 SUPPLIER_KINDS: Final = frozenset(
     {"contract_supply", "waybill_torg12", "waybill_m15", "invoice_esf", "material_request"}
