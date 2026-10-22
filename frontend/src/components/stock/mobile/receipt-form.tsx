@@ -3,6 +3,7 @@
 import { useTranslations } from "next-intl";
 import { useRef, useState } from "react";
 
+import { useAuth } from "@/components/auth/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -15,8 +16,16 @@ import { API } from "@/lib/projects/keys";
 import { receiptLinePayload, receiptProblems, unitChoices, type ReceiptRow } from "@/lib/stock/lines";
 import type { BatchOut, MaterialOut } from "@/lib/stock/types";
 import { useMaterials } from "@/lib/stock/queries";
+import {
+  certificateKey,
+  draftName as draftKey,
+  fileFingerprint,
+  readDraft,
+  writeDraft,
+  type CertEntry,
+  type ReceiptDraft,
+} from "@/lib/stock/draft-store";
 import { useStepKeys } from "@/lib/stock/step-keys";
-import { readDraft, writeDraft, type ReceiptDraft } from "@/lib/stock/draft-store";
 import { todayIso } from "@/lib/schedule/dates";
 
 import { useStockErrorMessage } from "../use-stock-error";
@@ -24,7 +33,8 @@ import { useStockErrorMessage } from "../use-stock-error";
 type Draft = ReceiptRow & { key: number; certFile: File | null; certDocId: string | null; certLoaded: boolean };
 
 // Коды ответа API: версия М-7 уже не черновик, то есть отправка прошла раньше (до перезагрузки или при потере ответа).
-const SENT_CODES = ["document.version_not_draft", "approval.version_not_draft", "document.lines_not_draft"];
+const SENT_CODES = ["document.version_not_draft", "approval.version_not_draft"];
+const LINES_CHANGED_CODE = "document.lines_not_draft";
 
 // Приход на телефоне: позиции из справочника, для сертифицированных - партия и сертификат (камера),
 // затем скан накладной (камера) и отправка прорабу (М-7 идёт по маршруту «склад»).
@@ -39,8 +49,10 @@ export function ReceiptForm({
 }) {
   const t = useTranslations("Stock.phone.receipt");
   const message = useStockErrorMessage();
+  const { user } = useAuth();
   const materials = useMaterials(legalEntityId, true);
-  const steps = useStepKeys();
+  const storageName = user === null ? null : draftKey("receipt", projectId, user.id);
+  const steps = useStepKeys(storageName);
   const [rows, setRows] = useState<Draft[]>([]);
   const [scan, setScan] = useState<File | null>(null);
   const [picked, setPicked] = useState("");
@@ -48,17 +60,30 @@ export function ReceiptForm({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [nextKey, setNextKey] = useState(1);
-  const draftName = `receipt:${projectId}`;
-  // Черновик М-7 после сбоя на середине отправки: повтор продолжает тот же черновик и ту же версию.
-  // Идентификаторы созданных документов лежат в sessionStorage: перезагрузка вкладки не заводит второй акт.
-  const [saved] = useState(() => readDraft<ReceiptDraft>(draftName));
+  // Черновик М-7 после сбоя на середине отправки: повтор продолжает тот же акт и ту же версию. Идентификаторы
+  // созданных документов и отпечатки файлов лежат в sessionStorage: перезагрузка вкладки не заводит второй документ.
+  const [saved] = useState(() => (storageName === null ? null : readDraft<ReceiptDraft>(storageName)));
   const [draftActId, setDraftActId] = useState<string | null>(saved?.actId ?? null);
   const [draftVersionId, setDraftVersionId] = useState<string | null>(saved?.versionId ?? null);
-  const certDocs = useRef<Record<string, string>>(saved?.certDocs ?? {});
+  const [scanFingerprint, setScanFingerprint] = useState<string | null>(saved?.scanFingerprint ?? null);
+  const certs = useRef<Record<string, CertEntry>>(saved?.certs ?? {});
 
-  function remember(actId: string | null, versionId: string | null) {
-    const empty = actId === null && Object.keys(certDocs.current).length === 0;
-    writeDraft(draftName, empty ? null : { actId, versionId, certDocs: certDocs.current });
+  function remember(actId: string | null, versionId: string | null, scanPrint: string | null) {
+    if (storageName === null) return;
+    const empty = actId === null && Object.keys(certs.current).length === 0;
+    writeDraft(storageName, empty ? null : { actId, versionId, scanFingerprint: scanPrint, certs: certs.current });
+  }
+
+  function finish(text: string) {
+    steps.clear();
+    setRows([]);
+    setScan(null);
+    setDraftActId(null);
+    setDraftVersionId(null);
+    setScanFingerprint(null);
+    certs.current = {};
+    if (storageName !== null) writeDraft(storageName, null);
+    setDone(text);
   }
 
   function addMaterial(material: MaterialOut) {
@@ -100,15 +125,15 @@ export function ReceiptForm({
     setBusy(true);
     let reachedLines = false;
     try {
-      // 1) Сертификат и партия для сертифицированных материалов. Каждый шаг запоминается: документ сертификата,
-      // его файл и партия. Повтор после сбоя продолжает с того шага, на котором остановился.
+      // 1) Сертификат и партия для сертифицированных материалов. Сертификат - на партию (материал и номер):
+      // две партии одного материала - два сертификата. Документ, файл и партия запоминаются по шагам.
       let working = rows;
       for (const row of rows) {
         if (!row.material.requires_certificate || row.batchId !== null) continue;
         if (row.certFile === null) return setError(t("noCertificate", { name: row.material.name }));
-        let certificateId = row.certDocId ?? certDocs.current[row.material.id] ?? null;
-        if (certificateId === null) {
-          // Заголовок без номера партии: правка номера после сбоя не меняет запрос, повтор идёт с тем же ключом.
+        const key = certificateKey(row.material.id, row.batchNo);
+        let entry = certs.current[key];
+        if (entry === undefined) {
           const body = {
             kind: "material_certificate",
             legal_entity_id: legalEntityId,
@@ -117,36 +142,39 @@ export function ReceiptForm({
           const certificate = await api.post<DocumentDetail>(
             DOCUMENTS_API,
             body,
-            steps.keyFor(`cert:${row.key}`, JSON.stringify(body)),
+            steps.keyFor(`cert:${key}`, JSON.stringify(body)),
           );
-          certificateId = certificate.id;
-          steps.forget(`cert:${row.key}`);
-          certDocs.current = { ...certDocs.current, [row.material.id]: certificate.id };
-          remember(draftActId, draftVersionId);
-          working = working.map((item) => (item.key === row.key ? { ...item, certDocId: certificateId } : item));
-          setRows(working);
+          entry = { docId: certificate.id, fingerprint: null, loaded: false };
+          certs.current = { ...certs.current, [key]: entry };
+          steps.forget(`cert:${key}`);
+          remember(draftActId, draftVersionId, scanFingerprint);
         }
-        if (!row.certLoaded) {
+        const print = fileFingerprint(row.certFile);
+        if (!entry.loaded || entry.fingerprint !== print) {
           await uploadVersion(
-            await steps.uploadFor(`cert-file:${row.key}`, row.certFile),
-            versionTransport(certificateId),
+            await steps.uploadFor(`cert-file:${key}`, row.certFile),
+            versionTransport(entry.docId),
             { comment: null, amount: null },
           );
-          steps.forget(`cert-file:${row.key}`);
-          working = working.map((item) => (item.key === row.key ? { ...item, certLoaded: true } : item));
-          setRows(working);
+          entry = { docId: entry.docId, fingerprint: print, loaded: true };
+          certs.current = { ...certs.current, [key]: entry };
+          steps.forget(`cert-file:${key}`);
+          remember(draftActId, draftVersionId, scanFingerprint);
         }
         const batch = await api.post<BatchOut>(`${API}/materials/${row.material.id}/batches`, {
           batch_no: row.batchNo.trim(),
-          certificate_document_id: certificateId,
+          certificate_document_id: entry.docId,
           customs_document_id: null,
           country_of_origin: null,
         });
-        working = working.map((item) => (item.key === row.key ? { ...item, batchId: batch.id } : item));
+        working = working.map((item) =>
+          item.key === row.key ? { ...item, batchId: batch.id, certDocId: entry.docId, certLoaded: true } : item,
+        );
         setRows(working);
       }
 
-      // 2) М-7: черновик и версия со сканом запоминаются сразу после создания; повтор продолжает их.
+      // 2) М-7: акт и версия со сканом запоминаются сразу после создания; тот же файл после перезагрузки
+      // не грузится заново (сравнение по отпечатку), повтор продолжает тот же акт и ту же версию.
       let actId = draftActId;
       if (actId === null) {
         const body = {
@@ -159,10 +187,11 @@ export function ReceiptForm({
         actId = created.id;
         steps.forget("act");
         setDraftActId(actId);
-        remember(actId, null);
+        remember(actId, null, null);
       }
+      const scanPrint = fileFingerprint(scan);
       let versionId = draftVersionId;
-      if (versionId === null) {
+      if (versionId === null || scanFingerprint !== scanPrint) {
         const version: VersionOut = await uploadVersion(
           await steps.uploadFor("scan", scan),
           versionTransport(actId),
@@ -171,7 +200,8 @@ export function ReceiptForm({
         steps.forget("scan");
         versionId = version.id;
         setDraftVersionId(versionId);
-        remember(actId, versionId);
+        setScanFingerprint(scanPrint);
+        remember(actId, versionId, scanPrint);
       }
       reachedLines = true;
       const lines = working.map((row) => receiptLinePayload(row, warehouseId));
@@ -179,25 +209,14 @@ export function ReceiptForm({
       await api.put(linesUrl, { lines }, steps.keyFor("lines", `${linesUrl} ${JSON.stringify(lines)}`));
       const sendUrl = `${DOCUMENTS_API}/${actId}/versions/${versionId}/send`;
       await api.post(sendUrl, undefined, steps.keyFor("send", sendUrl));
-      steps.clear();
-      setRows([]);
-      setScan(null);
-      setDraftActId(null);
-      setDraftVersionId(null);
-      certDocs.current = {};
-      writeDraft(draftName, null);
-      setDone(t("sent"));
+      finish(t("sent"));
     } catch (cause) {
-      if (reachedLines && cause instanceof ApiError && SENT_CODES.includes(cause.code)) {
-        // Отправка уже прошла в прошлой попытке (до перезагрузки или при потере ответа): акт не в черновике.
-        steps.clear();
-        setRows([]);
-        setScan(null);
-        setDraftActId(null);
-        setDraftVersionId(null);
-        certDocs.current = {};
-        writeDraft(draftName, null);
-        setDone(t("sent"));
+      if (reachedLines && cause instanceof ApiError && cause.code === LINES_CHANGED_CODE) {
+        // Версия уже отправлена: строки этой попытки не сохранились, сообщаем прямо.
+        finish(t("sentChangesLost"));
+      } else if (reachedLines && cause instanceof ApiError && SENT_CODES.includes(cause.code)) {
+        // Отправка прошла в прошлой попытке (до перезагрузки или при потере ответа).
+        finish(t("sent"));
       } else {
         setError(message(cause));
       }
@@ -287,7 +306,7 @@ export function ReceiptForm({
                     className="block w-full min-h-12 text-sm"
                     disabled={row.batchId !== null}
                     onChange={(event) => {
-                      steps.forget(`cert-file:${row.key}`);
+                      steps.forget(`cert-file:${certificateKey(row.material.id, row.batchNo)}`);
                       patch(row.key, { certFile: event.target.files?.[0] ?? null, certLoaded: false });
                     }}
                     type="file"
@@ -311,8 +330,6 @@ export function ReceiptForm({
           className="block w-full min-h-12 text-sm"
           onChange={(event) => {
             steps.forget("scan");
-            setDraftVersionId(null);
-            remember(draftActId, null);
             setScan(event.target.files?.[0] ?? null);
           }}
           type="file"

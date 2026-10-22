@@ -4,42 +4,65 @@ import { useRef } from "react";
 
 import { newIdempotencyKey } from "@/lib/api";
 import { prepareUpload, type UploadWork } from "@/lib/documents/upload";
+import { fileFingerprint, readDraft, writeDraft, type SavedKeys } from "@/lib/stock/draft-store";
 
-// Ключи Idempotency-Key и загрузки шагов формы склада. Ключ привязан к запросу шага (адрес и тело): повтор
-// того же запроса после сбоя шлёт тот же ключ, и сервер отдаёт прежний ответ; другой запрос под тем же именем
-// шага получает новый ключ. Файл грузится один раз на шаг (presign, ключ объекта, ключ подтверждения), повтор
-// подтверждает тот же объект. Всё забывается после успеха шага.
-export function useStepKeys() {
-  const keys = useRef(new Map<string, { request: string; key: string }>());
+// Ключи Idempotency-Key шагов формы склада. Ключ привязан к запросу шага (адрес и тело): повтор того же запроса
+// после сбоя шлёт тот же ключ, и сервер отдаёт прежний ответ, а не заводит вторую запись. Другой запрос под тем же
+// именем шага получает новый ключ. Ключи создания, строк и отправки лежат в sessionStorage: после перезагрузки
+// вкладки повтор того же запроса тоже идемпотентен. Загрузки файлов ключей не сохраняют: после перезагрузки файл
+// грузится заново с новым ключом объекта (повтор с прежним ключом дал бы 422). Ключ шага забывается после успеха.
+export function useStepKeys(storageName: string | null) {
+  const keysName = storageName === null ? null : `${storageName}#keys`;
+  const saved = useRef<SavedKeys | null>(null);
+  if (saved.current === null) {
+    saved.current = (keysName === null ? null : readDraft<SavedKeys>(keysName)) ?? {};
+  }
   const uploads = useRef(new Map<string, { file: File; work: UploadWork }>());
+  const uploadKeys = useRef(new Map<string, { fingerprint: string; key: string }>());
+
+  function persist(): void {
+    if (keysName === null) return;
+    const current = saved.current ?? {};
+    writeDraft(keysName, Object.keys(current).length === 0 ? null : current);
+  }
 
   function keyFor(step: string, request: string): string {
-    const known = keys.current.get(step);
+    const current = saved.current ?? {};
+    const known = current[step];
     if (known !== undefined && known.request === request) return known.key;
     const key = newIdempotencyKey();
-    keys.current.set(step, { request, key });
+    saved.current = { ...current, [step]: { request, key } };
+    persist();
     return key;
   }
 
   async function uploadFor(step: string, file: File): Promise<UploadWork> {
     const known = uploads.current.get(step);
     if (known !== undefined && known.file === file) return known.work;
-    const work = await prepareUpload(
-      file,
-      keyFor(step, `file:${file.name}:${file.size}:${file.lastModified}`),
-    );
+    const fingerprint = fileFingerprint(file);
+    const previous = uploadKeys.current.get(step);
+    const key =
+      previous !== undefined && previous.fingerprint === fingerprint ? previous.key : newIdempotencyKey();
+    uploadKeys.current.set(step, { fingerprint, key });
+    const work = await prepareUpload(file, key);
     uploads.current.set(step, { file, work });
     return work;
   }
 
   function forget(step: string): void {
-    keys.current.delete(step);
+    const current = { ...(saved.current ?? {}) };
+    delete current[step];
+    saved.current = current;
     uploads.current.delete(step);
+    uploadKeys.current.delete(step);
+    persist();
   }
 
   function clear(): void {
-    keys.current.clear();
+    saved.current = {};
     uploads.current.clear();
+    uploadKeys.current.clear();
+    persist();
   }
 
   return { keyFor, uploadFor, forget, clear };

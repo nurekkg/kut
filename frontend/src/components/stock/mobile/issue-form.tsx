@@ -4,11 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { useMemo, useState } from "react";
 
+import { useAuth } from "@/components/auth/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ApiError } from "@/lib/auth/api";
 import { api } from "@/lib/api";
+import { formatQuantity } from "@/lib/documents/format";
 import { DOCUMENTS_API } from "@/lib/documents/queries";
 import type { DocumentDetail } from "@/lib/documents/types";
 import { API } from "@/lib/projects/keys";
@@ -16,7 +18,7 @@ import { todayIso } from "@/lib/schedule/dates";
 import type { TreeNode } from "@/lib/projects/types";
 import { issueLinePayload, issueProblems, unitChoices, type IssueRow } from "@/lib/stock/lines";
 import { useBatchBalances, useMaterials, usePostWaybill } from "@/lib/stock/queries";
-import { readDraft, writeDraft, type IssueDraft } from "@/lib/stock/draft-store";
+import { draftName as draftKey, readDraft, writeDraft, type IssueDraft } from "@/lib/stock/draft-store";
 import { useStepKeys } from "@/lib/stock/step-keys";
 import type { MaterialOut } from "@/lib/stock/types";
 
@@ -37,6 +39,7 @@ export function IssueForm({
 }) {
   const t = useTranslations("Stock.phone.issue");
   const message = useStockErrorMessage();
+  const { user } = useAuth();
   const materials = useMaterials(legalEntityId, true);
   const tree = useQuery({
     queryKey: ["projects", projectId, "tree"],
@@ -44,14 +47,17 @@ export function IssueForm({
   });
   const batches = useBatchBalances(warehouseId);
   const post = usePostWaybill();
-  const steps = useStepKeys();
+  const storageName = user === null ? null : draftKey("issue", projectId, user.id);
+  const steps = useStepKeys(storageName);
   const [nodeId, setNodeId] = useState("");
   const [rows, setRows] = useState<Draft[]>([]);
   const [picked, setPicked] = useState("");
   const [nextKey, setNextKey] = useState(1);
-  const draftName = `issue:${projectId}`;
-  // Черновик ВН после сбоя: повтор идёт в тот же ВН. Идентификатор лежит в sessionStorage: перезагрузка не заводит второй.
-  const [draftWaybill, setDraftWaybill] = useState<IssueDraft | null>(() => readDraft<IssueDraft>(draftName));
+  // Черновик ВН после сбоя: повтор идёт в тот же ВН. Идентификатор лежит в sessionStorage пользователя:
+  // перезагрузка вкладки не заводит второй ВН.
+  const [draftWaybill, setDraftWaybill] = useState<IssueDraft | null>(() =>
+    storageName === null ? null : readDraft<IssueDraft>(storageName),
+  );
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -79,6 +85,14 @@ export function IssueForm({
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
   }
 
+  function finish(text: string) {
+    steps.clear();
+    setRows([]);
+    setDraftWaybill(null);
+    if (storageName !== null) writeDraft(storageName, null);
+    setDone(text);
+  }
+
   async function submit() {
     setError(null);
     setDone(null);
@@ -92,7 +106,7 @@ export function IssueForm({
 
     setBusy(true);
     try {
-      // Черновик ВН создаётся один раз (версия без файла): повтор после сбоя идёт в тот же черновик и с тем же ключом.
+      // Черновик ВН создаётся один раз (версия без файла): повтор после сбоя идёт в тот же ВН, тем же ключом.
       let draft = draftWaybill;
       if (draft === null) {
         const body = {
@@ -107,31 +121,32 @@ export function IssueForm({
         if (!version) return setError(t("noVersion"));
         draft = { id: waybill.id, versionId: version.id };
         setDraftWaybill(draft);
-        writeDraft(draftName, draft);
+        if (storageName !== null) writeDraft(storageName, draft);
       }
       const lines = rows.map((row) => issueLinePayload(row, warehouseId, node.id, responsible));
       const linesUrl = `${DOCUMENTS_API}/${draft.id}/versions/${draft.versionId}/lines`;
-      await api.put(linesUrl, { lines }, steps.keyFor("lines", `${linesUrl} ${JSON.stringify(lines)}`));
+      try {
+        await api.put(linesUrl, { lines }, steps.keyFor("lines", `${linesUrl} ${JSON.stringify(lines)}`));
+      } catch (cause) {
+        // ВН уже проведён в прошлой попытке: строки этой попытки не сохранились, сообщаем прямо.
+        if (cause instanceof ApiError && cause.code === "document.lines_not_draft") {
+          finish(t("postedChangesLost"));
+          return;
+        }
+        throw cause;
+      }
       let result;
       try {
         result = await post.mutateAsync({ documentId: draft.id, versionId: draft.versionId });
       } catch (cause) {
         // Проведение уже прошло в прошлой попытке (ответ потерян): черновик наш, остатки списаны один раз.
         if (cause instanceof ApiError && cause.code === "stock.version_not_draft") {
-          steps.clear();
-          setRows([]);
-          setDraftWaybill(null);
-          writeDraft(draftName, null);
-          setDone(t("alreadyPosted"));
+          finish(t("alreadyPosted"));
           return;
         }
         throw cause;
       }
-      steps.clear();
-      setRows([]);
-      setDraftWaybill(null);
-      writeDraft(draftName, null);
-      setDone(t("posted", { count: result.movements }));
+      finish(t("posted", { count: result.movements }));
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -214,7 +229,7 @@ export function IssueForm({
                     .filter((option) => option.material_id === row.material.id)
                     .map((option) => (
                       <option key={option.batch_id ?? ""} value={option.batch_id ?? ""}>
-                        {option.batch_no} ({option.qty} {option.base_unit})
+                        {option.batch_no} ({formatQuantity(option.qty)} {option.base_unit})
                       </option>
                     ))}
                 </NativeSelect>

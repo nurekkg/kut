@@ -7,6 +7,8 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { UserMenu } from "@/components/auth/user-menu";
+import { AppNav } from "@/components/projects/app-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -77,7 +79,9 @@ export function MaterialsView() {
   const table = useReactTable({ data: rows, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-6">
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-4 py-4">
+      <UserMenu />
+      <AppNav />
       <header className="flex flex-wrap items-end justify-between gap-3">
         <h1 className="text-2xl font-semibold">{t("title")}</h1>
         {canImport && legalEntityId !== null && (
@@ -145,6 +149,6 @@ export function MaterialsView() {
           onClose={() => setImportOpen(false)}
         />
       )}
-    </div>
+    </main>
   );
 }

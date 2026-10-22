@@ -4,6 +4,7 @@ import { useTranslations } from "next-intl";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
+import { formatQuantity } from "@/lib/documents/format";
 import { useMaterial } from "@/lib/stock/queries";
 
 // Карточка материала: единицы с коэффициентом, сертификат, план-цена. Строки цены нет, если API её не
@@ -43,7 +44,7 @@ export function MaterialCard({ materialId }: { materialId: string }) {
               {item.units.map((unit) => (
                 <tr className="border-t" key={unit.id}>
                   <td className="py-2">{unit.unit}</td>
-                  <td className="py-2 text-right">{t("factor", { factor: unit.factor, unit: item.base_unit })}</td>
+                  <td className="py-2 text-right">{t("factor", { factor: formatQuantity(unit.factor), unit: item.base_unit })}</td>
                 </tr>
               ))}
             </tbody>

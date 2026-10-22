@@ -1,10 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { UserMenu } from "@/components/auth/user-menu";
+import { AppNav } from "@/components/projects/app-nav";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
 import { api } from "@/lib/api";
+import { formatQuantity } from "@/lib/documents/format";
 import { API } from "@/lib/projects/keys";
 import type { Project } from "@/lib/projects/types";
 import {
@@ -80,7 +84,19 @@ export function WarehouseView({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-6">
+    <main
+      className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-4 py-4"
+      data-testid="stock-warehouse"
+    >
+      <UserMenu />
+      <AppNav />
+      <Link
+        href={`/projects/${projectId}`}
+        className="inline-flex min-h-10 w-fit items-center rounded-md text-sm text-muted-foreground outline-none hover:text-foreground"
+      >
+        {t("toProject")}
+      </Link>
+
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold">{t("title")}</h1>
@@ -128,7 +144,7 @@ export function WarehouseView({ projectId }: { projectId: string }) {
                     <td className="px-3 py-2">{nameOf(row.material_id)}</td>
                     <td className="px-3 py-2 text-muted-foreground">-</td>
                     <td className="px-3 py-2 text-right">
-                      {row.qty} {row.base_unit}
+                      {formatQuantity(row.qty)} {row.base_unit}
                     </td>
                   </tr>
                 ))}
@@ -139,7 +155,7 @@ export function WarehouseView({ projectId }: { projectId: string }) {
                     <td className="px-3 py-2">{nameOf(row.material_id)}</td>
                     <td className="px-3 py-2">{row.batch_no ?? "-"}</td>
                     <td className="px-3 py-2 text-right">
-                      {row.qty} {row.base_unit}
+                      {formatQuantity(row.qty)} {row.base_unit}
                     </td>
                   </tr>
                 ))}
@@ -170,7 +186,7 @@ export function WarehouseView({ projectId }: { projectId: string }) {
                   <td className="px-3 py-2">{t(`kinds.${row.kind}`)}</td>
                   <td className="px-3 py-2">{nameOf(row.material_id)}</td>
                   <td className="px-3 py-2 text-right">
-                    {row.qty} {row.unit}
+                    {formatQuantity(row.qty)} {row.unit}
                   </td>
                   {canReverse && (
                     <td className="px-3 py-2 text-right">
@@ -208,6 +224,6 @@ export function WarehouseView({ projectId }: { projectId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </main>
   );
 }

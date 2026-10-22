@@ -59,10 +59,15 @@ export function useWarehouses(projectId: string | null) {
   });
 }
 
+// Остатки и журнал меняют другие люди (утверждение М-7 прорабом, инвентаризация): при возврате на вкладку
+// запрашиваются заново, даже если данные ещё «свежие» по умолчанию.
+const LIVE = { staleTime: 0, refetchOnWindowFocus: "always" } as const;
+
 export function useBalances(warehouseId: string | null) {
   return useQuery({
     queryKey: [...STOCK_KEY, "balances", warehouseId],
     enabled: warehouseId !== null,
+    ...LIVE,
     queryFn: () => api.get<BalanceOut[]>(`${API}/stock/balances`, { warehouse_id: warehouseId ?? undefined }),
   });
 }
@@ -71,6 +76,7 @@ export function useBatchBalances(warehouseId: string | null) {
   return useQuery({
     queryKey: [...STOCK_KEY, "batch-balances", warehouseId],
     enabled: warehouseId !== null,
+    ...LIVE,
     queryFn: () =>
       api.get<BatchBalanceOut[]>(`${API}/stock/balances`, {
         warehouse_id: warehouseId ?? undefined,
@@ -83,6 +89,7 @@ export function useMovements(warehouseId: string | null) {
   return useQuery({
     queryKey: [...STOCK_KEY, "movements", warehouseId],
     enabled: warehouseId !== null,
+    ...LIVE,
     queryFn: () =>
       api.get<MovementOut[]>(`${API}/stock/movements`, { warehouse_id: warehouseId ?? undefined, limit: 200 }),
   });
