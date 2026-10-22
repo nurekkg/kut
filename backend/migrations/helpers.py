@@ -135,5 +135,6 @@ def narrow_check(table: str, name: str, expression: str) -> None:
     op.execute(
         f"DO $$ BEGIN ALTER TABLE {_ident(table)} DROP CONSTRAINT {_ident(name)};"
         f" ALTER TABLE {_ident(table)} ADD CONSTRAINT {_ident(name)} CHECK ({expression});"
-        " EXCEPTION WHEN check_violation THEN NULL; END $$"
+        f" EXCEPTION WHEN check_violation THEN RAISE NOTICE 'откат: ограничение {name} оставлено шире"
+        " (есть строки нового вида)'; END $$"
     )

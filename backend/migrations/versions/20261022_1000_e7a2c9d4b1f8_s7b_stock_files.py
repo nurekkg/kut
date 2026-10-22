@@ -2,7 +2,8 @@
 ВН с партией сертифицированного материала, остаток материала только своего юрлица, код архива.
 
 Версия без файла: гард БД (вид без флага file_required) и CHECK «всё или ничего» по полям файла.
-Откат не удаляет версии: если версии без файла уже есть, откат остановится на SET NOT NULL."""
+Откат не удаляет версии: если версии без файла уже есть, колонки файла и CHECK «всё или ничего» остаются
+(с NOTICE), повторный upgrade при этом не падает на уже существующем CHECK."""
 
 from collections.abc import Sequence
 
@@ -461,6 +462,8 @@ FILE_COLUMNS = ("s3_key", "content_type", "size_bytes", "checksum_sha256")
 def upgrade() -> None:
     for column in FILE_COLUMNS:
         op.alter_column("document_version", column, nullable=True)
+    # Откат мог оставить CHECK (версии без файла есть): создаём заново только его отсутствие.
+    op.execute("ALTER TABLE document_version DROP CONSTRAINT IF EXISTS ck_document_version_file_all_or_none")
     op.create_check_constraint(
         op.f("ck_document_version_file_all_or_none"),
         "document_version",
@@ -533,5 +536,6 @@ def downgrade() -> None:
     )
     op.execute(
         "DO $$ BEGIN ALTER TABLE document_version DROP CONSTRAINT ck_document_version_file_all_or_none;"
-        f"{columns} EXCEPTION WHEN not_null_violation THEN NULL; END $$"
+        f"{columns} EXCEPTION WHEN not_null_violation THEN RAISE NOTICE "
+        "'откат: колонки файла версии оставлены необязательными (есть версии без файла)'; END $$"
     )
