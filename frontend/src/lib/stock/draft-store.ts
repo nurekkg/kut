@@ -19,7 +19,7 @@ export type IssueDraft = { id: string; versionId: string };
 
 export type SavedKeys = Record<string, { request: string; key: string }>;
 
-export function draftName(kind: "receipt" | "issue", projectId: string, userId: string): string {
+export function draftName(kind: "receipt" | "issue" | "inventory", projectId: string, userId: string): string {
   return `${kind}:${projectId}:${userId}`;
 }
 

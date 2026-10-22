@@ -37,6 +37,18 @@ const KEYS: Record<string, string> = {
   "forbidden": "forbidden",
   "not_found": "notFound",
   "validation": "validation",
+  "inventory.not_counted": "notCounted",
+  "inventory.line_incomplete": "inventoryLineIncomplete",
+  "inventory.duplicate_line": "inventoryDuplicate",
+  "inventory.batch_required": "batchRequired",
+  "inventory.no_snapshot": "inventoryNoSnapshot",
+  "inventory.negative": "inventoryNegative",
+  "inventory.already_filled": "inventoryAlreadyFilled",
+  "inventory.not_inventory": "inventoryNotInventory",
+  "stock.adjustment_consumed": "adjustmentConsumed",
+  "stock.adjustment_reverse": "adjustmentReverse",
+  "stock.already_adjusted": "alreadyAdjusted",
+  "document.line_quantity_invalid": "lineQuantityInvalid",
 };
 
 export function stockErrorKey(code: string): string | null {

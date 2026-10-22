@@ -12,10 +12,11 @@ import { API } from "@/lib/projects/keys";
 import type { Project } from "@/lib/projects/types";
 import { useWarehouses } from "@/lib/stock/queries";
 
+import { InventoryForm } from "./inventory-form";
 import { IssueForm } from "./issue-form";
 import { ReceiptForm } from "./receipt-form";
 
-type Tab = "receipt" | "issue";
+type Tab = "receipt" | "issue" | "inventory";
 
 // Склад на телефоне: одна рука, крупные кнопки (не меньше 48 px), один блок на экран. Приход и выдача
 // отправляются сразу, без очереди на устройстве: при сбое сети форма сохраняет введённое.
@@ -45,12 +46,15 @@ export function StockPhoneApp({ projectId }: { projectId: string }) {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-2">
-        <Button className="min-h-12 text-base" onClick={() => setTab("receipt")} type="button" variant={tab === "receipt" ? "default" : "outline"}>
+      <div className="grid grid-cols-3 gap-2">
+        <Button className="min-h-12 px-2 text-sm" onClick={() => setTab("receipt")} type="button" variant={tab === "receipt" ? "default" : "outline"}>
           {t("tabReceipt")}
         </Button>
-        <Button className="min-h-12 text-base" onClick={() => setTab("issue")} type="button" variant={tab === "issue" ? "default" : "outline"}>
+        <Button className="min-h-12 px-2 text-sm" onClick={() => setTab("issue")} type="button" variant={tab === "issue" ? "default" : "outline"}>
           {t("tabIssue")}
+        </Button>
+        <Button className="min-h-12 px-2 text-sm" onClick={() => setTab("inventory")} type="button" variant={tab === "inventory" ? "default" : "outline"}>
+          {t("tabInventory")}
         </Button>
       </div>
 
@@ -65,6 +69,15 @@ export function StockPhoneApp({ projectId }: { projectId: string }) {
       {project.data && (
         <div hidden={tab !== "issue"}>
           <IssueForm legalEntityId={project.data.legal_entity_id} projectId={projectId} warehouseId={warehouseId} />
+        </div>
+      )}
+      {project.data && (
+        <div hidden={tab !== "inventory"}>
+          <InventoryForm
+            legalEntityId={project.data.legal_entity_id}
+            projectId={projectId}
+            warehouses={warehouses.data ?? []}
+          />
         </div>
       )}
     </div>

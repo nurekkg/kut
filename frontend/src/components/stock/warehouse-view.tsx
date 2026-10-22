@@ -190,7 +190,7 @@ export function WarehouseView({ projectId }: { projectId: string }) {
                   </td>
                   {canReverse && (
                     <td className="px-3 py-2 text-right">
-                      {row.kind !== "reversal" && (
+                      {(row.kind === "receipt" || row.kind === "issue") && (
                         <Button className="min-h-12" onClick={() => setConfirming(row)} type="button" variant="outline">
                           {t("reverse")}
                         </Button>
