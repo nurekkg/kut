@@ -463,7 +463,9 @@ def upgrade() -> None:
     for column in FILE_COLUMNS:
         op.alter_column("document_version", column, nullable=True)
     # Откат мог оставить CHECK (версии без файла есть): создаём заново только его отсутствие.
-    op.execute("ALTER TABLE document_version DROP CONSTRAINT IF EXISTS ck_document_version_file_all_or_none")
+    op.execute(
+        "ALTER TABLE document_version DROP CONSTRAINT IF EXISTS ck_document_version_file_all_or_none"
+    )
     op.create_check_constraint(
         op.f("ck_document_version_file_all_or_none"),
         "document_version",

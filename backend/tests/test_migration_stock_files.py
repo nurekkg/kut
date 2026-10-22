@@ -1,8 +1,11 @@
-"""S7b (ревью): откат ревизии с версиями без файла оставляет данные и правила, повторный upgrade не падает.
+"""S7b (ревью): откат ревизии с версиями без файла оставляет данные и правила, повторный upgrade
+не падает.
 
-Версия ВН без файла создаётся обычным путём API (как приложение, kut_app). Миграции идут под kut_owner в отдельном
-контексте: API в нём не вызывается, иначе приложение получило бы URL владельца. Откат до ревизии перед e7a2 не
-удаляет документы, поэтому CHECK «всё или ничего» и NOT NULL-колонки остаются, а повторный upgrade до head проходит.
+Версия ВН без файла создаётся обычным путём API (как приложение, kut_app). Миграции идут под
+kut_owner
+в отдельном контексте: API в нём не вызывается, иначе приложение получило бы URL владельца. Откат до
+ревизии перед e7a2 не удаляет документы, поэтому CHECK «всё или ничего» и NOT NULL-колонки остаются,
+а повторный upgrade до head проходит.
 """
 
 from collections.abc import Iterator
@@ -53,7 +56,8 @@ async def test_a_downgrade_with_a_waybill_without_file_keeps_the_rules_and_upgra
             )
         )
         s3_key = connection.scalar(
-            text("SELECT s3_key FROM document_version WHERE id = CAST(:id AS uuid)"), {"id": version}
+            text("SELECT s3_key FROM document_version WHERE id = CAST(:id AS uuid)"),
+            {"id": version},
         )
     assert checks == 1
     assert s3_key is None
