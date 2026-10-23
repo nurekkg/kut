@@ -48,6 +48,7 @@ const KEYS: Record<string, string> = {
   "inventory.unit_mismatch": "inventoryUnitMismatch",
   "inventory.batch_mismatch": "inventoryBatchMismatch",
   "inventory.version_locked": "inventoryVersionLocked",
+  "inventory.in_progress": "inventoryInProgress",
   "stock.adjustment_consumed": "adjustmentConsumed",
   "stock.adjustment_reverse": "adjustmentReverse",
   "stock.already_adjusted": "alreadyAdjusted",
