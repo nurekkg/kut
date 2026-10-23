@@ -652,3 +652,43 @@ async def test_a_new_version_of_an_inventory_act_is_refused_once_it_is_approved(
     assert scanned.status_code == 409, scanned.text
     assert "inventory.version_locked" in scanned.text
     assert await stock(who_at(auth_world.users["storekeeper"], yard), yard, yard.material) == 7
+
+
+async def test_a_second_act_of_the_same_warehouse_waits_for_the_first_one(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await inventory_yard(api, auth_world, worker_sync_engine)
+    await receive_material(api, owner_sync_engine, yard, yard.material, yard.material_name, 10)
+    store = who_at(auth_world.users["storekeeper"], yard)
+    first_doc, first = await inventory_act(api, yard)
+    await count(api, yard, first_doc, first, {yard.material: "7"})
+    assert (await send(api, yard, first_doc, first)).status_code == 200
+    second_doc, second = await inventory_act(api, yard)
+    await count(api, yard, second_doc, second, {yard.material: "5"})
+    refused = await send(api, yard, second_doc, second)
+    assert refused.status_code == 409, refused.text
+    assert "inventory.in_progress" in refused.text
+    await approve_route(api, yard, first_doc, first)
+    assert await stock(store, yard, yard.material) == 7
+    assert (await send(api, yard, second_doc, second)).status_code == 200
+    await approve_route(api, yard, second_doc, second)
+    assert await stock(store, yard, yard.material) == 5
+
+
+async def test_a_version_started_before_the_approval_cannot_be_sent_after_it(
+    api, auth_world, worker_sync_engine, owner_sync_engine, s3: httpx.AsyncClient
+):
+    yard = await inventory_yard(api, auth_world, worker_sync_engine)
+    await receive_material(api, owner_sync_engine, yard, yard.material, yard.material_name, 10)
+    store = who_at(auth_world.users["storekeeper"], yard)
+    doc, first = await inventory_act(api, yard)
+    await count(api, yard, doc, first, {yard.material: "7"})
+    later = await upload(api, s3, doc, yard.desk.heads["storekeeper"], PDF_OK, PDF)
+    assert later.status_code == 201, later.text
+    assert (await send(api, yard, doc, first)).status_code == 200
+    await approve_route(api, yard, doc, first)
+    assert await stock(store, yard, yard.material) == 7
+    refused = await send(api, yard, doc, str(later.json()["id"]))
+    assert refused.status_code == 409, refused.text
+    assert "inventory.version_locked" in refused.text
+    assert await stock(store, yard, yard.material) == 7

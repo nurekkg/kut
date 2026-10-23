@@ -181,6 +181,8 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "inventory.unit_mismatch": (422, "inventory.unit_mismatch"),
     "line.snapshot_forbidden": (422, "line.snapshot_forbidden"),
     "inventory.negative": (409, "inventory.negative"),
+    "inventory.version_locked": (409, "inventory.version_locked"),
+    "inventory.in_progress": (409, "inventory.in_progress"),
     "stock.adjustment_consumed": (409, "stock.adjustment_consumed"),
 }
 

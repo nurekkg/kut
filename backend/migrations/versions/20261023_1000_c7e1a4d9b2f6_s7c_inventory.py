@@ -8,6 +8,8 @@ kind=adjustment на расхождение (факт минус снимок) �
 допустимы только в инвентаризации; в остальных видах количество строго положительное (правило в гарде строк,
 потому что CHECK не видит вид документа). Гард строк пропускает обновление одного только снимка: его ставит
 функция склада при отправке, а приложение колонку снимка не пишет (грант UPDATE по колонкам).
+Снимок отказывает, если версия блокирована (inventory.version_locked) или по складу и материалу
+уже есть акт на согласовании (inventory.in_progress): иначе корректировки считаются дважды.
 """
 
 from collections.abc import Sequence
@@ -26,15 +28,23 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
     ln public.document_line;
     n integer;
+    ddoc uuid;
     dproject uuid;
     dlegal uuid;
 BEGIN
-    SELECT d.project_id, d.legal_entity_id INTO dproject, dlegal
+    SELECT d.id, d.project_id, d.legal_entity_id INTO ddoc, dproject, dlegal
     FROM public.document_version v
     JOIN public.document d ON d.id = v.document_id
     WHERE v.id = p_version AND d.kind = 'inventory_act';
     IF NOT FOUND THEN
         RETURN 0;
+    END IF;
+    -- Утверждённая или согласуемая версия блокирует новую: архив сторнирует её корректировки.
+    PERFORM pg_advisory_xact_lock(hashtextextended(ddoc::text, 1));
+    IF EXISTS (SELECT 1 FROM public.document_version
+               WHERE document_id = ddoc AND id <> p_version
+                 AND status IN ('on_approval', 'approved', 'signed')) THEN
+        RAISE EXCEPTION 'inventory.version_locked';
     END IF;
     IF EXISTS (SELECT 1 FROM public.document_line
                WHERE version_id = p_version AND deleted_at IS NULL AND quantity IS NULL) THEN
@@ -83,9 +93,21 @@ BEGIN
         RAISE EXCEPTION 'inventory.unit_mismatch';
     END IF;
     FOR ln IN SELECT * FROM public.document_line
-              WHERE version_id = p_version AND deleted_at IS NULL LOOP
+              WHERE version_id = p_version AND deleted_at IS NULL
+              ORDER BY warehouse_id, material_id LOOP
         PERFORM app.stock_lock(ln.warehouse_id, ln.material_id);
     END LOOP;
+    -- Второй акт того же склада и материала ждёт первого: снимок не видит его корректировок.
+    IF EXISTS (SELECT 1 FROM public.document_line mine
+               JOIN public.document_line other ON other.warehouse_id = mine.warehouse_id
+                                              AND other.material_id = mine.material_id
+               JOIN public.document_version ov ON ov.id = other.version_id
+               JOIN public.document od ON od.id = ov.document_id AND od.kind = 'inventory_act'
+               WHERE mine.version_id = p_version AND mine.deleted_at IS NULL
+                 AND other.deleted_at IS NULL AND ov.status = 'on_approval'
+                 AND ov.id <> p_version) THEN
+        RAISE EXCEPTION 'inventory.in_progress';
+    END IF;
     UPDATE public.document_line l
        SET snapshot_qty = app.stock_balance(l.warehouse_id, l.material_id, l.material_batch_id)
      WHERE l.version_id = p_version AND l.deleted_at IS NULL;
