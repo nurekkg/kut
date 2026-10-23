@@ -1,0 +1,17 @@
+diff --git a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+index 8a9dbb4..4c4762d 100644
+--- a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
++++ b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+@@ -56,12 +56,6 @@ BEGIN
+                  AND m.requires_certificate AND l.material_batch_id IS NULL) THEN
+         RAISE EXCEPTION 'inventory.batch_required';
+     END IF;
+-    IF EXISTS (SELECT 1 FROM public.document_line l
+-               JOIN public.material m ON m.id = l.material_id
+-               WHERE l.version_id = p_version AND l.deleted_at IS NULL
+-                 AND NOT m.requires_certificate AND l.material_batch_id IS NOT NULL) THEN
+-        RAISE EXCEPTION 'stock.batch_not_applicable';
+-    END IF;
+     -- Склад - объекта акта, партия - того же материала и юрлица, единица - базовая: иначе снимок читает
+     -- чужой остаток, а корректировка пишет в чужой склад или в неверной шкале.
+     IF EXISTS (SELECT 1 FROM public.document_line l
