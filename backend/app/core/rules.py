@@ -177,6 +177,9 @@ TRIGGER_RULES: dict[str, tuple[int, str]] = {
     "inventory.duplicate_line": (422, "inventory.duplicate_line"),
     "inventory.batch_required": (422, "inventory.batch_required"),
     "inventory.no_snapshot": (409, "inventory.no_snapshot"),
+    "inventory.batch_mismatch": (422, "inventory.batch_mismatch"),
+    "inventory.unit_mismatch": (422, "inventory.unit_mismatch"),
+    "line.snapshot_forbidden": (422, "line.snapshot_forbidden"),
     "inventory.negative": (409, "inventory.negative"),
     "stock.adjustment_consumed": (409, "stock.adjustment_consumed"),
 }

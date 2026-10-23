@@ -2,16 +2,29 @@
 снимок остатка и корректировки движений.
 Каждый тест - свой объект и склад (как в test_materials_stock)."""
 
+from collections.abc import AsyncIterator
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import httpx
+import pytest
 from httpx import Response
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from app.modules.auth.principal import principal_store
 from tests.auth_support import AuthWorld
 from tests.db_support import INSUFFICIENT_PRIVILEGE, call, expect_error
-from tests.documents_support import approve, give_access
+from tests.documents_support import (  # noqa: F401
+    PDF,
+    PDF_OK,
+    approve,
+    give_access,
+    leave_no_access_behind,
+    project,
+    sha256_b64,
+    upload,
+)
 from tests.equipment_support import headers_for, idem
 from tests.test_materials_stock import (
     API,
@@ -20,6 +33,7 @@ from tests.test_materials_stock import (
     document,
     issue,
     make_yard,
+    receipt_line,
     receive,
     who_at,
 )
@@ -469,3 +483,172 @@ async def test_a_correction_is_reversed_only_by_the_act(
     assert reversed_by_hand.status_code == 422, reversed_by_hand.text
     assert "stock.adjustment_reverse" in reversed_by_hand.text
     assert await stock(store, yard, yard.material) == 7
+
+
+@pytest.fixture
+async def s3() -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient(timeout=10) as client:
+        yield client
+
+
+async def signed_copy(api, s3: httpx.AsyncClient, yard: Yard, doc: str, version: str) -> Response:
+    """Подписанный скан к согласованной версии: загрузка в S3 и версия `signed` от техдиректора."""
+    headers = yard.desk.heads["technical_director"]
+    presigned = await api.post(
+        f"{API}/documents/{doc}/versions/presign",
+        json={
+            "content_type": PDF,
+            "size_bytes": len(PDF_OK),
+            "checksum_sha256": sha256_b64(PDF_OK),
+        },
+        headers=headers,
+    )
+    assert presigned.status_code == 200, presigned.text
+    item = presigned.json()
+    stored = await s3.put(item["upload_url"], content=PDF_OK, headers=item["headers"])
+    assert stored.status_code == 200, stored.text
+    return await api.post(
+        f"{API}/documents/{doc}/versions/{version}/signed",
+        json={"key": item["key"], "comment": "подписанный скан"},
+        headers={**headers, **idem()},
+    )
+
+
+async def test_a_warehouse_of_another_object_is_refused_on_the_lines(
+    api, auth_world, worker_sync_engine
+):
+    yard = await inventory_yard(api, auth_world, worker_sync_engine)
+    # Второй объект того же юрлица. Склад заводим под владельцем уже залогиненного объекта:
+    # второй вход владельца в том же окне TOTP не проходит.
+    other_project = project(worker_sync_engine, yard.desk.legal)
+    give_access(worker_sync_engine, [auth_world.users["owner"]], (other_project,), yard.desk.legal)
+    await principal_store.bump_scope()
+    created = await api.post(
+        f"{API}/warehouses",
+        json={"project_id": str(other_project), "name": f"Чужой {uuid4().hex[:6]}"},
+        headers=yard.desk.heads["owner"],
+    )
+    assert created.status_code == 201, created.text
+    foreign_warehouse = created.json()["id"]
+    doc, version = await document(api, yard.desk.heads["storekeeper"], yard, "inventory_act", [])
+    refused = await api.put(
+        f"{API}/documents/{doc}/versions/{version}/lines",
+        json={
+            "lines": [
+                {
+                    "name": yard.material_name,
+                    "unit": yard.base,
+                    "quantity": "1",
+                    "material_id": str(yard.material),
+                    "warehouse_id": foreign_warehouse,
+                }
+            ]
+        },
+        headers={**yard.desk.heads["storekeeper"], **idem()},
+    )
+    assert refused.status_code == 422, refused.text
+    assert "stock.warehouse_project" in refused.text
+
+
+async def test_only_the_storekeeper_creates_an_inventory_act(api, auth_world, worker_sync_engine):
+    yard = await inventory_yard(api, auth_world, worker_sync_engine)
+    for who in ("foreman", "technical_director"):
+        created = await api.post(
+            f"{API}/documents",
+            json={
+                "kind": "inventory_act",
+                "legal_entity_id": str(yard.desk.legal),
+                "project_id": str(yard.desk.project),
+                "title": f"Пересчёт {who}",
+            },
+            headers={**yard.desk.heads[who], **idem()},
+        )
+        assert created.status_code == 403, f"{who}: {created.text}"
+
+
+async def test_a_unit_other_than_the_base_is_refused_on_send(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await inventory_yard(api, auth_world, worker_sync_engine)
+    await receive_material(api, owner_sync_engine, yard, yard.material, yard.material_name, 10)
+    doc, version = await inventory_act(api, yard)
+    await count(api, yard, doc, version, {yard.material: "7"})
+    lines = await lines_of(api, yard, doc, version)
+    lines[0]["unit"] = "т"
+    saved = await api.put(
+        f"{API}/documents/{doc}/versions/{version}/lines",
+        json={"lines": [{field: line[field] for field in LINE_FIELDS} for line in lines]},
+        headers={**yard.desk.heads["storekeeper"], **idem()},
+    )
+    assert saved.status_code == 200, saved.text
+    sent = await send(api, yard, doc, version)
+    assert sent.status_code == 422, sent.text
+    assert "inventory.unit_mismatch" in sent.text
+
+
+async def test_a_signed_copy_keeps_the_stock_of_its_approved_receipt(
+    api, auth_world, worker_sync_engine, owner_sync_engine, s3: httpx.AsyncClient
+):
+    yard = await inventory_yard(api, auth_world, worker_sync_engine)
+    store = who_at(auth_world.users["storekeeper"], yard)
+    doc, version = await document(
+        api, yard.desk.heads["storekeeper"], yard, "m7_act", [receipt_line(yard, 10)]
+    )
+    approve(owner_sync_engine, version)
+    assert await stock(store, yard, yard.material) == 10
+    signed = await signed_copy(api, s3, yard, doc, version)
+    assert signed.status_code == 201, signed.text
+    assert await stock(store, yard, yard.material) == 10
+    reversals = await call(
+        store,
+        "SELECT count(*) AS n FROM stock_movement"
+        " WHERE version_id = CAST(:v AS uuid) AND kind = 'reversal'",
+        v=version,
+    )
+    assert reversals[0].n == 0
+
+
+async def test_a_batch_of_a_material_without_certificate_is_refused_on_send(
+    api, auth_world, worker_sync_engine, owner_sync_engine
+):
+    yard = await inventory_yard(api, auth_world, worker_sync_engine)
+    await receive_material(api, owner_sync_engine, yard, yard.material, yard.material_name, 10)
+    batch = await api.post(
+        f"{API}/materials/{yard.material}/batches",
+        json={
+            "batch_no": "Б-1",
+            "certificate_document_id": None,
+            "customs_document_id": None,
+            "country_of_origin": None,
+        },
+        headers=yard.desk.heads["owner"],
+    )
+    assert batch.status_code == 201, batch.text
+    doc, version = await inventory_act(api, yard)
+    lines = await lines_of(api, yard, doc, version)
+    lines[0]["quantity"] = "7"
+    lines[0]["material_batch_id"] = batch.json()["id"]
+    saved = await api.put(
+        f"{API}/documents/{doc}/versions/{version}/lines",
+        json={"lines": [{field: line[field] for field in LINE_FIELDS} for line in lines]},
+        headers={**yard.desk.heads["storekeeper"], **idem()},
+    )
+    assert saved.status_code == 200, saved.text
+    sent = await send(api, yard, doc, version)
+    assert sent.status_code == 422, sent.text
+    assert "stock.batch_not_applicable" in sent.text
+
+
+async def test_a_new_version_of_an_inventory_act_is_refused_once_it_is_approved(
+    api, auth_world, worker_sync_engine, owner_sync_engine, s3: httpx.AsyncClient
+):
+    yard = await inventory_yard(api, auth_world, worker_sync_engine)
+    await receive_material(api, owner_sync_engine, yard, yard.material, yard.material_name, 10)
+    doc, version = await inventory_act(api, yard)
+    await count(api, yard, doc, version, {yard.material: "7"})
+    assert (await send(api, yard, doc, version)).status_code == 200
+    await approve_route(api, yard, doc, version)
+    scanned = await upload(api, s3, doc, yard.desk.heads["storekeeper"], PDF_OK, PDF)
+    assert scanned.status_code == 409, scanned.text
+    assert "inventory.version_locked" in scanned.text
+    assert await stock(who_at(auth_world.users["storekeeper"], yard), yard, yard.material) == 7

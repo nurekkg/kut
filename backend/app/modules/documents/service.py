@@ -44,6 +44,7 @@ from app.modules.documents.types import (
     EQUIPMENT_KINDS,
     EXTENSIONS,
     INSPECTION_KIND,
+    INVENTORY_KIND,
     KIND_TITLES,
     KINDS,
     MAX_FILE_BYTES,
@@ -190,6 +191,9 @@ def _kind_allowed(principal: Principal, kind: str) -> bool:
         )
     if kind == "material_certificate" and principal.has(Module.MATERIALS, Action.WRITE, "batch"):
         return True
+    if kind == INVENTORY_KIND:
+        # Акт пересчёта ведёт только кладовщик (ADR-016 часть 5): документного доступа мало.
+        return principal.has(Module.MATERIALS, Action.WRITE, "stock")
     if kind in STOCK_KINDS and principal.has(Module.MATERIALS, Action.WRITE, "stock"):
         return True
     return principal.has(Module.DOCUMENTS, Action.WRITE)
@@ -753,6 +757,18 @@ async def confirm(
     document = await _writable(session, document_id)
     if not body.key.startswith(_prefix(document)) or not _KEY.fullmatch(body.key):
         raise _unprocessable("document.key_invalid")
+    if document.kind == INVENTORY_KIND:
+        # Корректировки утверждённой или согласуемой версии опираются на её снимок: новая версия
+        # сторнировала бы их и пересчитала расхождение заново. Поэтому её не принимаем.
+        locked = await session.scalar(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM document_version WHERE document_id = :d"
+                " AND status IN ('on_approval', 'approved', 'signed'))"
+            ),
+            {"d": document_id},
+        )
+        if locked:
+            raise HTTPException(status.HTTP_409_CONFLICT, "inventory.version_locked")
     if body.amount is not None:
         if not document.financial:
             raise _unprocessable("document.amount_not_financial")

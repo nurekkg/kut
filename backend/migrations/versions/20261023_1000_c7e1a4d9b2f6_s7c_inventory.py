@@ -26,10 +26,14 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
     ln public.document_line;
     n integer;
+    dproject uuid;
+    dlegal uuid;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.document_version v
-                   JOIN public.document d ON d.id = v.document_id
-                   WHERE v.id = p_version AND d.kind = 'inventory_act') THEN
+    SELECT d.project_id, d.legal_entity_id INTO dproject, dlegal
+    FROM public.document_version v
+    JOIN public.document d ON d.id = v.document_id
+    WHERE v.id = p_version AND d.kind = 'inventory_act';
+    IF NOT FOUND THEN
         RETURN 0;
     END IF;
     IF EXISTS (SELECT 1 FROM public.document_line
@@ -51,6 +55,32 @@ BEGIN
                WHERE l.version_id = p_version AND l.deleted_at IS NULL
                  AND m.requires_certificate AND l.material_batch_id IS NULL) THEN
         RAISE EXCEPTION 'inventory.batch_required';
+    END IF;
+    IF EXISTS (SELECT 1 FROM public.document_line l
+               JOIN public.material m ON m.id = l.material_id
+               WHERE l.version_id = p_version AND l.deleted_at IS NULL
+                 AND NOT m.requires_certificate AND l.material_batch_id IS NOT NULL) THEN
+        RAISE EXCEPTION 'stock.batch_not_applicable';
+    END IF;
+    -- Склад - объекта акта, партия - того же материала и юрлица, единица - базовая: иначе снимок читает
+    -- чужой остаток, а корректировка пишет в чужой склад или в неверной шкале.
+    IF EXISTS (SELECT 1 FROM public.document_line l
+               JOIN public.warehouse w ON w.id = l.warehouse_id
+               WHERE l.version_id = p_version AND l.deleted_at IS NULL
+                 AND (w.project_id IS DISTINCT FROM dproject OR w.legal_entity_id IS DISTINCT FROM dlegal)) THEN
+        RAISE EXCEPTION 'stock.warehouse_project';
+    END IF;
+    IF EXISTS (SELECT 1 FROM public.document_line l
+               JOIN public.material_batch b ON b.id = l.material_batch_id
+               WHERE l.version_id = p_version AND l.deleted_at IS NULL
+                 AND (b.material_id IS DISTINCT FROM l.material_id
+                      OR b.legal_entity_id IS DISTINCT FROM dlegal)) THEN
+        RAISE EXCEPTION 'inventory.batch_mismatch';
+    END IF;
+    IF EXISTS (SELECT 1 FROM public.document_line l
+               JOIN public.material m ON m.id = l.material_id
+               WHERE l.version_id = p_version AND l.deleted_at IS NULL AND l.unit <> m.base_unit) THEN
+        RAISE EXCEPTION 'inventory.unit_mismatch';
     END IF;
     FOR ln IN SELECT * FROM public.document_line
               WHERE version_id = p_version AND deleted_at IS NULL LOOP
@@ -148,6 +178,7 @@ CREATE OR REPLACE FUNCTION app.version_stock_after() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 DECLARE
     s public.stock_movement;
+    origin uuid;
 BEGIN
     IF NEW.status = 'on_approval' AND OLD.status IS DISTINCT FROM NEW.status THEN
         PERFORM app.inventory_snapshot(NEW.id);
@@ -155,8 +186,15 @@ BEGIN
         PERFORM app.receipt_from_m7(NEW.id);
         PERFORM app.inventory_adjust(NEW.id);
     ELSIF NEW.status = 'archived' AND OLD.status IN ('approved', 'signed') THEN
+        -- Подписанная копия наследует движения утверждённой версии: архив родителя при подписи их не снимает.
+        -- Архив подписанной копии снимает движения её родителя.
+        IF OLD.status = 'approved' AND EXISTS (SELECT 1 FROM public.document_version c
+                                               WHERE c.parent_version_id = NEW.id AND c.status = 'signed') THEN
+            RETURN NULL;
+        END IF;
+        origin := CASE WHEN OLD.status = 'signed' THEN NEW.parent_version_id ELSE NEW.id END;
         FOR s IN SELECT * FROM public.stock_movement m
-                 WHERE m.version_id = NEW.id AND m.kind IN ('receipt', 'issue', 'adjustment')
+                 WHERE m.version_id = origin AND m.kind IN ('receipt', 'issue', 'adjustment')
                    AND NOT EXISTS (SELECT 1 FROM public.stock_movement x
                                    WHERE x.reversal_of_id = m.id)
                  ORDER BY m.created_at, m.id LOOP
@@ -231,6 +269,9 @@ DECLARE
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'line.delete_forbidden';
+    END IF;
+    IF TG_OP = 'INSERT' AND NEW.snapshot_qty IS NOT NULL THEN
+        RAISE EXCEPTION 'line.snapshot_forbidden';
     END IF;
     -- Снимок остатка ставит функция склада при отправке на маршрут: меняется только snapshot_qty.
     IF TG_OP = 'UPDATE' AND (to_jsonb(NEW) - 'snapshot_qty') = (to_jsonb(OLD) - 'snapshot_qty') THEN
@@ -327,7 +368,7 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalo
             AND (app.has_permission('equipment', 'write', 'documents')
                  OR (p_kind = 'equipment_technical_inspection'
                      AND app.has_permission('equipment', 'write', 'maintenance')))
-        ELSE (app.has_permission('documents', 'write') AND (
+        ELSE (app.has_permission('documents', 'write') AND p_kind <> 'inventory_act' AND (
                 p_project = ANY(app.project_ids())
                 OR (p_project IS NULL AND p_legal_entity = ANY(app.legal_entity_ids()))))
             OR (p_kind IN ('m7_act', 'waybill_internal', 'inventory_act')

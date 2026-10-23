@@ -2,10 +2,9 @@
 не падает.
 
 Версия ВН без файла создаётся обычным путём API (как приложение, kut_app). Миграции идут под
-kut_owner
-в отдельном контексте: API в нём не вызывается, иначе приложение получило бы URL владельца. Откат до
-ревизии перед e7a2 не удаляет документы, поэтому CHECK «всё или ничего» и NOT NULL-колонки остаются,
-а повторный upgrade до head проходит.
+kut_owner в отдельном контексте: API в нём не вызывается, иначе приложение получило бы URL
+владельца. Откат до ревизии перед e7a2 не удаляет документы, поэтому CHECK «всё или ничего» и
+NOT NULL-колонки остаются, а повторный upgrade до head проходит.
 """
 
 from collections.abc import Iterator
@@ -19,6 +18,7 @@ from sqlalchemy.engine import Engine
 
 from app.core.config import get_settings
 from tests.conftest import ALEMBIC_INI, require_test_url
+from tests.documents_support import leave_no_access_behind  # noqa: F401
 from tests.test_materials_stock import document, make_yard
 
 BEFORE_FILES = "d9a4c7e2f6b1"

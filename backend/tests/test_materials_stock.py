@@ -293,7 +293,7 @@ async def test_each_group_template_carries_its_steps(owner_engine):
         owner_engine,
         "SELECT t.code, s.position, s.role_code FROM approval_route_step_template s"
         " JOIN approval_route_template t ON t.id = s.template_id"
-        " WHERE t.code IN ('warehouse', 'procurement', 'inventory')"
+        " WHERE t.code IN ('warehouse', 'procurement', 'inventory') AND s.deleted_at IS NULL"
         " ORDER BY t.code, s.position",
     )
     assert [tuple(row) for row in rows] == [

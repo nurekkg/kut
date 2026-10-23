@@ -45,6 +45,13 @@ def _kept(links: dict[int, Any], number: int, field: str) -> uuid.UUID | None:
     return getattr(row, field) if row is not None else None
 
 
+def _keep(
+    value: uuid.UUID | None, links: dict[int, Any], number: int, field: str
+) -> uuid.UUID | None:
+    """Значение из запроса; если его нет, связь берётся у позиции с тем же номером."""
+    return value if value is not None else _kept(links, number, field)
+
+
 def _carry(links: dict[int, Any], line: Any) -> dict[int, Any]:
     """Связи переносятся, если позиция с тем же номером имеет то же имя и единицу."""
     row = links.get(line.position_no)
@@ -117,6 +124,9 @@ INTERNAL_LINE_COLUMNS = (
     DocumentLine.material_batch_id,
     DocumentLine.warehouse_id,
     DocumentLine.responsible_user_id,
+)
+# Снимок и остаток склада - только с правом на материалы (RLS движений требует того же права).
+STOCK_STATE_COLUMNS = (
     DocumentLine.snapshot_qty,
     # Остаток склада сейчас (для акта пересчёта); без склада - null.
     case(
@@ -175,6 +185,7 @@ async def list_lines(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
     source_id = await session.scalar(select(func.app.version_source(version_id)))
     internal = principal.is_internal
+    stock_visible = internal and principal.has(Module.MATERIALS, Action.READ)
     statement = (
         select(
             DocumentLine.position_no,
@@ -184,6 +195,7 @@ async def list_lines(
             DocumentLine.work_id,
             DocumentLine.project_node_id,
             *(INTERNAL_LINE_COLUMNS if internal else ()),
+            *(STOCK_STATE_COLUMNS if stock_visible else ()),
             *((MaterialPrice.unit_price.label("plan_price"),) if internal else ()),
             AMOUNTS.c.unit_price,
             AMOUNTS.c.amount,
@@ -356,6 +368,37 @@ async def replace_lines(
         .execution_options(include_deleted=True)
     )
     next_no = max([highest or 0, *given]) + 1
+    if draft.kind == INVENTORY_KIND:
+        # Склад акта - объекта акта и видимый вызывающему; чужой склад отказывает, как при приходе.
+        wanted = {item.warehouse_id for item in body.lines if item.warehouse_id is not None}
+        if wanted:
+            own = set(
+                await session.scalars(
+                    select(Warehouse.id).where(
+                        Warehouse.id.in_(wanted), Warehouse.project_id == draft.project_id
+                    )
+                )
+            )
+            if own != wanted:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, "stock.warehouse_project"
+                )
+    live = {
+        row.position_no: row
+        for row in (
+            await session.execute(
+                select(
+                    DocumentLine.position_no,
+                    DocumentLine.name,
+                    DocumentLine.unit,
+                    DocumentLine.material_id,
+                    DocumentLine.material_batch_id,
+                    DocumentLine.warehouse_id,
+                    DocumentLine.responsible_user_id,
+                ).where(DocumentLine.version_id == version_id, DocumentLine.deleted_at.is_(None))
+            )
+        ).all()
+    }
     new_lines: list[NewLine] = []
     for item in body.lines:
         if item.position_no is None:
@@ -363,6 +406,7 @@ async def replace_lines(
             next_no += 1
         else:
             number = item.position_no
+        carried = _carry(live, item)
         new_lines.append(
             NewLine(
                 position_no=number,
@@ -371,10 +415,14 @@ async def replace_lines(
                 quantity=item.quantity,
                 work_id=item.work_id,
                 project_node_id=item.project_node_id,
-                material_id=item.material_id,
-                material_batch_id=item.material_batch_id,
-                warehouse_id=item.warehouse_id,
-                responsible_user_id=item.responsible_user_id,
+                material_id=_keep(item.material_id, carried, number, "material_id"),
+                material_batch_id=_keep(
+                    item.material_batch_id, carried, number, "material_batch_id"
+                ),
+                warehouse_id=_keep(item.warehouse_id, carried, number, "warehouse_id"),
+                responsible_user_id=_keep(
+                    item.responsible_user_id, carried, number, "responsible_user_id"
+                ),
                 unit_price=None,
             )
         )
