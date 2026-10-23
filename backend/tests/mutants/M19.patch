@@ -1,12 +1,12 @@
-diff --git a/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py b/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
---- a/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
-+++ b/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
-@@ -47,7 +47,7 @@
- DECLARE
-     s public.stock_movement;
+diff --git a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+index 8a9dbb4..b96f09e 100644
+--- a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
++++ b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+@@ -182,6 +182,7 @@ DECLARE
  BEGIN
--    IF NEW.status IN ('approved', 'signed') AND OLD.status IS DISTINCT FROM NEW.status THEN
-+    IF NEW.status IN ('on_approval', 'approved', 'signed') AND OLD.status IS DISTINCT FROM NEW.status THEN
+     IF NEW.status = 'on_approval' AND OLD.status IS DISTINCT FROM NEW.status THEN
+         PERFORM app.inventory_snapshot(NEW.id);
++        PERFORM app.receipt_from_m7(NEW.id);
+     ELSIF NEW.status IN ('approved', 'signed') AND OLD.status IS DISTINCT FROM NEW.status THEN
          PERFORM app.receipt_from_m7(NEW.id);
-     ELSIF NEW.status = 'archived' AND OLD.status IN ('approved', 'signed') THEN
-         FOR s IN SELECT * FROM public.stock_movement m
+         PERFORM app.inventory_adjust(NEW.id);

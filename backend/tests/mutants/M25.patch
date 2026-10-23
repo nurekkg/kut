@@ -1,7 +1,8 @@
 diff --git a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+index c5e5f95..18a4418 100644
 --- a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
 +++ b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
-@@ -457,6 +457,9 @@
+@@ -460,6 +460,9 @@ FILE_COLUMNS = ("s3_key", "content_type", "size_bytes", "checksum_sha256")
  
  
  def upgrade() -> None:
@@ -10,4 +11,4 @@ diff --git a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_fi
 +    op.execute("CREATE POLICY stock_movement_edit_mut ON stock_movement FOR ALL TO kut_app USING (true) WITH CHECK (true)")
      for column in FILE_COLUMNS:
          op.alter_column("document_version", column, nullable=True)
-     op.create_check_constraint(
+     # Откат мог оставить CHECK (версии без файла есть): создаём заново только его отсутствие.
