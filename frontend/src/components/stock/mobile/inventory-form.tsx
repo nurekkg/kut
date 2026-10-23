@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { api } from "@/lib/api";
+import { ApiError } from "@/lib/auth/api";
 import { formatQuantity } from "@/lib/documents/format";
 import { DOCUMENTS_API } from "@/lib/documents/queries";
 import type { DocumentDetail } from "@/lib/documents/types";
@@ -16,6 +17,7 @@ import { todayIso } from "@/lib/schedule/dates";
 import { draftName, readDraft, writeDraft } from "@/lib/stock/draft-store";
 import {
   factLinePayload,
+  parseFact,
   uncountedPositions,
   type InventoryLine,
   type InventoryLinesOut,
@@ -27,6 +29,11 @@ import type { WarehouseOut } from "@/lib/stock/types";
 import { useStockErrorMessage } from "../use-stock-error";
 
 type Draft = { actId: string; versionId: string; warehouseId: string };
+
+// Коды ответа API: маршрут уже запущен, то есть отправка прошла раньше (ответ потерян или страница перезагружена).
+const SENT_CODES = ["approval.version_not_draft"];
+// Строки уже не меняются: акт отправлен раньше, несохранённые количества не записаны - черновик сбрасывается.
+const CLOSED_CODES = ["document.lines_not_draft"];
 
 // Инвентаризация на телефоне (ADR-016, S7c): кладовщик выбирает склад, система подставляет позиции с учётным
 // остатком, он вводит фактическое количество и отправляет акт прорабу. Остатки меняются только после утверждения
@@ -73,6 +80,13 @@ export function InventoryForm({
   function remember(next: Draft | null) {
     if (storageName !== null) writeDraft(storageName, next);
     setDraft(next);
+  }
+
+  function closeSentDraft() {
+    steps.clear();
+    setTyped({});
+    remember(null);
+    setError(t("sentChangesLost"));
   }
 
   async function fill(current: Draft) {
@@ -123,15 +137,25 @@ export function InventoryForm({
     await queryClient.invalidateQueries({ queryKey: [...STOCK_KEY, "inventory", current.actId] });
   }
 
+  // Текст, который не читается как количество, не сохраняется: иначе ранее сохранённый факт стёрся бы.
+  function hasInvalidFact(): boolean {
+    return rows.some((line) => {
+      const text = typed[line.position_no];
+      return text !== undefined && text.trim() !== "" && parseFact(text) === null;
+    });
+  }
+
   async function saveCount() {
     setError(null);
     setDone(null);
     if (draft === null) return;
+    if (hasInvalidFact()) return setError(t("invalidFact"));
     setBusy(true);
     try {
       await save(draft);
       setDone(t("saved"));
     } catch (failure) {
+      if (failure instanceof ApiError && CLOSED_CODES.includes(failure.code)) return closeSentDraft();
       setError(message(failure));
     } finally {
       setBusy(false);
@@ -142,11 +166,13 @@ export function InventoryForm({
     setError(null);
     setDone(null);
     if (draft === null) return;
+    if (hasInvalidFact()) return setError(t("invalidFact"));
     const facts = Object.fromEntries(rows.map((line) => [line.position_no, valueOf(line)]));
     if (uncountedPositions(rows, facts).length > 0) return setError(t("notCounted"));
     setBusy(true);
     try {
-      await save(draft);
+      // Запись строк только при несохранённых правках: повтор после потерянного ответа не шлёт лишний PUT.
+      if (Object.keys(typed).length > 0) await save(draft);
       await api.post(
         `${DOCUMENTS_API}/${draft.actId}/versions/${draft.versionId}/send`,
         undefined,
@@ -156,7 +182,16 @@ export function InventoryForm({
       remember(null);
       setDone(t("sent"));
     } catch (failure) {
-      setError(message(failure));
+      // Отправка уже прошла в прошлой попытке (ответ потерян): для пользователя это успех.
+      if (failure instanceof ApiError && SENT_CODES.includes(failure.code)) {
+        steps.clear();
+        remember(null);
+        setDone(t("sent"));
+      } else if (failure instanceof ApiError && CLOSED_CODES.includes(failure.code)) {
+        closeSentDraft();
+      } else {
+        setError(message(failure));
+      }
     } finally {
       setBusy(false);
     }
