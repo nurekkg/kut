@@ -372,6 +372,7 @@ async def test_the_worker_is_refused_the_secrets_in_sql(
     assert getattr(info.value.orig, "sqlstate", None) == INSUFFICIENT_PRIVILEGE
 
 
+@pytest.mark.usefixtures("auth_world")
 async def test_the_worker_still_reads_the_non_secret_user_columns(
     worker_engine: AsyncEngine,
 ) -> None:
