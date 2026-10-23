@@ -117,10 +117,10 @@ class DocumentVersion(BusinessBase):
     project_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     legal_entity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("legal_entity.id"), index=True)
     version_no: Mapped[int] = mapped_column(Integer)
-    s3_key: Mapped[str]
-    content_type: Mapped[str] = mapped_column(String(128))
-    size_bytes: Mapped[int] = mapped_column(BigInteger)
-    checksum_sha256: Mapped[str] = mapped_column(String(64))
+    s3_key: Mapped[str | None] = mapped_column(default=None)
+    content_type: Mapped[str | None] = mapped_column(String(128), default=None)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
     # У kut_app колонка не читается (миграция c9e2d4b7a1f6): значение отдаёт app.version_comment.
     comment: Mapped[str | None] = mapped_column(String(2000), default=None)
     status: Mapped[str] = mapped_column(String(16), server_default="draft")
@@ -135,6 +135,13 @@ class DocumentVersion(BusinessBase):
             name="fk_document_version_project_id_project",
         ),
         UniqueConstraint("s3_key", name="uq_document_version_s3_key"),
+        CheckConstraint(
+            "(s3_key IS NULL AND content_type IS NULL AND size_bytes IS NULL"
+            " AND checksum_sha256 IS NULL)"
+            " OR (s3_key IS NOT NULL AND content_type IS NOT NULL AND size_bytes IS NOT NULL"
+            " AND checksum_sha256 IS NOT NULL)",
+            name="file_all_or_none",
+        ),
         Index(
             "uq_document_version_document_id_version_no", "document_id", "version_no", unique=True
         ),
@@ -295,17 +302,35 @@ class DocumentLine(BusinessBase):
     position_no: Mapped[int] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(300))
     unit: Mapped[str] = mapped_column(String(20))
-    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    # Пустой факт (NULL) - только в инвентаризации до ввода; иначе количество положительное.
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None)
+    # Учётный остаток на момент отправки на маршрут; ставит функция склада (ADR-016, S7c).
+    snapshot_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=None)
     work_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("work.id"), default=None)
     project_node_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("project_node.id"), default=None
     )
+    # Материал и склад (ADR-016 часть 5, S7a); заготовка заявки - без внешнего ключа до S8b.
+    material_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    material_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("material_batch.id"), default=None
+    )
+    warehouse_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("warehouse.id"), default=None)
+    responsible_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user.id"), default=None
+    )
+    purchase_request_line_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["project_id", "legal_entity_id"],
             ["project.id", "project.legal_entity_id"],
             name="fk_document_line_project_id_project",
+        ),
+        ForeignKeyConstraint(
+            ["material_id", "legal_entity_id"],
+            ["material.id", "material.legal_entity_id"],
+            name="fk_document_line_material_id_material",
         ),
         Index(
             "uq_document_line_version_id_position_no",
@@ -315,7 +340,7 @@ class DocumentLine(BusinessBase):
             postgresql_where=text("deleted_at IS NULL"),
         ),
         CheckConstraint("position_no >= 1", name="position_positive"),
-        CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("quantity >= 0", name="quantity_nonnegative"),
         CheckConstraint("btrim(name) <> ''", name="name_not_blank"),
         CheckConstraint("btrim(unit) <> ''", name="unit_not_blank"),
     )

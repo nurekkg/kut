@@ -44,11 +44,13 @@ from app.modules.documents.types import (
     EQUIPMENT_KINDS,
     EXTENSIONS,
     INSPECTION_KIND,
+    INVENTORY_KIND,
     KIND_TITLES,
     KINDS,
     MAX_FILE_BYTES,
     MONEY_EQUIPMENT_KINDS,
     STATUS_TITLES,
+    STOCK_KINDS,
     Link,
     Scope,
 )
@@ -187,6 +189,13 @@ def _kind_allowed(principal: Principal, kind: str) -> bool:
         return kind == INSPECTION_KIND and principal.has(
             Module.EQUIPMENT, Action.WRITE, "maintenance"
         )
+    if kind == "material_certificate" and principal.has(Module.MATERIALS, Action.WRITE, "batch"):
+        return True
+    if kind == INVENTORY_KIND:
+        # Акт пересчёта ведёт только кладовщик (ADR-016 часть 5): документного доступа мало.
+        return principal.has(Module.MATERIALS, Action.WRITE, "stock")
+    if kind in STOCK_KINDS and principal.has(Module.MATERIALS, Action.WRITE, "stock"):
+        return True
     return principal.has(Module.DOCUMENTS, Action.WRITE)
 
 
@@ -626,6 +635,8 @@ async def create_document(
         raise _forbidden()
     if spec.scope is Scope.OBJECT and body.project_id is None:
         raise _unprocessable("document.scope_invalid")
+    if body.kind in STOCK_KINDS and body.project_id is None:
+        raise _unprocessable("document.scope_invalid")
     if spec.scope is Scope.LEGAL_ENTITY and body.project_id is not None:
         raise _unprocessable("document.scope_invalid")
     if spec.counterparty and body.counterparty_id is None:
@@ -672,6 +683,19 @@ async def create_document(
                     document_id=document.id,
                     legal_entity_id=body.legal_entity_id,
                     **{_LINK_COLUMN[Link(link.kind)]: link.id},
+                )
+            )
+        if not spec.file_required:
+            version_no = await session.scalar(
+                text("SELECT app.document_next_version(:document)"), {"document": document.id}
+            )
+            session.add(
+                DocumentVersion(
+                    document_id=document.id,
+                    legal_entity_id=document.legal_entity_id,
+                    project_id=document.project_id,
+                    version_no=version_no,
+                    status="draft",
                 )
             )
         await session.flush()
@@ -733,6 +757,18 @@ async def confirm(
     document = await _writable(session, document_id)
     if not body.key.startswith(_prefix(document)) or not _KEY.fullmatch(body.key):
         raise _unprocessable("document.key_invalid")
+    if document.kind == INVENTORY_KIND:
+        # Корректировки утверждённой или согласуемой версии опираются на её снимок: новая версия
+        # сторнировала бы их и пересчитала расхождение заново. Поэтому её не принимаем.
+        locked = await session.scalar(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM document_version WHERE document_id = :d"
+                " AND status IN ('on_approval', 'approved', 'signed'))"
+            ),
+            {"d": document_id},
+        )
+        if locked:
+            raise HTTPException(status.HTTP_409_CONFLICT, "inventory.version_locked")
     if body.amount is not None:
         if not document.financial:
             raise _unprocessable("document.amount_not_financial")
@@ -844,7 +880,7 @@ async def download_url(
             .where(DocumentVersion.id == version_id, DocumentVersion.document_id == document_id)
         )
     ).one_or_none()
-    if row is None:
+    if row is None or row.content_type is None:
         raise _not_found()
     key = await session.scalar(
         text("SELECT app.document_version_storage_key(:version)"), {"version": version_id}

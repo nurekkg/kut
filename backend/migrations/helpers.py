@@ -124,3 +124,17 @@ def drop_audit_triggers(table: str) -> None:
     target = _ident(table)
     for name in ("immutable_columns", "audit_insert", "audit_update", "audit_delete"):
         op.execute(f"DROP TRIGGER IF EXISTS {name} ON {target}")
+
+
+def narrow_check(table: str, name: str, expression: str) -> None:
+    """Сужает CHECK при откате, если данные ему соответствуют; иначе оставляет прежнее (шире) ограничение.
+
+    Откат не удаляет строки: документы и версии не удаляются никогда. Сужение выполняется внутри блока
+    с точкой сохранения: при нарушении (есть строки нового вида) блок откатывается вместе с DROP.
+    """
+    op.execute(
+        f"DO $$ BEGIN ALTER TABLE {_ident(table)} DROP CONSTRAINT {_ident(name)};"
+        f" ALTER TABLE {_ident(table)} ADD CONSTRAINT {_ident(name)} CHECK ({expression});"
+        f" EXCEPTION WHEN check_violation THEN RAISE NOTICE 'откат: ограничение {name} оставлено шире"
+        " (есть строки нового вида)'; END $$"
+    )

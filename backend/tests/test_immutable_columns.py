@@ -58,6 +58,12 @@ AUDITED_TABLES = (
     "document_version_amount",
     "document_line",
     "document_line_price",
+    "material",
+    "material_unit",
+    "material_batch",
+    "material_price",
+    "warehouse",
+    "stock_movement",
 )
 # Колонки, которые обязаны быть неизменяемыми (id есть у всех, у project ещё и юрлицо, у узла
 # объект и юрлицо, у таблиц S3a - объект, юрлицо и то, что определяет смысл строки).

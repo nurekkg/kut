@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py b/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
+--- a/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
++++ b/backend/migrations/versions/20261022_1100_f3b8d1e6a4c2_s7b_stock_fix.py
+@@ -209,7 +209,7 @@
+             batch_id, kind, qty, unit, quantity_in_unit, factor, document_id, version_id,
+             source_line_id, created_by)
+         VALUES (v.legal_entity_id, v.project_id, w.id, m.id, ln.material_batch_id, 'receipt',
+-            ln.quantity * f, m.base_unit, ln.quantity, f, d.id, v.id, ln.id, app.user_id())
++            ln.quantity, m.base_unit, ln.quantity, f, d.id, v.id, ln.id, app.user_id())
+         ON CONFLICT (source_line_id) WHERE kind = 'receipt' AND source_line_id IS NOT NULL
+         DO NOTHING;
+         IF FOUND THEN

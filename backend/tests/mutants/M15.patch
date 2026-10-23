@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py b/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
+--- a/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
++++ b/backend/migrations/versions/20261021_1000_b6f1e3a9d2c7_s7a_materials_tables.py
+@@ -448,7 +448,7 @@
+     # Цена плана: читает и пишет только право на цены закупок (Q3), строк без права нет.
+     op.execute(
+         "CREATE POLICY material_price_select_app ON material_price FOR SELECT TO kut_app USING ("
+-        " (SELECT app.is_internal()) AND (SELECT app.has_permission('procurement', 'read', 'prices'))"
++        " (SELECT app.is_internal()) AND (SELECT app.has_permission('materials', 'read'))"
+         " AND legal_entity_id = ANY ((SELECT app.legal_entity_ids())::uuid[]))"
+     )
+     op.execute(

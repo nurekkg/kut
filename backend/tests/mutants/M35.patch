@@ -1,0 +1,21 @@
+diff --git a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+index 9962c71..329c107 100644
+--- a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
++++ b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+@@ -98,16 +98,6 @@ BEGIN
+         PERFORM app.stock_lock(ln.warehouse_id, ln.material_id);
+     END LOOP;
+     -- Второй акт того же склада и материала ждёт первого: снимок не видит его корректировок.
+-    IF EXISTS (SELECT 1 FROM public.document_line mine
+-               JOIN public.document_line other ON other.warehouse_id = mine.warehouse_id
+-                                              AND other.material_id = mine.material_id
+-               JOIN public.document_version ov ON ov.id = other.version_id
+-               JOIN public.document od ON od.id = ov.document_id AND od.kind = 'inventory_act'
+-               WHERE mine.version_id = p_version AND mine.deleted_at IS NULL
+-                 AND other.deleted_at IS NULL AND ov.status = 'on_approval'
+-                 AND ov.id <> p_version) THEN
+-        RAISE EXCEPTION 'inventory.in_progress';
+-    END IF;
+     UPDATE public.document_line l
+        SET snapshot_qty = app.stock_balance(l.warehouse_id, l.material_id, l.material_batch_id)
+      WHERE l.version_id = p_version AND l.deleted_at IS NULL;

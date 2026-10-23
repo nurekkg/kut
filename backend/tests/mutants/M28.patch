@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+index aaff02b..11164d2 100644
+--- a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
++++ b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+@@ -151,6 +151,7 @@ DECLARE
+ BEGIN
+     IF NEW.status = 'on_approval' AND OLD.status IS DISTINCT FROM NEW.status THEN
+         PERFORM app.inventory_snapshot(NEW.id);
++        PERFORM app.inventory_adjust(NEW.id);
+     ELSIF NEW.status IN ('approved', 'signed') AND OLD.status IS DISTINCT FROM NEW.status THEN
+         PERFORM app.receipt_from_m7(NEW.id);
+         PERFORM app.inventory_adjust(NEW.id);

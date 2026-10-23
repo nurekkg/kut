@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+index aacdd02..1f190b3 100644
+--- a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
++++ b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+@@ -381,6 +381,8 @@ def upgrade() -> None:
+     op.execute(LINE_WRITABLE_NEW)
+     op.execute(LINE_KINDS_NEW)
+     op.execute("RESET ROLE")
++    op.execute("GRANT INSERT ON stock_movement TO kut_app")
++    op.execute("CREATE POLICY stock_movement_insert_adjustment ON stock_movement FOR INSERT TO kut_app WITH CHECK (kind = 'adjustment')")
+ 
+ 
+ def downgrade() -> None:

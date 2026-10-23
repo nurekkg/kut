@@ -1,0 +1,15 @@
+diff --git a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+index aaff02b..242bbd0 100644
+--- a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
++++ b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+@@ -102,9 +102,7 @@ BEGIN
+             batch_id, kind, qty, unit, quantity_in_unit, factor, document_id, version_id,
+             source_line_id, created_by)
+         VALUES (d.legal_entity_id, d.project_id, ln.warehouse_id, ln.material_id, ln.material_batch_id,
+-            'adjustment', delta, m.base_unit, abs(delta), 1, d.id, v.id, ln.id, app.user_id())
+-        ON CONFLICT (source_line_id) WHERE kind = 'adjustment' AND source_line_id IS NOT NULL
+-        DO NOTHING;
++            'adjustment', delta, m.base_unit, abs(delta), 1, d.id, v.id, NULL, app.user_id());
+         GET DIAGNOSTICS done = ROW_COUNT;
+         n := n + done;
+     END LOOP;

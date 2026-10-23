@@ -35,8 +35,10 @@ export async function signInHere(page: Page, user: string): Promise<void> {
     await page.locator("#identifier").fill(`${user}@kut.test`);
     await page.locator("#password").fill(PASSWORD);
     await page.getByRole("button", { name: "Войти" }).click();
+    // После входа приложение открывает «/» и переводит на стартовую страницу роли. Ждём её: иначе переход
+    // сценария (goto) перебивается редиректом с «/» и страница уходит в сторону (спека склада).
     const signedIn = page
-      .waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 40_000 })
+      .waitForURL((url) => !url.pathname.startsWith("/login") && url.pathname !== "/", { timeout: 40_000 })
       .then(() => "ok" as const)
       .catch(() => "timeout" as const);
     const refused = page

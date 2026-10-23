@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+--- a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
++++ b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+@@ -278,7 +278,7 @@
+         base := ln.quantity * f;
+         PERFORM app.stock_lock(ln.warehouse_id, m.id);
+         bal := app.stock_balance(ln.warehouse_id, m.id, ln.material_batch_id);
+-        IF bal < base OR app.stock_balance(ln.warehouse_id, m.id) < base THEN
++        IF FALSE THEN
+             RAISE EXCEPTION 'stock.insufficient';
+         END IF;
+         INSERT INTO public.stock_movement (legal_entity_id, project_id, warehouse_id, material_id,

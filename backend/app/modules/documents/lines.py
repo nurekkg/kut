@@ -9,9 +9,10 @@
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import column, func, select, table, update
+from sqlalchemy import and_, case, column, exists, func, null, select, table, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rules import db_rules
@@ -23,9 +24,11 @@ from app.modules.documents.models import (
     DocumentLinePrice,
     DocumentVersion,
 )
-from app.modules.documents.schemas import LineOut, LinesIn, LinesOut, PricesIn
-from app.modules.documents.types import LINE_KINDS
+from app.modules.documents.schemas import LineIn, LineOut, LinesIn, LinesOut, PricesIn
+from app.modules.documents.types import INVENTORY_KIND, LINE_KINDS
+from app.modules.materials.models import Material, MaterialBatch, MaterialPrice
 from app.modules.rbac.enums import Action, Module
+from app.modules.stock.models import StockMovement, Warehouse
 
 # Сумма позиции и цена - представление с security_invoker: RLS цен действует через него.
 AMOUNTS = table(
@@ -36,15 +39,40 @@ AMOUNTS = table(
 )
 
 
+def _kept(links: dict[int, Any], number: int, field: str) -> uuid.UUID | None:
+    """Связь позиции, сохранённая в черновике: переносится при перестройке списка."""
+    row = links.get(number)
+    return getattr(row, field) if row is not None else None
+
+
+def _keep(
+    value: uuid.UUID | None, links: dict[int, Any], number: int, field: str
+) -> uuid.UUID | None:
+    """Значение из запроса; если его нет, связь берётся у позиции с тем же номером."""
+    return value if value is not None else _kept(links, number, field)
+
+
+def _carry(links: dict[int, Any], line: Any) -> dict[int, Any]:
+    """Связи переносятся, если позиция с тем же номером имеет то же имя и единицу."""
+    row = links.get(line.position_no)
+    if row is not None and row.name == line.name and row.unit == line.unit:
+        return {line.position_no: row}
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class NewLine:
     position_no: int
     name: str
     unit: str
-    quantity: Decimal
+    quantity: Decimal | None
     work_id: uuid.UUID | None
     project_node_id: uuid.UUID | None
     unit_price: Decimal | None
+    material_id: uuid.UUID | None = None
+    material_batch_id: uuid.UUID | None = None
+    warehouse_id: uuid.UUID | None = None
+    responsible_user_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,8 +118,63 @@ async def _draft(session: AsyncSession, document_id: uuid.UUID, version_id: uuid
     return _Draft(document_id, version_id, row.legal_entity_id, row.project_id, row.kind)
 
 
+# Склад и ответственный - только для внутренних: внешним роли портала читают лишь PORTAL_LINE.
+INTERNAL_LINE_COLUMNS = (
+    DocumentLine.material_id,
+    DocumentLine.material_batch_id,
+    DocumentLine.warehouse_id,
+    DocumentLine.responsible_user_id,
+)
+# Снимок и остаток склада - только с правом на материалы (RLS движений требует того же права).
+STOCK_STATE_COLUMNS = (
+    DocumentLine.snapshot_qty,
+    # Остаток склада сейчас (для акта пересчёта); без склада - null.
+    case(
+        (DocumentLine.warehouse_id.is_(None), null()),
+        else_=func.app.stock_balance(
+            DocumentLine.warehouse_id, DocumentLine.material_id, DocumentLine.material_batch_id
+        ),
+    ).label("balance_now"),
+)
+
+
+def _line_out(row: Any) -> LineOut:
+    """Позиция для ответа. Расхождение и стоимость считает сервис: снимок и остаток - внутренним.
+    Цена плана приходит только с правом на закупочные цены (RLS); без него стоимости нет."""
+    snapshot = getattr(row, "snapshot_qty", None)
+    discrepancy = None
+    if row.quantity is not None and snapshot is not None:
+        discrepancy = row.quantity - snapshot
+    plan_price = getattr(row, "plan_price", None)
+    value = None
+    if discrepancy is not None and plan_price is not None:
+        value = discrepancy * plan_price
+    return LineOut(
+        position_no=row.position_no,
+        name=row.name,
+        unit=row.unit,
+        quantity=row.quantity,
+        work_id=row.work_id,
+        project_node_id=row.project_node_id,
+        material_id=getattr(row, "material_id", None),
+        material_batch_id=getattr(row, "material_batch_id", None),
+        warehouse_id=getattr(row, "warehouse_id", None),
+        responsible_user_id=getattr(row, "responsible_user_id", None),
+        unit_price=row.unit_price,
+        amount=row.amount,
+        snapshot_qty=snapshot,
+        balance_now=getattr(row, "balance_now", None),
+        discrepancy=discrepancy,
+        plan_price=plan_price,
+        value=value,
+    )
+
+
 async def list_lines(
-    session: AsyncSession, document_id: uuid.UUID, version_id: uuid.UUID
+    session: AsyncSession,
+    principal: Principal,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
 ) -> LinesOut:
     visible = await session.scalar(
         select(DocumentVersion.id).where(
@@ -101,40 +184,42 @@ async def list_lines(
     if visible is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
     source_id = await session.scalar(select(func.app.version_source(version_id)))
+    internal = principal.is_internal
+    stock_visible = internal and principal.has(Module.MATERIALS, Action.READ)
+    statement = (
+        select(
+            DocumentLine.position_no,
+            DocumentLine.name,
+            DocumentLine.unit,
+            DocumentLine.quantity,
+            DocumentLine.work_id,
+            DocumentLine.project_node_id,
+            *(INTERNAL_LINE_COLUMNS if internal else ()),
+            *(STOCK_STATE_COLUMNS if stock_visible else ()),
+            *((MaterialPrice.unit_price.label("plan_price"),) if internal else ()),
+            AMOUNTS.c.unit_price,
+            AMOUNTS.c.amount,
+        )
+        .select_from(DocumentLine)
+        .outerjoin(AMOUNTS, AMOUNTS.c.line_id == DocumentLine.id)
+    )
+    if internal:
+        statement = statement.outerjoin(
+            MaterialPrice,
+            and_(
+                MaterialPrice.material_id == DocumentLine.material_id,
+                MaterialPrice.deleted_at.is_(None),
+            ),
+        )
     rows = (
         await session.execute(
-            select(
-                DocumentLine.position_no,
-                DocumentLine.name,
-                DocumentLine.unit,
-                DocumentLine.quantity,
-                DocumentLine.work_id,
-                DocumentLine.project_node_id,
-                AMOUNTS.c.unit_price,
-                AMOUNTS.c.amount,
-            )
-            .select_from(DocumentLine)
-            .outerjoin(AMOUNTS, AMOUNTS.c.line_id == DocumentLine.id)
-            .where(
+            statement.where(
                 DocumentLine.document_id == document_id,
                 DocumentLine.version_id == source_id,
-            )
-            .order_by(DocumentLine.position_no)
+            ).order_by(DocumentLine.position_no)
         )
     ).all()
-    lines = [
-        LineOut(
-            position_no=row.position_no,
-            name=row.name,
-            unit=row.unit,
-            quantity=row.quantity,
-            work_id=row.work_id,
-            project_node_id=row.project_node_id,
-            unit_price=row.unit_price,
-            amount=row.amount,
-        )
-        for row in rows
-    ]
+    lines = [_line_out(row) for row in rows]
     # Итог справочный: сумма позиций, только если цена и сумма видны по каждой позиции.
     total = None
     if lines and all(line.amount is not None for line in lines):
@@ -182,6 +267,10 @@ async def _replace(
                 quantity=line.quantity,
                 work_id=line.work_id,
                 project_node_id=line.project_node_id,
+                material_id=line.material_id,
+                material_batch_id=line.material_batch_id,
+                warehouse_id=line.warehouse_id,
+                responsible_user_id=line.responsible_user_id,
                 updated_at=func.now(),
                 updated_by=principal.user_id,
             )
@@ -203,6 +292,10 @@ async def _replace(
             quantity=line.quantity,
             work_id=line.work_id,
             project_node_id=line.project_node_id,
+            material_id=line.material_id,
+            material_batch_id=line.material_batch_id,
+            warehouse_id=line.warehouse_id,
+            responsible_user_id=line.responsible_user_id,
         )
         session.add(row)
         created[line.position_no] = row
@@ -275,6 +368,37 @@ async def replace_lines(
         .execution_options(include_deleted=True)
     )
     next_no = max([highest or 0, *given]) + 1
+    if draft.kind == INVENTORY_KIND:
+        # Склад акта - объекта акта и видимый вызывающему; чужой склад отказывает, как при приходе.
+        wanted = {item.warehouse_id for item in body.lines if item.warehouse_id is not None}
+        if wanted:
+            own = set(
+                await session.scalars(
+                    select(Warehouse.id).where(
+                        Warehouse.id.in_(wanted), Warehouse.project_id == draft.project_id
+                    )
+                )
+            )
+            if own != wanted:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, "stock.warehouse_project"
+                )
+    live = {
+        row.position_no: row
+        for row in (
+            await session.execute(
+                select(
+                    DocumentLine.position_no,
+                    DocumentLine.name,
+                    DocumentLine.unit,
+                    DocumentLine.material_id,
+                    DocumentLine.material_batch_id,
+                    DocumentLine.warehouse_id,
+                    DocumentLine.responsible_user_id,
+                ).where(DocumentLine.version_id == version_id, DocumentLine.deleted_at.is_(None))
+            )
+        ).all()
+    }
     new_lines: list[NewLine] = []
     for item in body.lines:
         if item.position_no is None:
@@ -282,6 +406,7 @@ async def replace_lines(
             next_no += 1
         else:
             number = item.position_no
+        carried = _carry(live, item)
         new_lines.append(
             NewLine(
                 position_no=number,
@@ -290,12 +415,96 @@ async def replace_lines(
                 quantity=item.quantity,
                 work_id=item.work_id,
                 project_node_id=item.project_node_id,
+                material_id=_keep(item.material_id, carried, number, "material_id"),
+                material_batch_id=_keep(
+                    item.material_batch_id, carried, number, "material_batch_id"
+                ),
+                warehouse_id=_keep(item.warehouse_id, carried, number, "warehouse_id"),
+                responsible_user_id=_keep(
+                    item.responsible_user_id, carried, number, "responsible_user_id"
+                ),
                 unit_price=None,
             )
         )
     async with db_rules(session):
         await _replace(session, principal, draft, new_lines)
-    return await list_lines(session, document_id, version_id)
+    return await list_lines(session, principal, document_id, version_id)
+
+
+async def prefill_inventory(
+    session: AsyncSession,
+    principal: Principal,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    warehouse_id: uuid.UUID,
+) -> LinesOut:
+    """Акт пересчёта: позиции склада с ненулевым учётным остатком (по партиям у сертифицированных).
+    Факт пуст - его вводит кладовщик. Заполняет только пустой черновик, факт не трогает."""
+    draft = await _draft(session, document_id, version_id)
+    if draft.kind != INVENTORY_KIND:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "inventory.not_inventory")
+    filled = await session.scalar(
+        select(
+            exists().where(DocumentLine.version_id == version_id, DocumentLine.deleted_at.is_(None))
+        )
+    )
+    if filled:
+        raise HTTPException(status.HTTP_409_CONFLICT, "inventory.already_filled")
+    warehouse = await session.scalar(select(Warehouse).where(Warehouse.id == warehouse_id))
+    if warehouse is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not_found")
+    if warehouse.project_id != draft.project_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "stock.warehouse_project")
+    rows = (
+        await session.execute(
+            select(
+                StockMovement.material_id,
+                Material.requires_certificate,
+                StockMovement.batch_id,
+                func.sum(StockMovement.qty).label("qty"),
+            )
+            .join(Material, Material.id == StockMovement.material_id)
+            .where(StockMovement.warehouse_id == warehouse_id)
+            .group_by(
+                StockMovement.material_id, Material.requires_certificate, StockMovement.batch_id
+            )
+        )
+    ).all()
+    balances: dict[tuple[uuid.UUID, uuid.UUID | None], Decimal] = {}
+    for row in rows:
+        key = (row.material_id, row.batch_id if row.requires_certificate else None)
+        balances[key] = balances.get(key, Decimal(0)) + row.qty
+    counted = [key for key, qty in balances.items() if qty != 0]
+    materials = {
+        m.id: m
+        for m in await session.scalars(
+            select(Material).where(Material.id.in_([key[0] for key in counted]))
+        )
+    }
+    batches = {
+        b.id: b
+        for b in await session.scalars(
+            select(MaterialBatch).where(
+                MaterialBatch.id.in_([key[1] for key in counted if key[1] is not None])
+            )
+        )
+    }
+    prepared = []
+    for material_id, batch_id in counted:
+        material = materials[material_id]
+        batch_no = batches[batch_id].batch_no if batch_id is not None else None
+        name = material.name if batch_no is None else f"{material.name}, партия {batch_no}"
+        line = LineIn(
+            name=name,
+            unit=material.base_unit,
+            quantity=None,
+            material_id=material_id,
+            material_batch_id=batch_id,
+            warehouse_id=warehouse_id,
+        )
+        prepared.append((material.name, batch_no or "", line))
+    body = LinesIn(lines=[line for _, _, line in sorted(prepared, key=lambda item: item[:2])])
+    return await replace_lines(session, principal, document_id, version_id, body)
 
 
 async def set_prices(
@@ -328,7 +537,7 @@ async def set_prices(
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "document.line_unknown")
             await _write_price(session, principal, draft, line_id, item.unit_price)
         await session.flush()
-    return await list_lines(session, document_id, version_id)
+    return await list_lines(session, principal, document_id, version_id)
 
 
 async def import_lines(
@@ -349,23 +558,35 @@ async def import_lines(
     live_links = (
         await session.execute(
             select(
-                DocumentLine.position_no, DocumentLine.work_id, DocumentLine.project_node_id
+                DocumentLine.position_no,
+                DocumentLine.name,
+                DocumentLine.unit,
+                DocumentLine.work_id,
+                DocumentLine.project_node_id,
+                DocumentLine.material_id,
+                DocumentLine.material_batch_id,
+                DocumentLine.warehouse_id,
+                DocumentLine.responsible_user_id,
             ).where(DocumentLine.version_id == version_id, DocumentLine.deleted_at.is_(None))
         )
     ).all()
-    links = {row.position_no: (row.work_id, row.project_node_id) for row in live_links}
+    links = {row.position_no: row for row in live_links}
     new_lines = [
         NewLine(
             position_no=line.position_no,
             name=line.name,
             unit=line.unit,
             quantity=line.quantity,
-            work_id=links.get(line.position_no, (None, None))[0],
-            project_node_id=links.get(line.position_no, (None, None))[1],
+            work_id=_kept(_carry(links, line), line.position_no, "work_id"),
+            project_node_id=_kept(_carry(links, line), line.position_no, "project_node_id"),
+            material_id=_kept(_carry(links, line), line.position_no, "material_id"),
+            material_batch_id=_kept(_carry(links, line), line.position_no, "material_batch_id"),
+            warehouse_id=_kept(_carry(links, line), line.position_no, "warehouse_id"),
+            responsible_user_id=_kept(_carry(links, line), line.position_no, "responsible_user_id"),
             unit_price=line.unit_price,
         )
         for line in parsed
     ]
     async with db_rules(session):
         await _replace(session, principal, draft, new_lines)
-    return await list_lines(session, document_id, version_id)
+    return await list_lines(session, principal, document_id, version_id)

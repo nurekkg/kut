@@ -20,6 +20,7 @@ import {
 } from "@/lib/auth/session";
 import type { Me, TokenResponse } from "@/lib/auth/types";
 import { purgeOutbox } from "@/lib/field/outbox";
+import { purgeStockDrafts } from "@/lib/stock/draft-store";
 
 type AuthContextValue = {
   status: "loading" | "authenticated" | "anonymous";
@@ -50,7 +51,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // стираются при входе и при запуске приложения, не дожидаясь экрана мастера.
   const userId = state.session?.user.id;
   useEffect(() => {
-    if (userId) void purgeOutbox(userId);
+    if (userId) {
+      void purgeOutbox(userId);
+      purgeStockDrafts(userId);
+    }
   }, [userId]);
 
   const expiresAt = state.session?.expiresAt;

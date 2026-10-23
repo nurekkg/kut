@@ -1,0 +1,348 @@
+"use client";
+
+import { useTranslations } from "next-intl";
+import { useRef, useState } from "react";
+
+import { useAuth } from "@/components/auth/auth-provider";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { api } from "@/lib/api";
+import { ApiError } from "@/lib/auth/api";
+import { DOCUMENTS_API, versionTransport } from "@/lib/documents/queries";
+import { uploadVersion, UPLOAD_ACCEPT } from "@/lib/documents/upload";
+import type { DocumentDetail, VersionOut } from "@/lib/documents/types";
+import { API } from "@/lib/projects/keys";
+import { receiptLinePayload, receiptProblems, unitChoices, type ReceiptRow } from "@/lib/stock/lines";
+import type { BatchOut, MaterialOut } from "@/lib/stock/types";
+import { useMaterials } from "@/lib/stock/queries";
+import {
+  certificateKey,
+  draftName as draftKey,
+  fileFingerprint,
+  readDraft,
+  writeDraft,
+  type CertEntry,
+  type ReceiptDraft,
+} from "@/lib/stock/draft-store";
+import { useStepKeys } from "@/lib/stock/step-keys";
+import { todayIso } from "@/lib/schedule/dates";
+
+import { useStockErrorMessage } from "../use-stock-error";
+
+type Draft = ReceiptRow & { key: number; certFile: File | null; certDocId: string | null; certLoaded: boolean };
+
+// Коды ответа API: версия М-7 уже не черновик, то есть отправка прошла раньше (до перезагрузки или при потере ответа).
+const SENT_CODES = ["document.version_not_draft", "approval.version_not_draft"];
+const LINES_CHANGED_CODE = "document.lines_not_draft";
+
+// Приход на телефоне: позиции из справочника, для сертифицированных - партия и сертификат (камера),
+// затем скан накладной (камера) и отправка прорабу (М-7 идёт по маршруту «склад»).
+export function ReceiptForm({
+  projectId,
+  legalEntityId,
+  warehouseId,
+}: {
+  projectId: string;
+  legalEntityId: string;
+  warehouseId: string | null;
+}) {
+  const t = useTranslations("Stock.phone.receipt");
+  const message = useStockErrorMessage();
+  const { user } = useAuth();
+  const materials = useMaterials(legalEntityId, true);
+  const storageName = user === null ? null : draftKey("receipt", projectId, user.id);
+  const steps = useStepKeys(storageName);
+  const [rows, setRows] = useState<Draft[]>([]);
+  const [scan, setScan] = useState<File | null>(null);
+  const [picked, setPicked] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const [nextKey, setNextKey] = useState(1);
+  // Черновик М-7 после сбоя на середине отправки: повтор продолжает тот же акт и ту же версию. Идентификаторы
+  // созданных документов и отпечатки файлов лежат в sessionStorage: перезагрузка вкладки не заводит второй документ.
+  const [saved] = useState(() => (storageName === null ? null : readDraft<ReceiptDraft>(storageName)));
+  const [draftActId, setDraftActId] = useState<string | null>(saved?.actId ?? null);
+  const [draftVersionId, setDraftVersionId] = useState<string | null>(saved?.versionId ?? null);
+  const [scanFingerprint, setScanFingerprint] = useState<string | null>(saved?.scanFingerprint ?? null);
+  const certs = useRef<Record<string, CertEntry>>(saved?.certs ?? {});
+
+  function remember(actId: string | null, versionId: string | null, scanPrint: string | null) {
+    if (storageName === null) return;
+    const empty = actId === null && Object.keys(certs.current).length === 0;
+    writeDraft(storageName, empty ? null : { actId, versionId, scanFingerprint: scanPrint, certs: certs.current });
+  }
+
+  function finish(text: string) {
+    steps.clear();
+    setRows([]);
+    setScan(null);
+    setDraftActId(null);
+    setDraftVersionId(null);
+    setScanFingerprint(null);
+    certs.current = {};
+    if (storageName !== null) writeDraft(storageName, null);
+    setDone(text);
+  }
+
+  function addMaterial(material: MaterialOut) {
+    setRows((current) => [
+      ...current,
+      {
+        key: nextKey,
+        material,
+        quantity: "",
+        unit: material.base_unit,
+        batchNo: "",
+        batchId: null,
+        certificateAttached: false,
+        certFile: null,
+        certDocId: null,
+        certLoaded: false,
+      },
+    ]);
+    setNextKey((value) => value + 1);
+    setPicked("");
+  }
+
+  function patch(key: number, change: Partial<Draft>) {
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
+  }
+
+  async function submit() {
+    setError(null);
+    setDone(null);
+    if (warehouseId === null) return setError(t("noWarehouse"));
+    if (rows.length === 0) return setError(t("noPositions"));
+    if (scan === null) return setError(t("noScan"));
+    for (const row of rows) {
+      const certificateAttached = row.certFile !== null || row.batchId !== null;
+      const problems = receiptProblems({ ...row, certificateAttached });
+      if (problems.length > 0) return setError(t("rowProblem", { name: row.material.name }));
+    }
+
+    setBusy(true);
+    let reachedLines = false;
+    try {
+      // 1) Сертификат и партия для сертифицированных материалов. Сертификат - на партию (материал и номер):
+      // две партии одного материала - два сертификата. Документ, файл и партия запоминаются по шагам.
+      let working = rows;
+      for (const row of rows) {
+        if (!row.material.requires_certificate || row.batchId !== null) continue;
+        if (row.certFile === null) return setError(t("noCertificate", { name: row.material.name }));
+        const key = certificateKey(row.material.id, row.batchNo);
+        let entry = certs.current[key];
+        if (entry === undefined) {
+          const body = {
+            kind: "material_certificate",
+            legal_entity_id: legalEntityId,
+            title: `${t("certTitle")} ${row.material.code}`,
+          };
+          const certificate = await api.post<DocumentDetail>(
+            DOCUMENTS_API,
+            body,
+            steps.keyFor(`cert:${key}`, JSON.stringify(body)),
+          );
+          entry = { docId: certificate.id, fingerprint: null, loaded: false };
+          certs.current = { ...certs.current, [key]: entry };
+          steps.forget(`cert:${key}`);
+          remember(draftActId, draftVersionId, scanFingerprint);
+        }
+        const print = fileFingerprint(row.certFile);
+        if (!entry.loaded || entry.fingerprint !== print) {
+          await uploadVersion(
+            await steps.uploadFor(`cert-file:${key}`, row.certFile),
+            versionTransport(entry.docId),
+            { comment: null, amount: null },
+          );
+          entry = { docId: entry.docId, fingerprint: print, loaded: true };
+          certs.current = { ...certs.current, [key]: entry };
+          steps.forget(`cert-file:${key}`);
+          remember(draftActId, draftVersionId, scanFingerprint);
+        }
+        const batch = await api.post<BatchOut>(`${API}/materials/${row.material.id}/batches`, {
+          batch_no: row.batchNo.trim(),
+          certificate_document_id: entry.docId,
+          customs_document_id: null,
+          country_of_origin: null,
+        });
+        working = working.map((item) =>
+          item.key === row.key ? { ...item, batchId: batch.id, certDocId: entry.docId, certLoaded: true } : item,
+        );
+        setRows(working);
+      }
+
+      // 2) М-7: акт и версия со сканом запоминаются сразу после создания; тот же файл после перезагрузки
+      // не грузится заново (сравнение по отпечатку), повтор продолжает тот же акт и ту же версию.
+      let actId = draftActId;
+      if (actId === null) {
+        const body = {
+          kind: "m7_act",
+          legal_entity_id: legalEntityId,
+          project_id: projectId,
+          title: `${t("actTitle")} ${todayIso()}`,
+        };
+        const created = await api.post<DocumentDetail>(DOCUMENTS_API, body, steps.keyFor("act", JSON.stringify(body)));
+        actId = created.id;
+        steps.forget("act");
+        setDraftActId(actId);
+        remember(actId, null, null);
+      }
+      const scanPrint = fileFingerprint(scan);
+      let versionId = draftVersionId;
+      if (versionId === null || scanFingerprint !== scanPrint) {
+        const version: VersionOut = await uploadVersion(
+          await steps.uploadFor("scan", scan),
+          versionTransport(actId),
+          { comment: null, amount: null },
+        );
+        steps.forget("scan");
+        versionId = version.id;
+        setDraftVersionId(versionId);
+        setScanFingerprint(scanPrint);
+        remember(actId, versionId, scanPrint);
+      }
+      reachedLines = true;
+      const lines = working.map((row) => receiptLinePayload(row, warehouseId));
+      const linesUrl = `${DOCUMENTS_API}/${actId}/versions/${versionId}/lines`;
+      await api.put(linesUrl, { lines }, steps.keyFor("lines", `${linesUrl} ${JSON.stringify(lines)}`));
+      const sendUrl = `${DOCUMENTS_API}/${actId}/versions/${versionId}/send`;
+      await api.post(sendUrl, undefined, steps.keyFor("send", sendUrl));
+      finish(t("sent"));
+    } catch (cause) {
+      if (reachedLines && cause instanceof ApiError && cause.code === LINES_CHANGED_CODE) {
+        // Версия уже отправлена: строки этой попытки не сохранились, сообщаем прямо.
+        finish(t("sentChangesLost"));
+      } else if (reachedLines && cause instanceof ApiError && SENT_CODES.includes(cause.code)) {
+        // Отправка прошла в прошлой попытке (до перезагрузки или при потере ответа).
+        finish(t("sent"));
+      } else {
+        setError(message(cause));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const choices = materials.data ?? [];
+
+  return (
+    <fieldset className="space-y-5" disabled={busy}>
+      <section className="space-y-2">
+        <p className="text-sm font-medium">{t("basis")}</p>
+        <p className="rounded-md border px-3 py-3 text-sm">{t("noRequest")}</p>
+        <p className="text-xs text-muted-foreground">{t("requestLater")}</p>
+      </section>
+
+      <section className="space-y-2">
+        <p className="text-sm font-medium">{t("positions")}</p>
+        <label className="block space-y-1">
+          <span className="sr-only">{t("pickMaterial")}</span>
+          <NativeSelect
+            className="h-12 w-full text-base"
+            onChange={(event) => {
+              const found = choices.find((item) => item.id === event.target.value);
+              if (found) addMaterial(found);
+            }}
+            value={picked}
+          >
+            <option value="">{t("pickMaterial")}</option>
+            {choices.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.code} {item.name}
+              </option>
+            ))}
+          </NativeSelect>
+        </label>
+
+        {rows.map((row) => (
+          <div className="space-y-3 rounded-md border p-3" key={row.key}>
+            <p className="font-medium">{row.material.name}</p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1 text-sm">
+                <span className="block text-muted-foreground">{t("quantity")}</span>
+                <Input
+                  className="h-12 text-base"
+                  inputMode="decimal"
+                  onChange={(event) => patch(row.key, { quantity: event.target.value })}
+                  value={row.quantity}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="block text-muted-foreground">{t("unit")}</span>
+                <NativeSelect
+                  className="h-12 w-full text-base"
+                  onChange={(event) => patch(row.key, { unit: event.target.value })}
+                  value={row.unit}
+                >
+                  {unitChoices(row.material).map((unit) => (
+                    <option key={unit} value={unit}>
+                      {unit}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </label>
+            </div>
+
+            {row.material.requires_certificate && (
+              <div className="space-y-2 rounded-md bg-muted/40 p-3">
+                <label className="block space-y-1 text-sm">
+                  <span className="block text-muted-foreground">{t("batchNo")}</span>
+                  <Input
+                    className="h-12 text-base"
+                    disabled={row.batchId !== null}
+                    onChange={(event) => patch(row.key, { batchNo: event.target.value })}
+                    value={row.batchNo}
+                  />
+                </label>
+                <label className="block space-y-1 text-sm">
+                  <span className="block text-muted-foreground">
+                    {t("certificate")} {row.certFile ? `· ${row.certFile.name}` : ""}
+                  </span>
+                  <input
+                    accept={UPLOAD_ACCEPT}
+                    capture="environment"
+                    className="block w-full min-h-12 text-sm"
+                    disabled={row.batchId !== null}
+                    onChange={(event) => {
+                      steps.forget(`cert-file:${certificateKey(row.material.id, row.batchNo)}`);
+                      patch(row.key, { certFile: event.target.files?.[0] ?? null, certLoaded: false });
+                    }}
+                    type="file"
+                  />
+                </label>
+              </div>
+            )}
+
+            <Button className="min-h-12 w-full" onClick={() => setRows((cur) => cur.filter((item) => item.key !== row.key))} type="button" variant="outline">
+              {t("remove")}
+            </Button>
+          </div>
+        ))}
+      </section>
+
+      <section className="space-y-2">
+        <p className="text-sm font-medium">{t("scan")}</p>
+        <input
+          accept={UPLOAD_ACCEPT}
+          capture="environment"
+          className="block w-full min-h-12 text-sm"
+          onChange={(event) => {
+            steps.forget("scan");
+            setScan(event.target.files?.[0] ?? null);
+          }}
+          type="file"
+        />
+        {scan && <p className="text-xs text-muted-foreground">{scan.name}</p>}
+      </section>
+
+      {error !== null && <p className="text-sm text-destructive">{error}</p>}
+      {done !== null && <p className="text-sm">{done}</p>}
+
+      <Button className="min-h-12 w-full text-base" disabled={busy} onClick={submit} type="button">
+        {busy ? t("sending") : t("submit")}
+      </Button>
+    </fieldset>
+  );
+}

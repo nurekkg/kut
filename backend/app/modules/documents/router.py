@@ -20,6 +20,7 @@ from app.modules.documents.schemas import (
     DocumentOut,
     DownloadOut,
     EventOut,
+    InventoryPrefillIn,
     KindOut,
     LinesIn,
     LinesOut,
@@ -71,10 +72,20 @@ RoutesWriter = Annotated[
     Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="routes"))),
 ]
 # Позиции версии: право documents:write:lines (ADR-015 часть 4); деньги проверяют сервис и БД.
-LinesWriter = Annotated[
-    Principal,
-    Depends(internal_only(require(Module.DOCUMENTS, Action.WRITE, qualifier="lines"))),
-]
+
+
+def _lines_writer(principal: Principal = Depends(get_principal)) -> Principal:
+    """Позиции: право на позиции документов (сметчик, снабженец, прораб) либо право кладовщика на
+    М-7 и ВН. Какие виды доступны, решает политика БД (line_writable)."""
+    if principal.is_internal and (
+        principal.has(Module.DOCUMENTS, Action.WRITE, "lines")
+        or principal.has(Module.MATERIALS, Action.WRITE, "stock")
+    ):
+        return principal
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+
+
+LinesWriter = Annotated[Principal, Depends(_lines_writer)]
 VersionStatus = Literal["draft", "on_approval", "approved", "signed", "archived"]
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -126,6 +137,7 @@ async def kinds(_principal: Reader) -> list[KindOut]:
             contract_required=spec.contract,
             links=sorted(link.value for link in spec.links),
             lines=spec.lines,
+            file_required=spec.file_required,
         )
         for code, spec in KINDS.items()
     ]
@@ -319,10 +331,10 @@ async def lines_template(_principal: Reader) -> Response:
 
 @router.get("/{document_id}/versions/{version_id}/lines", response_model=LinesOut)
 async def version_lines(
-    document_id: uuid.UUID, version_id: uuid.UUID, session: Db, _principal: Reader
+    document_id: uuid.UUID, version_id: uuid.UUID, session: Db, principal: Reader
 ) -> LinesOut:
     """Позиции видны всем, кто видит версию; цена и сумма - только с правом на деньги вида."""
-    return await lines.list_lines(session, document_id, version_id)
+    return await lines.list_lines(session, principal, document_id, version_id)
 
 
 @router.put("/{document_id}/versions/{version_id}/lines", response_model=LinesOut)
@@ -340,6 +352,33 @@ async def replace_version_lines(
     async def handler() -> tuple[int, LinesOut]:
         return status.HTTP_200_OK, await lines.replace_lines(
             session, principal, document_id, version_id, body
+        )
+
+    result = await run_idempotent(
+        session,
+        user_id=principal.user_id,
+        key=key,
+        request_hash=fingerprint(request.method, request.url.path, body.model_dump(mode="json")),
+        handler=handler,
+    )
+    return result.to_response()
+
+
+@router.post("/{document_id}/versions/{version_id}/inventory/prefill", response_model=LinesOut)
+async def prefill_inventory(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    body: InventoryPrefillIn,
+    request: Request,
+    key: IdempotencyKeyHeader,
+    session: Db,
+    principal: LinesWriter,
+) -> Response:
+    """Позиции акта по учётным остаткам склада, факт пуст. Повтор с ключом - тот же ответ."""
+
+    async def handler() -> tuple[int, LinesOut]:
+        return status.HTTP_200_OK, await lines.prefill_inventory(
+            session, principal, document_id, version_id, body.warehouse_id
         )
 
     result = await run_idempotent(

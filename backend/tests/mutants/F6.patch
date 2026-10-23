@@ -1,0 +1,16 @@
+diff --git a/frontend/src/components/stock/material-card.tsx b/frontend/src/components/stock/material-card.tsx
+--- a/frontend/src/components/stock/material-card.tsx
++++ b/frontend/src/components/stock/material-card.tsx
+@@ -51,10 +51,10 @@
+         )}
+       </section>
+ 
+-      {item.plan_price !== null && (
++      {true && (
+         <section className="space-y-1">
+           <h2 className="text-lg font-medium">{t("planPrice")}</h2>
+-          <p className="text-sm">{t("priceValue", { price: item.plan_price, unit: item.base_unit })}</p>
++          <p className="text-sm">{t("priceValue", { price: item.plan_price ?? "", unit: item.base_unit })}</p>
+         </section>
+       )}
+     </div>

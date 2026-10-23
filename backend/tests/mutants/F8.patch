@@ -1,0 +1,13 @@
+diff --git a/frontend/src/lib/documents/format.ts b/frontend/src/lib/documents/format.ts
+index ab82ecf..5a96a3c 100644
+--- a/frontend/src/lib/documents/format.ts
++++ b/frontend/src/lib/documents/format.ts
+@@ -18,7 +18,7 @@ export function normalizeQuantity(input: string): string {
+   return input.replace(/\s/g, "").replace(",", ".");
+ }
+ 
+-const QUANTITY = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 4 });
++const QUANTITY = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+ 
+ // Количество с сервера - "2.5000"; показываем без лишних нулей: "2,5".
+ export function formatQuantity(value: string): string {

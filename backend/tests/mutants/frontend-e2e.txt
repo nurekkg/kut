@@ -1,0 +1,4 @@
+F4 tests/stock-receipt.spec.ts
+F5 tests/stock-receipt.spec.ts
+F6 tests/stock-prices-access.spec.ts
+F7 tests/stock-reload.spec.ts

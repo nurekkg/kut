@@ -1,0 +1,23 @@
+diff --git a/backend/app/modules/documents/service.py b/backend/app/modules/documents/service.py
+index a984e4e..0417305 100644
+--- a/backend/app/modules/documents/service.py
++++ b/backend/app/modules/documents/service.py
+@@ -757,18 +757,6 @@ async def confirm(
+     document = await _writable(session, document_id)
+     if not body.key.startswith(_prefix(document)) or not _KEY.fullmatch(body.key):
+         raise _unprocessable("document.key_invalid")
+-    if document.kind == INVENTORY_KIND:
+-        # Корректировки утверждённой или согласуемой версии опираются на её снимок: новая версия
+-        # сторнировала бы их и пересчитала расхождение заново. Поэтому её не принимаем.
+-        locked = await session.scalar(
+-            text(
+-                "SELECT EXISTS (SELECT 1 FROM document_version WHERE document_id = :d"
+-                " AND status IN ('on_approval', 'approved', 'signed'))"
+-            ),
+-            {"d": document_id},
+-        )
+-        if locked:
+-            raise HTTPException(status.HTTP_409_CONFLICT, "inventory.version_locked")
+     if body.amount is not None:
+         if not document.financial:
+             raise _unprocessable("document.amount_not_financial")

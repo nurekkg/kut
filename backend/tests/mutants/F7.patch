@@ -1,0 +1,12 @@
+diff --git a/frontend/src/components/stock/mobile/receipt-form.tsx b/frontend/src/components/stock/mobile/receipt-form.tsx
+--- a/frontend/src/components/stock/mobile/receipt-form.tsx
++++ b/frontend/src/components/stock/mobile/receipt-form.tsx
+@@ -58,7 +58,7 @@
+ 
+   function remember(actId: string | null, versionId: string | null) {
+     const empty = actId === null && Object.keys(certDocs.current).length === 0;
+-    writeDraft(draftName, empty ? null : { actId, versionId, certDocs: certDocs.current });
++    void { actId, versionId, certDocs: certDocs.current, empty };
+   }
+ 
+   function addMaterial(material: MaterialOut) {

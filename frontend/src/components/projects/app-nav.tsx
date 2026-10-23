@@ -56,10 +56,12 @@ export function AppNav() {
   const equipmentApprover = can("equipment:approve:shift") || can("equipment:write:after_approval");
   const equipmentListed = equipmentApprover || can("equipment:write:shift");
   const documentApprover = can("documents:approve");
+  const canStock = (user?.is_internal ?? false) && can("materials:read");
   const items = [
     { href: "/projects", label: t("projects"), show: can("objects:read"), counter: false },
     { href: "/dashboard", label: dash("nav"), show: user?.scope === "group" && can("objects:read"), counter: false },
     { href: "/works", label: t("works"), show: can("works:read"), counter: false },
+    { href: "/stock", label: t("stock"), show: canStock, counter: false },
     {
       href: "/approvals",
       label: t("approvals"),

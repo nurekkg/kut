@@ -1,0 +1,13 @@
+diff --git a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+index aaff02b..aa9a198 100644
+--- a/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
++++ b/backend/migrations/versions/20261023_1000_c7e1a4d9b2f6_s7c_inventory.py
+@@ -95,7 +95,7 @@ BEGIN
+         SELECT * INTO m FROM public.material WHERE id = ln.material_id;
+         PERFORM app.stock_lock(ln.warehouse_id, ln.material_id);
+         bal := app.stock_balance(ln.warehouse_id, ln.material_id, ln.material_batch_id);
+-        IF bal + delta < 0 THEN
++        IF FALSE THEN
+             RAISE EXCEPTION 'inventory.negative';
+         END IF;
+         INSERT INTO public.stock_movement (legal_entity_id, project_id, warehouse_id, material_id,

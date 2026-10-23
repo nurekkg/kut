@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+--- a/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
++++ b/backend/migrations/versions/20261022_1000_e7a2c9d4b1f8_s7b_stock_files.py
+@@ -407,7 +407,7 @@
+ BEGIN
+     IF NEW.s3_key IS NULL THEN
+         SELECT d.kind INTO k FROM public.document d WHERE d.id = NEW.document_id;
+-        IF k IS NULL OR k NOT IN ('waybill_internal', 'inventory_act') THEN
++        IF FALSE THEN
+             RAISE EXCEPTION 'document.file_required';
+         END IF;
+     END IF;

@@ -213,6 +213,18 @@ matrix:
 
 # Права вне матрицы §7.3, формат «модуль:действие[:уточнение]».
 extra:
+  # ADR-016 часть 5 (S7a): справочник материалов - снабженец и владелец.
+  - {role: owner, permission: "materials:write:catalog"}
+  - {role: procurement, permission: "materials:write:catalog"}
+  # М-7 и ВН - кладовщик (вместо документов по §7.3, отступление записано в tz-changes, раздел 13).
+  - {role: storekeeper, permission: "materials:write:stock"}
+  - {role: storekeeper, permission: "materials:write:batch"}
+  # Цены закупок (Q3): владелец, финдир, техдир, бухгалтер, снабженец.
+  - {role: owner, permission: "procurement:read:prices"}
+  - {role: finance_director, permission: "procurement:read:prices"}
+  - {role: technical_director, permission: "procurement:read:prices"}
+  - {role: accountant, permission: "procurement:read:prices"}
+  - {role: procurement, permission: "procurement:read:prices"}
   # Решение PO по ADR-001 §7, вопрос 7: правка согласованного факта и превышение лимита ЛЗК —
   # техдиректор. Лимитов сумм на согласование платежей в MVP нет.
   - {role: technical_director, permission: "work_actual:write:after_approval"}

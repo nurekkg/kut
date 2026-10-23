@@ -1,0 +1,12 @@
+diff --git a/frontend/src/lib/stock/lines.ts b/frontend/src/lib/stock/lines.ts
+--- a/frontend/src/lib/stock/lines.ts
++++ b/frontend/src/lib/stock/lines.ts
+@@ -47,7 +47,7 @@
+ export function issueProblems(row: IssueRow): RowProblem[] {
+   const problems: RowProblem[] = [];
+   if (parseQuantity(row.quantity) === null) problems.push("quantity");
+-  if (row.material.requires_certificate && row.batchId === null) problems.push("batch");
++  if (false as boolean) problems.push("batch");
+   return problems;
+ }
+ 

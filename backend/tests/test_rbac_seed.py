@@ -188,7 +188,11 @@ async def test_the_database_holds_exactly_the_tz_matrix_plus_the_documented_extr
     owner_engine: AsyncEngine,
 ) -> None:
     assert await db_grants(owner_engine) == (
-        tz_grants() | EXTRA_GRANTS | ADR_EQUIPMENT_GRANTS | ADR_DOCUMENT_GRANTS
+        tz_grants()
+        | EXTRA_GRANTS
+        | ADR_EQUIPMENT_GRANTS
+        | ADR_DOCUMENT_GRANTS
+        | ADR_MATERIALS_GRANTS
     )
 
 
@@ -252,6 +256,19 @@ ADR_DOCUMENT_GRANTS = {
     ("lawyer", "documents", "export", None),
 }
 
+# ADR-016 часть 5 (S7a): справочник и склад, цены закупок.
+ADR_MATERIALS_GRANTS = {
+    ("owner", "materials", "write", "catalog"),
+    ("procurement", "materials", "write", "catalog"),
+    ("storekeeper", "materials", "write", "stock"),
+    ("owner", "procurement", "read", "prices"),
+    ("finance_director", "procurement", "read", "prices"),
+    ("technical_director", "procurement", "read", "prices"),
+    ("accountant", "procurement", "read", "prices"),
+    ("procurement", "procurement", "read", "prices"),
+    ("storekeeper", "materials", "write", "batch"),
+}
+
 
 async def test_qualified_rights_are_exactly_the_documented_ones(
     owner_engine: AsyncEngine,
@@ -262,7 +279,7 @@ async def test_qualified_rights_are_exactly_the_documented_ones(
         ("technical_director", "materials", "approve", "limit_override"),
     } | {grant for grant in ADR_EQUIPMENT_GRANTS if grant[3] is not None} | {
         grant for grant in ADR_DOCUMENT_GRANTS if grant[3] is not None
-    }
+    } | {grant for grant in ADR_MATERIALS_GRANTS if grant[3] is not None}
 
 
 async def test_external_roles_are_read_only(owner_engine: AsyncEngine) -> None:

@@ -1,0 +1,12 @@
+diff --git a/backend/app/modules/materials/service.py b/backend/app/modules/materials/service.py
+--- a/backend/app/modules/materials/service.py
++++ b/backend/app/modules/materials/service.py
+@@ -159,7 +159,7 @@
+         )
+         if (
+             certificate is None
+-            or certificate.kind != "material_certificate"
++            or False
+             or certificate.legal_entity_id != row.legal_entity_id
+             or has_file is None
+         ):

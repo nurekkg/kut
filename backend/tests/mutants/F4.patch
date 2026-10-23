@@ -1,0 +1,12 @@
+diff --git a/frontend/src/components/stock/mobile/receipt-form.tsx b/frontend/src/components/stock/mobile/receipt-form.tsx
+--- a/frontend/src/components/stock/mobile/receipt-form.tsx
++++ b/frontend/src/components/stock/mobile/receipt-form.tsx
+@@ -286,7 +286,7 @@
+       {error !== null && <p className="text-sm text-destructive">{error}</p>}
+       {done !== null && <p className="text-sm">{done}</p>}
+ 
+-      <Button className="min-h-12 w-full text-base" disabled={busy} onClick={submit} type="button">
++      <Button className="min-h-10 w-full text-base" disabled={busy} onClick={submit} type="button">
+         {busy ? t("sending") : t("submit")}
+       </Button>
+     </fieldset>

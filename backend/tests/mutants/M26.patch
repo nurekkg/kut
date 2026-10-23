@@ -1,0 +1,12 @@
+diff --git a/backend/migrations/versions/20261022_1300_b8e2d5a1c9f4_s7b_batch_frozen.py b/backend/migrations/versions/20261022_1300_b8e2d5a1c9f4_s7b_batch_frozen.py
+--- a/backend/migrations/versions/20261022_1300_b8e2d5a1c9f4_s7b_batch_frozen.py
++++ b/backend/migrations/versions/20261022_1300_b8e2d5a1c9f4_s7b_batch_frozen.py
+@@ -19,7 +19,7 @@
+     IF (OLD.batch_no, OLD.certificate_document_id, OLD.customs_document_id, OLD.country_of_origin)
+         IS DISTINCT FROM
+        (NEW.batch_no, NEW.certificate_document_id, NEW.customs_document_id, NEW.country_of_origin)
+-       AND EXISTS (SELECT 1 FROM public.stock_movement m WHERE m.batch_id = OLD.id) THEN
++       AND FALSE THEN
+         RAISE EXCEPTION 'batch.frozen';
+     END IF;
+     RETURN NEW;
